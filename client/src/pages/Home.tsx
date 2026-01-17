@@ -7,7 +7,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
 import { Play, Users, Bot, Lock, Zap } from "lucide-react";
-import { SiOpenai, SiClaude, SiGoogle } from "@icons-pack/react-simple-icons";
+import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import { apiRequest } from "@/lib/queryClient";
 
 export default function Home() {
@@ -191,7 +191,7 @@ export default function Home() {
                   <span>ChatGPT</span>
                 </div>
                 <div className="flex items-center gap-1 text-sm bg-orange-500/10 text-orange-500 px-2 py-1 rounded">
-                  <SiClaude className="h-3 w-3" />
+                  <SiAnthropic className="h-3 w-3" />
                   <span>Claude</span>
                 </div>
                 <div className="flex items-center gap-1 text-sm bg-blue-500/10 text-blue-500 px-2 py-1 rounded">

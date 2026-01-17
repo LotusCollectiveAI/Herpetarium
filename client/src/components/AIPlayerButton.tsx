@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Plus, Bot } from "lucide-react";
-import { SiOpenai, SiClaude, SiGoogle } from "@icons-pack/react-simple-icons";
+import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import type { AIProvider } from "@shared/schema";
 
 interface AIPlayerButtonProps {
@@ -19,7 +19,7 @@ const aiConfig: Record<AIProvider, { name: string; icon: React.ReactNode; color:
   },
   claude: {
     name: "Claude",
-    icon: <SiClaude className="h-4 w-4" />,
+    icon: <SiAnthropic className="h-4 w-4" />,
     color: "text-orange-500",
     bgColor: "bg-orange-500/10 hover:bg-orange-500/20 border-orange-500/30",
   },

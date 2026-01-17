@@ -47,7 +47,14 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     ws.onopen = () => {
       setIsConnected(true);
       setPlayerName(name);
-      ws.send(JSON.stringify({ type: "join", gameId, playerName: name }));
+      // Include stored player ID for reconnection support
+      const storedPlayerId = sessionStorage.getItem(`player_${gameId}`);
+      ws.send(JSON.stringify({ 
+        type: "join", 
+        gameId, 
+        playerName: name,
+        playerId: storedPlayerId || undefined
+      }));
     };
 
     ws.onmessage = (event) => {

@@ -106,7 +106,7 @@ export type GameState = z.infer<typeof gameStateSchema>;
 
 // WebSocket message types
 export const wsMessageSchema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("join"), gameId: z.string(), playerName: z.string() }),
+  z.object({ type: z.literal("join"), gameId: z.string(), playerName: z.string(), playerId: z.string().optional() }),
   z.object({ type: z.literal("add_ai"), provider: z.enum(["chatgpt", "claude", "gemini"]) }),
   z.object({ type: z.literal("remove_player"), playerId: z.string() }),
   z.object({ type: z.literal("join_team"), team: z.enum(["amber", "blue"]) }),

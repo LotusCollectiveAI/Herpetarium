@@ -1,7 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Bot, User } from "lucide-react";
-import { SiOpenai, SiClaude, SiGoogle } from "@icons-pack/react-simple-icons";
+import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import type { Player, AIProvider } from "@shared/schema";
 
 interface PlayerAvatarProps {
@@ -13,7 +13,7 @@ interface PlayerAvatarProps {
 
 const aiIcons: Record<AIProvider, React.ReactNode> = {
   chatgpt: <SiOpenai className="h-4 w-4" />,
-  claude: <SiClaude className="h-4 w-4" />,
+  claude: <SiAnthropic className="h-4 w-4" />,
   gemini: <SiGoogle className="h-4 w-4" />,
 };
 
