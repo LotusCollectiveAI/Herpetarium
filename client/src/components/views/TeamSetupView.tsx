@@ -3,9 +3,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { cn } from "@/lib/utils";
+import { Play } from "lucide-react";
 
 export function TeamSetupView() {
-  const { gameState, playerId, myTeam, sendMessage } = useGame();
+  const { gameState, playerId, myTeam, isHost, sendMessage } = useGame();
 
   if (!gameState) return null;
 
@@ -129,13 +130,54 @@ export function TeamSetupView() {
         </Card>
       )}
 
-      <div className="text-center text-sm text-muted-foreground">
-        {amberPlayers.length === 0 || bluePlayers.length === 0 ? (
-          <p>Both teams need at least 1 player to start</p>
-        ) : (
-          <p>Game will start automatically when teams are ready...</p>
-        )}
-      </div>
+      {isHost && (
+        <div className="mt-4">
+          {(() => {
+            const totalPlayers = gameState.players.length;
+            const assignedPlayers = amberPlayers.length + bluePlayers.length;
+            // Can start if: at least 2 players total AND at least one player has picked a team
+            // (unassigned AI players will be auto-assigned to balance teams)
+            const canStart = totalPlayers >= 2 && assignedPlayers >= 1;
+            const needsTeamChoice = assignedPlayers === 0;
+            const needsMorePlayers = totalPlayers < 2;
+            
+            return (
+              <>
+                <Button
+                  className="w-full"
+                  size="lg"
+                  disabled={!canStart}
+                  onClick={() => sendMessage({ type: "confirm_teams" })}
+                  data-testid="button-start-round"
+                >
+                  <Play className="w-4 h-4 mr-2" />
+                  Start Round 1
+                </Button>
+                {!canStart && (
+                  <p className="text-center text-sm text-muted-foreground mt-2">
+                    {needsMorePlayers
+                      ? "Need at least 2 players"
+                      : needsTeamChoice
+                      ? "Pick a team to continue"
+                      : "Both teams need at least 1 player"}
+                  </p>
+                )}
+                {canStart && unassigned.length > 0 && (
+                  <p className="text-center text-sm text-muted-foreground mt-2">
+                    Unassigned players will join the other team
+                  </p>
+                )}
+              </>
+            );
+          })()}
+        </div>
+      )}
+
+      {!isHost && (
+        <div className="text-center text-sm text-muted-foreground">
+          <p>Waiting for host to start the round...</p>
+        </div>
+      )}
     </div>
   );
 }

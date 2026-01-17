@@ -103,9 +103,26 @@ export function assignTeam(game: GameState, playerId: string, team: "amber" | "b
 }
 
 export function startGame(game: GameState): GameState {
-  // Assign unassigned players to teams - balance by assigning to smaller team
+  // Don't auto-assign anyone yet - let players pick teams in team_setup phase
+  // AI players will be assigned when the host confirms teams
+
+  // Generate keywords for each team
+  const amberKeywords = getRandomKeywords(4);
+  const blueKeywords = getRandomKeywords(4);
+
+  return {
+    ...game,
+    phase: "team_setup",
+    teams: {
+      amber: { ...game.teams.amber, keywords: amberKeywords },
+      blue: { ...game.teams.blue, keywords: blueKeywords },
+    },
+  };
+}
+
+export function autoAssignRemainingPlayers(game: GameState): GameState {
+  // Assign any unassigned players (mostly AI) to balance teams
   const unassigned = game.players.filter(p => p.team === null);
-  const shuffled = shuffleArray(unassigned);
   
   // Count existing team members
   let amberCount = game.players.filter(p => p.team === "amber").length;
@@ -113,9 +130,9 @@ export function startGame(game: GameState): GameState {
   
   // Build assignment map
   const assignments = new Map<string, "amber" | "blue">();
-  for (const player of shuffled) {
-    // Assign to smaller team, prefer amber if equal
-    const team: "amber" | "blue" = amberCount <= blueCount ? "amber" : "blue";
+  for (const player of unassigned) {
+    // Assign to smaller team, prefer blue if equal (humans typically pick amber first)
+    const team: "amber" | "blue" = blueCount < amberCount ? "blue" : (amberCount < blueCount ? "amber" : "blue");
     assignments.set(player.id, team);
     if (team === "amber") {
       amberCount++;
@@ -130,18 +147,9 @@ export function startGame(game: GameState): GameState {
     return assignedTeam ? { ...p, team: assignedTeam } : p;
   });
 
-  // Generate keywords for each team
-  const amberKeywords = getRandomKeywords(4);
-  const blueKeywords = getRandomKeywords(4);
-
   return {
     ...game,
-    phase: "team_setup",
     players: updatedPlayers,
-    teams: {
-      amber: { ...game.teams.amber, keywords: amberKeywords },
-      blue: { ...game.teams.blue, keywords: blueKeywords },
-    },
   };
 }
 

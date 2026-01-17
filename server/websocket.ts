@@ -8,6 +8,7 @@ import {
   assignTeam,
   startGame,
   startNewRound,
+  autoAssignRemainingPlayers,
   submitClues,
   submitOwnTeamGuess,
   submitInterception,
@@ -82,8 +83,8 @@ async function processAITurn(gameId: string) {
   
   switch (game.phase) {
     case "team_setup":
-      // Auto-assign AI players to teams
-      await autoAssignAITeams(gameId);
+      // Just send state update - host must click confirm_teams to proceed
+      await handleTeamSetupPhase(gameId);
       break;
       
     case "giving_clues":
@@ -100,37 +101,10 @@ async function processAITurn(gameId: string) {
   }
 }
 
-async function autoAssignAITeams(gameId: string) {
-  let game = games.get(gameId);
-  if (!game) return;
-  
-  const aiPlayers = game.players.filter(p => p.isAI && p.team === null);
-  
-  for (const ai of aiPlayers) {
-    game = games.get(gameId)!;
-    const amberCount = game.players.filter(p => p.team === "amber").length;
-    const blueCount = game.players.filter(p => p.team === "blue").length;
-    const team = amberCount <= blueCount ? "amber" : "blue";
-    
-    game = assignTeam(game, ai.id, team);
-    games.set(gameId, game);
-  }
-  
-  // Check if we can start the round
-  game = games.get(gameId)!;
-  const amberPlayers = game.players.filter(p => p.team === "amber");
-  const bluePlayers = game.players.filter(p => p.team === "blue");
-  
-  if (amberPlayers.length >= 1 && bluePlayers.length >= 1) {
-    game = startNewRound(game);
-    games.set(gameId, game);
-    sendGameState(gameId);
-    
-    // Delay a bit then process AI clues
-    setTimeout(() => processAITurn(gameId), 500);
-  } else {
-    sendGameState(gameId);
-  }
+async function handleTeamSetupPhase(gameId: string) {
+  // In team_setup phase, just send game state
+  // AI players will be assigned when host clicks "confirm_teams"
+  sendGameState(gameId);
 }
 
 async function processAIClues(gameId: string) {
@@ -426,6 +400,44 @@ function handleMessage(ws: WebSocket, message: WSMessage) {
       log(`Game ${client.gameId} started`, "websocket");
       
       // Process AI team assignments
+      setTimeout(() => processAITurn(client.gameId), 500);
+      break;
+    }
+    
+    case "confirm_teams": {
+      if (!client) return;
+      
+      let game = games.get(client.gameId);
+      if (!game || game.hostId !== client.playerId) {
+        sendTo(ws, { type: "error", message: "Only host can confirm teams" });
+        return;
+      }
+      
+      if (game.phase !== "team_setup") {
+        sendTo(ws, { type: "error", message: "Game is not in team setup phase" });
+        return;
+      }
+      
+      // Auto-assign any remaining unassigned players (like AI) to balance teams
+      game = autoAssignRemainingPlayers(game);
+      games.set(client.gameId, game);
+      
+      // Verify both teams have at least 1 player after auto-assignment
+      const amberPlayers = game.players.filter(p => p.team === "amber");
+      const bluePlayers = game.players.filter(p => p.team === "blue");
+      
+      if (amberPlayers.length < 1 || bluePlayers.length < 1) {
+        sendTo(ws, { type: "error", message: "Both teams need at least 1 player" });
+        return;
+      }
+      
+      // Start the first round
+      let updated = startNewRound(game);
+      games.set(client.gameId, updated);
+      sendGameState(client.gameId);
+      log(`Teams confirmed, Round 1 started for game ${client.gameId}`, "websocket");
+      
+      // Process AI clues
       setTimeout(() => processAITurn(client.gameId), 500);
       break;
     }

@@ -111,6 +111,7 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("remove_player"), playerId: z.string() }),
   z.object({ type: z.literal("join_team"), team: z.enum(["amber", "blue"]) }),
   z.object({ type: z.literal("start_game") }),
+  z.object({ type: z.literal("confirm_teams") }),
   z.object({ type: z.literal("submit_clues"), clues: z.array(z.string()) }),
   z.object({ type: z.literal("submit_guess"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
   z.object({ type: z.literal("submit_interception"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
