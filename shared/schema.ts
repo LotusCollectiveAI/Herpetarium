@@ -239,7 +239,7 @@ export const insertMatchRoundSchema = createInsertSchema(matchRounds).omit({ id:
 export type InsertMatchRound = z.infer<typeof insertMatchRoundSchema>;
 export type MatchRound = typeof matchRounds.$inferSelect;
 
-export type ParseQuality = "valid" | "partial" | "fallback" | "error";
+export type ParseQuality = "clean" | "partial_recovery" | "fallback_used" | "error";
 
 export const aiCallLogs = pgTable("ai_call_logs", {
   id: serial("id").primaryKey(),
@@ -259,6 +259,7 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   promptTokens: integer("prompt_tokens"),
   completionTokens: integer("completion_tokens"),
   totalTokens: integer("total_tokens"),
+  estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

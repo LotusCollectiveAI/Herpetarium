@@ -58,6 +58,31 @@ export interface AICallResult<T> {
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  estimatedCostUsd?: string;
+}
+
+const MODEL_COST_PER_1K: Record<string, { input: number; output: number }> = {
+  "gpt-4o": { input: 0.0025, output: 0.01 },
+  "gpt-4o-mini": { input: 0.00015, output: 0.0006 },
+  "o3": { input: 0.01, output: 0.04 },
+  "o3-mini": { input: 0.0011, output: 0.0044 },
+  "o1": { input: 0.015, output: 0.06 },
+  "claude-sonnet-4-20250514": { input: 0.003, output: 0.015 },
+  "claude-haiku-4-20250414": { input: 0.0008, output: 0.004 },
+  "claude-3-5-sonnet-20241022": { input: 0.003, output: 0.015 },
+  "gemini-2.0-flash": { input: 0.0001, output: 0.0004 },
+  "gemini-2.5-pro": { input: 0.00125, output: 0.01 },
+  "gemini-2.5-flash": { input: 0.00015, output: 0.0006 },
+};
+
+function estimateCost(model: string, promptTokens?: number, completionTokens?: number): string | undefined {
+  if (!promptTokens && !completionTokens) return undefined;
+  const costs = MODEL_COST_PER_1K[model];
+  if (!costs) return undefined;
+  const inputCost = ((promptTokens || 0) / 1000) * costs.input;
+  const outputCost = ((completionTokens || 0) / 1000) * costs.output;
+  const total = inputCost + outputCost;
+  return total.toFixed(6);
 }
 
 interface RawAIResponse {
@@ -171,6 +196,36 @@ async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userP
   };
 }
 
+interface GeminiUsageMetadata {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+}
+
+interface GeminiContentPart {
+  thought?: boolean;
+  text?: string;
+}
+
+interface GeminiResponseExtended {
+  text?: string;
+  candidates?: Array<{
+    content?: {
+      parts?: GeminiContentPart[];
+    };
+  }>;
+  usageMetadata?: GeminiUsageMetadata;
+}
+
+function extractGeminiUsage(response: GeminiResponseExtended): Pick<RawAIResponse, 'promptTokens' | 'completionTokens' | 'totalTokens'> {
+  const usage = response.usageMetadata;
+  return {
+    promptTokens: usage?.promptTokenCount,
+    completionTokens: usage?.candidatesTokenCount,
+    totalTokens: usage?.totalTokenCount,
+  };
+}
+
 async function callGemini(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
   const isThinking = isGeminiThinkingModel(config.model);
 
@@ -183,14 +238,14 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
           thinkingBudget: 8000,
         },
       },
-    } as any);
+    } as Parameters<ReturnType<typeof getGemini>['models']['generateContent']>[0]);
 
+    const extResp = response as unknown as GeminiResponseExtended;
     let text = "";
     let reasoningTrace: string | undefined;
 
-    const candidates = (response as any).candidates;
-    if (candidates?.[0]?.content?.parts) {
-      for (const part of candidates[0].content.parts) {
+    if (extResp.candidates?.[0]?.content?.parts) {
+      for (const part of extResp.candidates[0].content.parts) {
         if (part.thought) {
           reasoningTrace = part.text;
         } else if (part.text) {
@@ -203,13 +258,10 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
       text = response.text || "";
     }
 
-    const usageMeta = (response as any).usageMetadata;
     return {
       text,
       reasoningTrace,
-      promptTokens: usageMeta?.promptTokenCount,
-      completionTokens: usageMeta?.candidatesTokenCount,
-      totalTokens: usageMeta?.totalTokenCount,
+      ...extractGeminiUsage(extResp),
     };
   }
 
@@ -218,12 +270,10 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
     contents: `${systemPrompt}\n\n${userPrompt}`,
   });
 
-  const usageMeta = (response as any).usageMetadata;
+  const extResp = response as unknown as GeminiResponseExtended;
   return {
     text: response.text || "",
-    promptTokens: usageMeta?.promptTokenCount,
-    completionTokens: usageMeta?.candidatesTokenCount,
-    totalTokens: usageMeta?.totalTokenCount,
+    ...extractGeminiUsage(extResp),
   };
 }
 
@@ -250,12 +300,12 @@ function parseCodeResponse(response: string): ParseResult<[number, number, numbe
   if (numbers.length >= 3) {
     const code = [numbers[0], numbers[1], numbers[2]] as [number, number, number];
     const unique = new Set(code);
-    const quality: ParseQuality = unique.size === 3 ? "valid" : "partial";
+    const quality: ParseQuality = unique.size === 3 ? "clean" : "partial_recovery";
     return { value: code, quality };
   }
 
   console.warn(`[PARSE_FALLBACK] parseCodeResponse got unusable response: "${response.slice(0, 200)}"`);
-  return { value: [1, 2, 3] as [number, number, number], quality: "fallback" };
+  return { value: [1, 2, 3] as [number, number, number], quality: "fallback_used" };
 }
 
 function parseCluesResponse(response: string): ParseResult<string[]> {
@@ -272,17 +322,17 @@ function parseCluesResponse(response: string): ParseResult<string[]> {
   }
 
   if (words.length >= 3) {
-    return { value: words.slice(0, 3), quality: "valid" };
+    return { value: words.slice(0, 3), quality: "clean" };
   }
 
   if (words.length > 0 && words.length < 3) {
     while (words.length < 3) words.push("hint");
     console.warn(`[PARSE_PARTIAL] parseCluesResponse padded incomplete response: "${response.slice(0, 200)}"`);
-    return { value: words, quality: "partial" };
+    return { value: words, quality: "partial_recovery" };
   }
 
   console.warn(`[PARSE_FALLBACK] parseCluesResponse got unusable response: "${response.slice(0, 200)}"`);
-  return { value: ["hint", "clue", "guess"], quality: "fallback" };
+  return { value: ["hint", "clue", "guess"], quality: "fallback_used" };
 }
 
 export const MODEL_MAP: Record<string, string> = {
@@ -334,6 +384,7 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -355,6 +406,7 @@ export async function generateGuess(configOrProvider: AIPlayerConfig | string, p
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -431,8 +483,9 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
     }
     return {
       result: notes, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
-      reasoningTrace: raw.reasoningTrace, parseQuality: "valid",
+      reasoningTrace: raw.reasoningTrace, parseQuality: "clean",
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -454,6 +507,7 @@ export async function generateInterception(configOrProvider: AIPlayerConfig | st
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;

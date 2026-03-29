@@ -7,7 +7,7 @@ import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning } from "./tournament";
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { z } from "zod";
-import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues } from "./metrics";
+import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
 
 const headlessMatchConfigSchema = z.object({
   players: z.array(z.object({
@@ -252,12 +252,16 @@ export async function registerRoutes(
       const teamCompositionMetrics = computeTeamCompositionMetrics(allMatches, roundsByMatch);
       const selfPlayMetrics = computeSelfPlayMetrics(allMatches, roundsByMatch);
 
+      const allAiLogs = await storage.getAllAiCallLogs(matchIds);
+      const parseQualityMetrics = computeParseQualityMetrics(allAiLogs);
+
       res.json({
         modelMetrics,
         matchupMetrics,
         strategyMetrics,
         teamCompositionMetrics,
         selfPlayMetrics,
+        parseQualityMetrics,
         summary: {
           totalMatches,
           totalRounds,
@@ -387,7 +391,7 @@ export async function registerRoutes(
       const allLogs = await storage.getAllAiCallLogs();
 
       if (format === "csv") {
-        const csvRows = ["id,matchId,gameId,roundNumber,provider,model,actionType,latencyMs,timedOut,parseQuality,promptTokens,completionTokens,totalTokens,error,createdAt"];
+        const csvRows = ["id,matchId,gameId,roundNumber,provider,model,actionType,latencyMs,timedOut,parseQuality,promptTokens,completionTokens,totalTokens,estimatedCostUsd,error,createdAt"];
         allLogs.forEach(l => {
           csvRows.push([
             l.id, l.matchId || "", l.gameId || "",
@@ -399,6 +403,7 @@ export async function registerRoutes(
             l.promptTokens || "",
             l.completionTokens || "",
             l.totalTokens || "",
+            l.estimatedCostUsd || "",
             l.error ? `"${l.error.replace(/"/g, '""')}"` : "",
             l.createdAt ? new Date(l.createdAt).toISOString() : "",
           ].join(","));

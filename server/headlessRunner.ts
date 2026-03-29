@@ -80,6 +80,7 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
       promptTokens: callResult.promptTokens || null,
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
+      estimatedCostUsd: callResult.estimatedCostUsd || null,
     });
   } catch (err) {
     log(`[headless] Failed to log AI call: ${err}`, "headless");

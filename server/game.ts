@@ -371,9 +371,41 @@ export function validateGameState(game: GameState): ValidationError[] {
     if (game.phase !== "lobby" && game.phase !== "team_setup" && ts.keywords.length !== 4) {
       errors.push({ field: `teams.${team}.keywords`, message: `Expected 4 keywords, got ${ts.keywords.length}`, severity: "error" });
     }
+    if (ts.keywords.length > 0) {
+      const uniqueKeywords = new Set(ts.keywords.map(k => k.toLowerCase()));
+      if (uniqueKeywords.size !== ts.keywords.length) {
+        errors.push({ field: `teams.${team}.keywords`, message: `Duplicate keywords detected`, severity: "error" });
+      }
+    }
     const completedRounds = (game.phase === "round_results" || game.phase === "game_over") ? game.round : Math.max(0, game.round - 1);
     if (game.round > 0 && ts.history.length !== completedRounds) {
       errors.push({ field: `teams.${team}.history`, message: `Expected ${completedRounds} history entries, got ${ts.history.length}`, severity: "warning" });
+    }
+    for (let h = 0; h < ts.history.length; h++) {
+      const entry = ts.history[h];
+      if (entry.clues && entry.clues.length !== 3) {
+        errors.push({ field: `teams.${team}.history[${h}].clues`, message: `Expected 3 clues, got ${entry.clues.length}`, severity: "warning" });
+      }
+      if (entry.secretCode) {
+        const code = entry.secretCode;
+        if (code.length !== 3) {
+          errors.push({ field: `teams.${team}.history[${h}].secretCode`, message: `Expected 3-element code, got ${code.length}`, severity: "error" });
+        }
+        const validPositions = code.every((n: number) => n >= 1 && n <= 4);
+        if (!validPositions) {
+          errors.push({ field: `teams.${team}.history[${h}].secretCode`, message: `Code contains invalid positions (must be 1-4)`, severity: "error" });
+        }
+        const uniquePositions = new Set(code);
+        if (uniquePositions.size !== code.length) {
+          errors.push({ field: `teams.${team}.history[${h}].secretCode`, message: `Code contains duplicate positions`, severity: "warning" });
+        }
+      }
+      if (entry.guess) {
+        const guess = entry.guess;
+        if (guess.length !== 3) {
+          errors.push({ field: `teams.${team}.history[${h}].guess`, message: `Expected 3-element guess, got ${guess.length}`, severity: "warning" });
+        }
+      }
     }
   }
 

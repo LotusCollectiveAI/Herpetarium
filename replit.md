@@ -48,7 +48,7 @@ Preferred communication style: Simple, everyday language.
 - **Reasoning Traces**: When models return chain-of-thought/thinking tokens, these are captured in server logs
 - Lazy initialization of AI clients to avoid startup crashes
 - AI failures broadcast "ai_fallback" messages to all clients for UI feedback
-- Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status, parse quality (valid/partial/fallback/error), prompt/completion/total token counts
+- Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status, parse quality (clean/partial_recovery/fallback_used/error), prompt/completion/total token counts, estimated cost USD
 
 ### Persistent Scratch Notes & Series
 - **Series System**: Agents play multiple games in sequence, carrying strategic notes forward between games
@@ -60,13 +60,16 @@ Preferred communication style: Simple, everyday language.
 - **UI**: `/series` page with series creation form, list view, detail view with notes evolution timeline and token growth visualization
 
 ### Data Foundation (Phase A)
-- **Parse Quality Tracking**: Every AI response is tagged as `valid`, `partial`, `fallback`, or `error` — no more silent data corruption
-- **Token/Cost Logging**: `promptTokens`, `completionTokens`, `totalTokens` extracted from all providers (OpenAI usage, Anthropic input/output tokens, Gemini usageMetadata)
+- **Parse Quality Tracking**: Every AI response is tagged as `clean`, `partial_recovery`, `fallback_used`, or `error` — no more silent data corruption
+- **Token/Cost Logging**: `promptTokens`, `completionTokens`, `totalTokens` extracted from all providers (OpenAI usage, Anthropic input/output tokens, Gemini usageMetadata). `estimatedCostUsd` computed per call using model cost lookup table in `server/ai.ts`
+- **Cost Lookup Table**: `MODEL_COST_PER_1K` in `server/ai.ts` maps model names to per-1K-token input/output costs for automatic cost estimation
+- **Parse Quality Metrics**: `computeParseQualityMetrics()` in `server/metrics.ts` computes per-model parse failure rates, token totals, and cost totals. Exposed via `/api/eval/metrics` endpoint
+- **Data Quality Dashboard**: "Data Quality" tab in Eval Dashboard (`/eval`) shows per-model parse quality breakdown, clean/failure rates, token usage, and estimated costs
 - **Seed-based Reproducibility**: Headless matches use deterministic PRNG (xorshift32) seeded per match. Seed stored in `matches.gameSeed` column. Replay identical keyword/code sequences by reusing a seed
-- **Game State Validation**: `validateGameState()` checks invariants (token counts, team membership, winner/phase consistency, duplicate IDs) and logs warnings during headless matches
+- **Game State Validation**: `validateGameState()` checks invariants (token counts, team membership, winner/phase consistency, duplicate IDs, keyword uniqueness, code position validity, clue/guess array lengths, history count) and logs warnings during headless matches
 
 ### Match Persistence
-- **Database Tables**: `matches` (incl. `gameSeed`), `match_rounds`, `ai_call_logs` (incl. `parseQuality`, `promptTokens`, `completionTokens`, `totalTokens`), `experiments`, `tournaments`, `tournament_matches`
+- **Database Tables**: `matches` (incl. `gameSeed`), `match_rounds`, `ai_call_logs` (incl. `parseQuality`, `promptTokens`, `completionTokens`, `totalTokens`, `estimatedCostUsd`), `experiments`, `tournaments`, `tournament_matches`
 - Match record created when teams are confirmed (before first round)
 - Round results persisted after each round completes (with dedup guard)
 - Game completion updates match with winner and final token counts

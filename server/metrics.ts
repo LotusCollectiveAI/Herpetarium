@@ -11,6 +11,19 @@ export interface MatchMetrics {
   totalRounds: number;
 }
 
+export interface ParseQualityMetrics {
+  model: string;
+  totalCalls: number;
+  cleanCount: number;
+  partialRecoveryCount: number;
+  fallbackUsedCount: number;
+  errorCount: number;
+  cleanRate: number;
+  failureRate: number;
+  totalTokens: number;
+  totalCostUsd: number;
+}
+
 export interface ModelMetrics {
   model: string;
   provider: string;
@@ -23,6 +36,7 @@ export interface ModelMetrics {
   miscommunicationRate: number;
   avgRounds: number;
   clueDiversity: number;
+  parseQuality?: ParseQualityMetrics;
 }
 
 export interface MatchupMetrics {
@@ -207,6 +221,43 @@ export function computeModelMetrics(
         ? uniqueClues.size / stats.allClues.length : 0,
     };
   });
+}
+
+export function computeParseQualityMetrics(aiLogs: AiCallLog[]): ParseQualityMetrics[] {
+  const byModel: Record<string, {
+    totalCalls: number; clean: number; partial: number; fallback: number; error: number;
+    totalTokens: number; totalCost: number;
+  }> = {};
+
+  for (const log of aiLogs) {
+    const model = log.model;
+    if (!byModel[model]) {
+      byModel[model] = { totalCalls: 0, clean: 0, partial: 0, fallback: 0, error: 0, totalTokens: 0, totalCost: 0 };
+    }
+    const s = byModel[model];
+    s.totalCalls++;
+    switch (log.parseQuality) {
+      case "clean": s.clean++; break;
+      case "partial_recovery": s.partial++; break;
+      case "fallback_used": s.fallback++; break;
+      case "error": s.error++; break;
+    }
+    s.totalTokens += log.totalTokens || 0;
+    s.totalCost += log.estimatedCostUsd ? parseFloat(log.estimatedCostUsd) : 0;
+  }
+
+  return Object.entries(byModel).map(([model, s]) => ({
+    model,
+    totalCalls: s.totalCalls,
+    cleanCount: s.clean,
+    partialRecoveryCount: s.partial,
+    fallbackUsedCount: s.fallback,
+    errorCount: s.error,
+    cleanRate: s.totalCalls > 0 ? s.clean / s.totalCalls : 0,
+    failureRate: s.totalCalls > 0 ? (s.fallback + s.error) / s.totalCalls : 0,
+    totalTokens: s.totalTokens,
+    totalCostUsd: Math.round(s.totalCost * 1000000) / 1000000,
+  }));
 }
 
 export function computeMatchupMetrics(matches: Match[]): MatchupMetrics[] {

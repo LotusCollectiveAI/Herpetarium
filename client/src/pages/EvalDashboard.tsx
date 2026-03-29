@@ -15,7 +15,7 @@ import { queryClient } from "@/lib/queryClient";
 import {
   Lock, ArrowLeft, BarChart3, FlaskConical, FileDown, Eye,
   TrendingUp, Shield, AlertTriangle, Target, Shuffle, BookOpen,
-  ChevronDown, ChevronRight, Check, X
+  ChevronDown, ChevronRight, Check, X, ShieldCheck
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -103,12 +103,26 @@ interface CrossModelClueAnalysis extends ClueAnalysisItem {
   isCrossModel: boolean;
 }
 
+interface ParseQualityMetrics {
+  model: string;
+  totalCalls: number;
+  cleanCount: number;
+  partialRecoveryCount: number;
+  fallbackUsedCount: number;
+  errorCount: number;
+  cleanRate: number;
+  failureRate: number;
+  totalTokens: number;
+  totalCostUsd: number;
+}
+
 interface EvalData {
   modelMetrics: ModelMetrics[];
   matchupMetrics: MatchupMetrics[];
   strategyMetrics: Record<string, ModelMetrics>;
   teamCompositionMetrics: TeamCompositionMetrics;
   selfPlayMetrics: SelfPlayMetrics;
+  parseQualityMetrics: ParseQualityMetrics[];
   summary: {
     totalMatches: number;
     totalRounds: number;
@@ -1096,10 +1110,14 @@ export default function EvalDashboard() {
         </div>
 
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-5">
+          <TabsList className="grid w-full grid-cols-6">
             <TabsTrigger value="overview" data-testid="tab-overview">
               <BarChart3 className="h-4 w-4 mr-1" />
               Overview
+            </TabsTrigger>
+            <TabsTrigger value="quality" data-testid="tab-quality">
+              <ShieldCheck className="h-4 w-4 mr-1" />
+              Data Quality
             </TabsTrigger>
             <TabsTrigger value="teams" data-testid="tab-teams">
               <Shuffle className="h-4 w-4 mr-1" />
@@ -1203,6 +1221,80 @@ export default function EvalDashboard() {
                   <BarChart3 className="h-12 w-12 mx-auto mb-4 opacity-40" />
                   <p className="text-lg font-medium">No data yet</p>
                   <p className="text-sm mt-1">Play some games to start seeing metrics</p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="quality" className="space-y-6">
+            {isLoading ? (
+              <div className="space-y-4">
+                {[1, 2, 3].map(i => <Skeleton key={i} className="h-24" />)}
+              </div>
+            ) : data?.parseQualityMetrics && data.parseQualityMetrics.length > 0 ? (
+              <Card>
+                <CardHeader>
+                  <CardTitle data-testid="text-data-quality-title">Data Quality by Model</CardTitle>
+                  <CardDescription>Parse success rates, failure rates, token usage, and estimated costs per model</CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm" data-testid="table-parse-quality">
+                      <thead>
+                        <tr className="border-b">
+                          <th className="text-left py-2 px-3">Model</th>
+                          <th className="text-right py-2 px-3">Total Calls</th>
+                          <th className="text-right py-2 px-3">Clean</th>
+                          <th className="text-right py-2 px-3">Partial</th>
+                          <th className="text-right py-2 px-3">Fallback</th>
+                          <th className="text-right py-2 px-3">Error</th>
+                          <th className="text-right py-2 px-3">Clean Rate</th>
+                          <th className="text-right py-2 px-3">Failure Rate</th>
+                          <th className="text-right py-2 px-3">Total Tokens</th>
+                          <th className="text-right py-2 px-3">Est. Cost</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {data.parseQualityMetrics.map(pq => (
+                          <tr key={pq.model} className="border-b hover:bg-muted/50" data-testid={`row-quality-${pq.model}`}>
+                            <td className="py-2 px-3 font-medium">{pq.model}</td>
+                            <td className="text-right py-2 px-3">{pq.totalCalls}</td>
+                            <td className="text-right py-2 px-3">
+                              <Badge variant="outline" className="bg-green-50 dark:bg-green-950 text-green-700 dark:text-green-300">{pq.cleanCount}</Badge>
+                            </td>
+                            <td className="text-right py-2 px-3">
+                              <Badge variant="outline" className="bg-yellow-50 dark:bg-yellow-950 text-yellow-700 dark:text-yellow-300">{pq.partialRecoveryCount}</Badge>
+                            </td>
+                            <td className="text-right py-2 px-3">
+                              <Badge variant="outline" className="bg-orange-50 dark:bg-orange-950 text-orange-700 dark:text-orange-300">{pq.fallbackUsedCount}</Badge>
+                            </td>
+                            <td className="text-right py-2 px-3">
+                              <Badge variant="outline" className="bg-red-50 dark:bg-red-950 text-red-700 dark:text-red-300">{pq.errorCount}</Badge>
+                            </td>
+                            <td className="text-right py-2 px-3">
+                              <span className={pq.cleanRate >= 0.95 ? "text-green-600 dark:text-green-400" : pq.cleanRate >= 0.8 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}>
+                                {(pq.cleanRate * 100).toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="text-right py-2 px-3">
+                              <span className={pq.failureRate <= 0.05 ? "text-green-600 dark:text-green-400" : pq.failureRate <= 0.2 ? "text-yellow-600 dark:text-yellow-400" : "text-red-600 dark:text-red-400"}>
+                                {(pq.failureRate * 100).toFixed(1)}%
+                              </span>
+                            </td>
+                            <td className="text-right py-2 px-3">{pq.totalTokens.toLocaleString()}</td>
+                            <td className="text-right py-2 px-3">${pq.totalCostUsd.toFixed(4)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground">
+                  <ShieldCheck className="h-12 w-12 mx-auto mb-4 opacity-40" />
+                  <p data-testid="text-no-quality-data">No AI call data available yet. Run some matches to see data quality metrics.</p>
                 </CardContent>
               </Card>
             )}
