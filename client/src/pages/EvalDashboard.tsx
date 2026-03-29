@@ -1000,6 +1000,108 @@ function ClueAnalysisSection() {
   );
 }
 
+interface AblationComparison {
+  condition: string;
+  totalMatches: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  avgRounds: number;
+  avgInterceptions: number;
+  avgMiscommunications: number;
+}
+
+function AblationComparisonSection() {
+  const { data, isLoading } = useQuery<{ comparison: AblationComparison[] }>({
+    queryKey: ["/api/eval/ablations"],
+  });
+
+  if (isLoading) return <Skeleton className="h-48 w-full" />;
+
+  const comparison = data?.comparison || [];
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2" data-testid="text-ablation-title">
+          <FlaskConical className="h-5 w-5" />
+          Ablation Experiment Comparison
+        </CardTitle>
+        <CardDescription>
+          Compare AI performance across different ablation conditions
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {comparison.length === 0 ? (
+          <p className="text-muted-foreground text-sm" data-testid="text-ablation-empty">
+            No ablation experiment data yet. Run tournaments with ablation presets to see comparisons.
+          </p>
+        ) : (
+          <div className="space-y-4">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm" data-testid="table-ablation-comparison">
+                <thead>
+                  <tr className="border-b text-muted-foreground">
+                    <th className="text-left py-2 pr-4">Condition</th>
+                    <th className="text-right py-2 px-2">Matches</th>
+                    <th className="text-right py-2 px-2">Win Rate</th>
+                    <th className="text-right py-2 px-2">Avg Rounds</th>
+                    <th className="text-right py-2 px-2">Avg Intercepts</th>
+                    <th className="text-right py-2 px-2">Avg Miscomm.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {comparison
+                    .sort((a, b) => b.totalMatches - a.totalMatches)
+                    .map((row) => (
+                      <tr key={row.condition} className="border-b last:border-0" data-testid={`ablation-row-${row.condition}`}>
+                        <td className="py-2 pr-4">
+                          <div className="flex items-center gap-2">
+                            {row.condition === "baseline" ? (
+                              <Badge variant="outline" className="text-xs">baseline</Badge>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {row.condition.split("+").map(flag => (
+                                  <Badge key={flag} variant="secondary" className="text-[10px]">{flag.replace(/_/g, " ")}</Badge>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td className="text-right py-2 px-2">{row.totalMatches}</td>
+                        <td className="text-right py-2 px-2 font-medium">{row.winRate}%</td>
+                        <td className="text-right py-2 px-2">{row.avgRounds}</td>
+                        <td className="text-right py-2 px-2">{row.avgInterceptions}</td>
+                        <td className="text-right py-2 px-2">{row.avgMiscommunications}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+
+            {comparison.length >= 2 && (
+              <div className="h-64">
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={comparison.sort((a, b) => b.totalMatches - a.totalMatches)}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="condition" tick={{ fontSize: 10 }} />
+                    <YAxis />
+                    <Tooltip />
+                    <Legend />
+                    <Bar dataKey="winRate" name="Win Rate %" fill="hsl(217, 91%, 60%)" />
+                    <Bar dataKey="avgInterceptions" name="Avg Intercepts" fill="hsl(38, 92%, 50%)" />
+                    <Bar dataKey="avgMiscommunications" name="Avg Miscomm." fill="hsl(0, 72%, 51%)" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 interface TomSummaryEntry {
   provider: string;
   model: string;
@@ -1221,7 +1323,7 @@ export default function EvalDashboard() {
         </div>
 
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-7">
+          <TabsList className="grid w-full grid-cols-8">
             <TabsTrigger value="overview" data-testid="tab-overview">
               <BarChart3 className="h-4 w-4 mr-1" />
               Overview
@@ -1232,14 +1334,18 @@ export default function EvalDashboard() {
             </TabsTrigger>
             <TabsTrigger value="teams" data-testid="tab-teams">
               <Shuffle className="h-4 w-4 mr-1" />
-              Team Composition
+              Teams
             </TabsTrigger>
             <TabsTrigger value="tom" data-testid="tab-tom">
               <Brain className="h-4 w-4 mr-1" />
               ToM
             </TabsTrigger>
-            <TabsTrigger value="experiments" data-testid="tab-experiments">
+            <TabsTrigger value="ablations" data-testid="tab-ablations">
               <FlaskConical className="h-4 w-4 mr-1" />
+              Ablations
+            </TabsTrigger>
+            <TabsTrigger value="experiments" data-testid="tab-experiments">
+              <Target className="h-4 w-4 mr-1" />
               A/B Tests
             </TabsTrigger>
             <TabsTrigger value="analysis" data-testid="tab-analysis">
@@ -1435,6 +1541,10 @@ export default function EvalDashboard() {
 
           <TabsContent value="tom" className="space-y-6">
             <TomComparisonSection filterModel={filterModel} filterDateFrom={filterDateFrom} filterDateTo={filterDateTo} />
+          </TabsContent>
+
+          <TabsContent value="ablations" className="space-y-6">
+            <AblationComparisonSection />
           </TabsContent>
 
           <TabsContent value="experiments">

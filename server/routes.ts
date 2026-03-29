@@ -715,6 +715,59 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/eval/ablations", async (req, res) => {
+    try {
+      const allMatches = await storage.getAllMatches({});
+
+      interface AblationGroup {
+        condition: string;
+        wins: number;
+        losses: number;
+        totalMatches: number;
+        avgRounds: number;
+        totalInterceptions: number;
+        totalMiscommunications: number;
+      }
+
+      const groups: Record<string, AblationGroup> = {};
+
+      for (const match of allMatches) {
+        if (!match.winner) continue;
+
+        const ablations = match.ablations as { flags: string[] } | null;
+        const condition = ablations?.flags?.length
+          ? ablations.flags.sort().join("+")
+          : "baseline";
+
+        if (!groups[condition]) {
+          groups[condition] = { condition, wins: 0, losses: 0, totalMatches: 0, avgRounds: 0, totalInterceptions: 0, totalMiscommunications: 0 };
+        }
+
+        const g = groups[condition];
+        g.totalMatches++;
+        g.avgRounds += match.totalRounds;
+        g.totalInterceptions += match.amberBlackTokens + match.blueBlackTokens;
+        g.totalMiscommunications += match.amberWhiteTokens + match.blueWhiteTokens;
+
+        if (match.winner === "amber") g.wins++;
+        else g.losses++;
+      }
+
+      const comparison = Object.values(groups).map(g => ({
+        ...g,
+        avgRounds: g.totalMatches > 0 ? +(g.avgRounds / g.totalMatches).toFixed(1) : 0,
+        winRate: g.totalMatches > 0 ? +((g.wins / g.totalMatches) * 100).toFixed(1) : 0,
+        avgInterceptions: g.totalMatches > 0 ? +(g.totalInterceptions / g.totalMatches).toFixed(2) : 0,
+        avgMiscommunications: g.totalMatches > 0 ? +(g.totalMiscommunications / g.totalMatches).toFixed(2) : 0,
+      }));
+
+      res.json({ comparison });
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to compute ablation comparison";
+      res.status(500).json({ error: msg });
+    }
+  });
+
   app.post("/api/cost-estimate", (req, res) => {
     try {
       const { players, totalGames, includeReflection } = req.body;
