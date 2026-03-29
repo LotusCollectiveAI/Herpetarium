@@ -25,10 +25,12 @@ Preferred communication style: Simple, everyday language.
 - **API Style**: REST endpoints for game creation, WebSocket for gameplay
 
 ### Data Storage
-- **Database**: PostgreSQL with Drizzle ORM
-- **Schema Location**: `shared/schema.ts` for shared types, `shared/models/` for database tables
+- **Database**: PostgreSQL with Drizzle ORM (via @neondatabase/serverless driver)
+- **Schema Location**: `shared/schema.ts` for shared types and database tables, `shared/models/` for legacy user model
+- **DB Connection**: `server/db.ts` - Drizzle connection setup
 - **Migrations**: Drizzle Kit (`drizzle-kit push` for schema sync)
 - **In-Memory State**: Game sessions stored in memory Map for real-time gameplay
+- **Match Persistence**: Completed games persisted to PostgreSQL with round-by-round detail and AI call logs
 
 ### Game State Management
 - Games are created via REST API and stored in memory
@@ -42,6 +44,15 @@ Preferred communication style: Simple, everyday language.
 - Lazy initialization of AI clients to avoid startup crashes
 - 30-second timeout on all AI calls with automatic fallback values
 - AI failures broadcast "ai_fallback" messages to all clients for UI feedback
+- Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status
+
+### Match Persistence
+- **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`
+- Match record created when teams are confirmed (before first round)
+- Round results persisted after each round completes (with dedup guard)
+- Game completion updates match with winner and final token counts
+- **API Endpoints**: GET `/api/matches` (paginated, filterable), GET `/api/matches/:id` (full detail with rounds and AI logs)
+- **UI**: `/history` page shows past games with expandable round details and AI call logs
 
 ### Input Validation
 - Frontend clue validation: single-word only, no blanks, no keywords or root words
@@ -68,15 +79,17 @@ client/           # React frontend
     components/   # UI components (game-specific and shadcn/ui)
                   # DeductionNotes.tsx - Collapsible notes panel for tracking opponent keywords (localStorage)
                   # RoundHistory.tsx - Supports both list and columnar view (columnar=true for interception)
-    pages/        # Route pages (Home, Game)
+    pages/        # Route pages (Home, Game, History)
     lib/          # Utilities, context providers, query client
     hooks/        # Custom React hooks
 server/           # Express backend
   index.ts        # Server entry point
-  routes.ts       # API route registration
-  websocket.ts    # WebSocket handler for game logic
+  routes.ts       # API route registration (games, match history)
+  websocket.ts    # WebSocket handler for game logic + match persistence
   game.ts         # Game state management functions
-  ai.ts           # AI provider integrations
+  ai.ts           # AI provider integrations with call logging
+  db.ts           # Database connection setup
+  storage.ts      # Storage interface with match/round/AI log CRUD
 shared/           # Shared code between client and server
   schema.ts       # Zod schemas and TypeScript types
   models/         # Drizzle database models

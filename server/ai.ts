@@ -3,7 +3,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
 import { AIProvider } from "@shared/schema";
 
-// Lazy initialization to avoid crashes on import
 let openaiClient: OpenAI | null = null;
 let anthropicClient: Anthropic | null = null;
 let geminiClient: GoogleGenAI | null = null;
@@ -37,7 +36,7 @@ function getGemini(): GoogleGenAI {
   return geminiClient;
 }
 
-interface ClueGenerationParams {
+export interface ClueGenerationParams {
   keywords: string[];
   targetCode: [number, number, number];
   history: Array<{
@@ -46,7 +45,7 @@ interface ClueGenerationParams {
   }>;
 }
 
-interface GuessParams {
+export interface GuessParams {
   keywords: string[];
   clues: string[];
   history: Array<{
@@ -55,7 +54,7 @@ interface GuessParams {
   }>;
 }
 
-interface InterceptionParams {
+export interface InterceptionParams {
   clues: string[];
   history: Array<{
     clues: string[];
@@ -63,7 +62,22 @@ interface InterceptionParams {
   }>;
 }
 
-function buildCluePrompt(params: ClueGenerationParams): string {
+export interface AICallResult<T> {
+  result: T;
+  prompt: string;
+  rawResponse: string;
+  model: string;
+  latencyMs: number;
+  error?: string;
+}
+
+export const MODEL_MAP: Record<AIProvider, string> = {
+  chatgpt: "gpt-4o",
+  claude: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.0-flash",
+};
+
+export function buildCluePrompt(params: ClueGenerationParams): string {
   const { keywords, targetCode, history } = params;
   
   let prompt = `You are playing Decrypto, a word association game. Your team has 4 secret keywords:
@@ -97,7 +111,7 @@ Rules:
   return prompt;
 }
 
-function buildGuessPrompt(params: GuessParams): string {
+export function buildGuessPrompt(params: GuessParams): string {
   const { keywords, clues, history } = params;
   
   let prompt = `You are playing Decrypto. Your team's keywords are:
@@ -124,7 +138,7 @@ Each clue corresponds to one of your keywords (in order). Figure out which keywo
   return prompt;
 }
 
-function buildInterceptionPrompt(params: InterceptionParams): string {
+export function buildInterceptionPrompt(params: InterceptionParams): string {
   const { clues, history } = params;
   
   let prompt = `You are playing Decrypto and trying to INTERCEPT the opponent's code.
@@ -158,7 +172,6 @@ function parseCodeResponse(response: string): [number, number, number] {
     return [numbers[0], numbers[1], numbers[2]] as [number, number, number];
   }
   
-  // Fallback: generate random code
   return [1, 2, 3] as [number, number, number];
 }
 
@@ -169,108 +182,78 @@ function parseCluesResponse(response: string): string[] {
     return words.slice(0, 3);
   }
   
-  // Fallback
   return ["hint", "clue", "guess"];
 }
 
-export async function generateClues(provider: AIProvider, params: ClueGenerationParams): Promise<string[]> {
+async function callProvider(provider: AIProvider, prompt: string, maxTokens: number, temperature: number): Promise<{ rawResponse: string; model: string }> {
+  const model = MODEL_MAP[provider];
+  switch (provider) {
+    case "chatgpt": {
+      const response = await getOpenAI().chat.completions.create({
+        model,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: maxTokens,
+        temperature,
+      });
+      return { rawResponse: response.choices[0]?.message?.content || "", model };
+    }
+    case "claude": {
+      const response = await getAnthropic().messages.create({
+        model,
+        max_tokens: maxTokens,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const content = response.content[0];
+      return { rawResponse: content.type === "text" ? content.text : "", model };
+    }
+    case "gemini": {
+      const response = await getGemini().models.generateContent({
+        model,
+        contents: prompt,
+      });
+      return { rawResponse: response.text || "", model };
+    }
+  }
+}
+
+export async function generateClues(provider: AIProvider, params: ClueGenerationParams): Promise<AICallResult<string[]>> {
   const prompt = buildCluePrompt(params);
-  
-  switch (provider) {
-    case "chatgpt": {
-      const response = await getOpenAI().chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 50,
-        temperature: 0.7,
-      });
-      return parseCluesResponse(response.choices[0]?.message?.content || "");
-    }
-    
-    case "claude": {
-      const response = await getAnthropic().messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 50,
-        messages: [{ role: "user", content: prompt }],
-      });
-      const content = response.content[0];
-      return parseCluesResponse(content.type === "text" ? content.text : "");
-    }
-    
-    case "gemini": {
-      const response = await getGemini().models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: prompt,
-      });
-      return parseCluesResponse(response.text || "");
-    }
+  const startTime = Date.now();
+  try {
+    const { rawResponse, model } = await callProvider(provider, prompt, 50, 0.7);
+    const latencyMs = Date.now() - startTime;
+    const result = parseCluesResponse(rawResponse);
+    return { result, prompt, rawResponse, model, latencyMs };
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    return { result: ["hint", "clue", "guess"], prompt, rawResponse: "", model: MODEL_MAP[provider], latencyMs, error: String(err) };
   }
 }
 
-export async function generateGuess(provider: AIProvider, params: GuessParams): Promise<[number, number, number]> {
+export async function generateGuess(provider: AIProvider, params: GuessParams): Promise<AICallResult<[number, number, number]>> {
   const prompt = buildGuessPrompt(params);
-  
-  switch (provider) {
-    case "chatgpt": {
-      const response = await getOpenAI().chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 20,
-        temperature: 0.3,
-      });
-      return parseCodeResponse(response.choices[0]?.message?.content || "");
-    }
-    
-    case "claude": {
-      const response = await getAnthropic().messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 20,
-        messages: [{ role: "user", content: prompt }],
-      });
-      const content = response.content[0];
-      return parseCodeResponse(content.type === "text" ? content.text : "");
-    }
-    
-    case "gemini": {
-      const response = await getGemini().models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: prompt,
-      });
-      return parseCodeResponse(response.text || "");
-    }
+  const startTime = Date.now();
+  try {
+    const { rawResponse, model } = await callProvider(provider, prompt, 20, 0.3);
+    const latencyMs = Date.now() - startTime;
+    const result = parseCodeResponse(rawResponse);
+    return { result, prompt, rawResponse, model, latencyMs };
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    return { result: [1, 2, 3], prompt, rawResponse: "", model: MODEL_MAP[provider], latencyMs, error: String(err) };
   }
 }
 
-export async function generateInterception(provider: AIProvider, params: InterceptionParams): Promise<[number, number, number]> {
+export async function generateInterception(provider: AIProvider, params: InterceptionParams): Promise<AICallResult<[number, number, number]>> {
   const prompt = buildInterceptionPrompt(params);
-  
-  switch (provider) {
-    case "chatgpt": {
-      const response = await getOpenAI().chat.completions.create({
-        model: "gpt-4o",
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: 20,
-        temperature: 0.5,
-      });
-      return parseCodeResponse(response.choices[0]?.message?.content || "");
-    }
-    
-    case "claude": {
-      const response = await getAnthropic().messages.create({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 20,
-        messages: [{ role: "user", content: prompt }],
-      });
-      const content = response.content[0];
-      return parseCodeResponse(content.type === "text" ? content.text : "");
-    }
-    
-    case "gemini": {
-      const response = await getGemini().models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: prompt,
-      });
-      return parseCodeResponse(response.text || "");
-    }
+  const startTime = Date.now();
+  try {
+    const { rawResponse, model } = await callProvider(provider, prompt, 20, 0.5);
+    const latencyMs = Date.now() - startTime;
+    const result = parseCodeResponse(rawResponse);
+    return { result, prompt, rawResponse, model, latencyMs };
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    return { result: [1, 2, 3], prompt, rawResponse: "", model: MODEL_MAP[provider], latencyMs, error: String(err) };
   }
 }

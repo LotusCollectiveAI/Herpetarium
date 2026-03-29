@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Users, Bot, Lock, Zap } from "lucide-react";
+import { Play, Users, Bot, Lock, Zap, History } from "lucide-react";
 import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -208,8 +208,12 @@ export default function Home() {
         </div>
       </main>
 
-      <footer className="p-4 text-center text-sm text-muted-foreground border-t">
+      <footer className="p-4 text-center text-sm text-muted-foreground border-t flex items-center justify-center gap-4">
         <p>Decrypto is a word deduction game by Thomas Dagenais-Lespérance</p>
+        <Button variant="ghost" size="sm" onClick={() => setLocation("/history")} data-testid="link-match-history">
+          <History className="h-4 w-4 mr-1" />
+          Match History
+        </Button>
       </footer>
     </div>
   );

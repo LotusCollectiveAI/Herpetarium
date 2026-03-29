@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
+import { createInsertSchema } from "drizzle-zod";
 
 // AI Provider types
 export type AIProvider = "chatgpt" | "claude" | "gemini";
@@ -154,6 +156,67 @@ export const joinGameSchema = z.object({
 });
 
 export type JoinGame = z.infer<typeof joinGameSchema>;
+
+// Database tables for match persistence
+
+export const matches = pgTable("matches", {
+  id: serial("id").primaryKey(),
+  gameId: varchar("game_id", { length: 10 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+  winner: varchar("winner", { length: 10 }),
+  playerConfigs: jsonb("player_configs").notNull(),
+  amberKeywords: jsonb("amber_keywords").notNull(),
+  blueKeywords: jsonb("blue_keywords").notNull(),
+  totalRounds: integer("total_rounds").notNull().default(0),
+  amberWhiteTokens: integer("amber_white_tokens").notNull().default(0),
+  amberBlackTokens: integer("amber_black_tokens").notNull().default(0),
+  blueWhiteTokens: integer("blue_white_tokens").notNull().default(0),
+  blueBlackTokens: integer("blue_black_tokens").notNull().default(0),
+});
+
+export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
+export type InsertMatch = z.infer<typeof insertMatchSchema>;
+export type Match = typeof matches.$inferSelect;
+
+export const matchRounds = pgTable("match_rounds", {
+  id: serial("id").primaryKey(),
+  matchId: integer("match_id").notNull(),
+  roundNumber: integer("round_number").notNull(),
+  team: varchar("team", { length: 10 }).notNull(),
+  clueGiverId: varchar("clue_giver_id", { length: 100 }).notNull(),
+  code: jsonb("code").notNull(),
+  clues: jsonb("clues").notNull(),
+  ownGuess: jsonb("own_guess"),
+  opponentGuess: jsonb("opponent_guess"),
+  ownCorrect: boolean("own_correct").notNull().default(false),
+  intercepted: boolean("intercepted").notNull().default(false),
+});
+
+export const insertMatchRoundSchema = createInsertSchema(matchRounds).omit({ id: true });
+export type InsertMatchRound = z.infer<typeof insertMatchRoundSchema>;
+export type MatchRound = typeof matchRounds.$inferSelect;
+
+export const aiCallLogs = pgTable("ai_call_logs", {
+  id: serial("id").primaryKey(),
+  matchId: integer("match_id"),
+  gameId: varchar("game_id", { length: 10 }),
+  roundNumber: integer("round_number"),
+  provider: varchar("provider", { length: 20 }).notNull(),
+  model: varchar("model", { length: 100 }).notNull(),
+  actionType: varchar("action_type", { length: 30 }).notNull(),
+  prompt: text("prompt").notNull(),
+  rawResponse: text("raw_response"),
+  parsedResult: jsonb("parsed_result"),
+  latencyMs: integer("latency_ms"),
+  timedOut: boolean("timed_out").notNull().default(false),
+  error: text("error"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAiCallLogSchema = createInsertSchema(aiCallLogs).omit({ id: true, createdAt: true });
+export type InsertAiCallLog = z.infer<typeof insertAiCallLogSchema>;
+export type AiCallLog = typeof aiCallLogs.$inferSelect;
 
 // Legacy exports for compatibility
 export { users, insertUserSchema } from "./models/user";

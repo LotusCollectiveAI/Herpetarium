@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/lib/themeProvider";
 import { GameProvider } from "@/lib/gameContext";
 import Home from "@/pages/Home";
 import Game from "@/pages/Game";
+import History from "@/pages/History";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -14,6 +15,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/game/:id" component={Game} />
+      <Route path="/history" component={History} />
       <Route component={NotFound} />
     </Switch>
   );
