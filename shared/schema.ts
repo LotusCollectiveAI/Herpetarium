@@ -277,6 +277,8 @@ export const tournaments = pgTable("tournaments", {
   config: jsonb("config").notNull(),
   totalMatches: integer("total_matches").notNull().default(0),
   completedMatches: integer("completed_matches").notNull().default(0),
+  budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
+  actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
@@ -337,6 +339,7 @@ export interface TournamentConfig {
   name: string;
   matchConfigs: HeadlessMatchConfig[];
   gamesPerMatchup?: number;
+  budgetCapUsd?: string;
 }
 
 // Series tables for persistent scratch notes
@@ -349,6 +352,8 @@ export const series = pgTable("series", {
   completedGames: integer("completed_games").notNull().default(0),
   status: varchar("status", { length: 20 }).notNull().default("pending"),
   noteTokenBudget: integer("note_token_budget").notNull().default(500),
+  budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
+  actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
@@ -377,6 +382,7 @@ export interface SeriesConfig {
   matchConfig: HeadlessMatchConfig;
   totalGames: number;
   noteTokenBudget?: number;
+  budgetCapUsd?: string;
 }
 
 // Legacy exports for compatibility

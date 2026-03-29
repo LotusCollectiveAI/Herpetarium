@@ -25,6 +25,7 @@ const tournamentConfigSchema = z.object({
   name: z.string().min(1).max(200),
   matchConfigs: z.array(headlessMatchConfigSchema).min(1),
   gamesPerMatchup: z.number().int().min(1).max(100).optional(),
+  budgetCapUsd: z.string().optional(),
 });
 
 export async function registerRoutes(
@@ -57,12 +58,15 @@ export async function registerRoutes(
       const dateTo = req.query.dateTo as string | undefined;
 
       const result = await storage.getMatches({ page, limit, model, winner, dateFrom, dateTo });
+      const matchIds = result.matches.map(m => m.id);
+      const traceMatchIds = await storage.getMatchIdsWithTraces(matchIds);
       res.json({
         matches: result.matches,
         total: result.total,
         page,
         limit,
         totalPages: Math.ceil(result.total / limit),
+        matchIdsWithTraces: Array.from(traceMatchIds),
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch matches" });
@@ -479,6 +483,7 @@ export async function registerRoutes(
     matchConfig: headlessMatchConfigSchema,
     totalGames: z.number().int().min(1).max(100),
     noteTokenBudget: z.number().int().min(100).max(5000).optional(),
+    budgetCapUsd: z.string().optional(),
   });
 
   app.post("/api/series", async (req, res) => {
@@ -501,6 +506,7 @@ export async function registerRoutes(
         matchConfig,
         totalGames: config.totalGames,
         noteTokenBudget: config.noteTokenBudget,
+        budgetCapUsd: config.budgetCapUsd,
       });
 
       runSeries(s.id).catch(err => {
@@ -576,18 +582,27 @@ export async function registerRoutes(
 
   app.post("/api/cost-estimate", (req, res) => {
     try {
-      const { players, totalGames } = req.body;
+      const { players, totalGames, includeReflection } = req.body;
       if (!players || !totalGames) {
         return res.status(400).json({ error: "Missing players or totalGames" });
       }
 
-      const AVG_ROUNDS_PER_GAME = 5;
-      const AVG_TOKENS_PER_CLUE = { input: 800, output: 150 };
-      const AVG_TOKENS_PER_GUESS = { input: 600, output: 80 };
-      const AVG_TOKENS_PER_INTERCEPT = { input: 700, output: 80 };
+      const AVG_ROUNDS_PER_GAME = 6;
+      const CALL_TYPE_TOKENS = {
+        clue:        { input: 900, output: 150, callsPerRound: 1 },
+        guess:       { input: 650, output: 80,  callsPerRound: 1 },
+        intercept:   { input: 750, output: 80,  callsPerRound: 0.5 },
+        reflection:  { input: 1200, output: 300, callsPerRound: 0 },
+      };
 
       let totalEstimate = 0;
-      const breakdown: Array<{ model: string; provider: string; costPerGame: number; totalCost: number }> = [];
+      const breakdown: Array<{
+        model: string;
+        provider: string;
+        costPerGame: number;
+        totalCost: number;
+        callTypeBreakdown: Record<string, { callsPerGame: number; costPerGame: number }>;
+      }> = [];
 
       const uniqueModels = new Map<string, { provider: string; count: number }>();
       for (const p of players) {
@@ -607,16 +622,32 @@ export async function registerRoutes(
         const costs = MODEL_COST_PER_1K[model];
         if (!costs) continue;
 
-        const callsPerPlayerPerRound = 1.5;
-        const avgInput = (AVG_TOKENS_PER_CLUE.input + AVG_TOKENS_PER_GUESS.input + AVG_TOKENS_PER_INTERCEPT.input) / 3;
-        const avgOutput = (AVG_TOKENS_PER_CLUE.output + AVG_TOKENS_PER_GUESS.output + AVG_TOKENS_PER_INTERCEPT.output) / 3;
+        let costPerGame = 0;
+        const callTypeBreakdown: Record<string, { callsPerGame: number; costPerGame: number }> = {};
 
-        const costPerCall = (avgInput / 1000) * costs.input + (avgOutput / 1000) * costs.output;
-        const costPerGame = costPerCall * callsPerPlayerPerRound * AVG_ROUNDS_PER_GAME * info.count;
+        for (const [callType, spec] of Object.entries(CALL_TYPE_TOKENS)) {
+          if (callType === "reflection" && !includeReflection) continue;
+          const callsPerGame = callType === "reflection"
+            ? 1
+            : spec.callsPerRound * AVG_ROUNDS_PER_GAME;
+          const costPerCall = (spec.input / 1000) * costs.input + (spec.output / 1000) * costs.output;
+          const typeCostPerGame = costPerCall * callsPerGame * info.count;
+          costPerGame += typeCostPerGame;
+          callTypeBreakdown[callType] = {
+            callsPerGame: callsPerGame * info.count,
+            costPerGame: +typeCostPerGame.toFixed(6),
+          };
+        }
+
         const totalCost = costPerGame * totalGames;
-
         totalEstimate += totalCost;
-        breakdown.push({ model, provider: info.provider, costPerGame: +costPerGame.toFixed(6), totalCost: +totalCost.toFixed(6) });
+        breakdown.push({
+          model,
+          provider: info.provider,
+          costPerGame: +costPerGame.toFixed(6),
+          totalCost: +totalCost.toFixed(6),
+          callTypeBreakdown,
+        });
       }
 
       res.json({

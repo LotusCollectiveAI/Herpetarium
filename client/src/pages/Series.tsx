@@ -21,6 +21,8 @@ interface SeriesEntry {
   totalGames: number;
   completedGames: number;
   noteTokenBudget: number;
+  budgetCapUsd: string | null;
+  actualCostUsd: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -61,7 +63,13 @@ interface CostEstimate {
   perGameCost: number;
   totalGames: number;
   avgRoundsPerGame: number;
-  breakdown: Array<{ model: string; provider: string; costPerGame: number; totalCost: number }>;
+  breakdown: Array<{
+    model: string;
+    provider: string;
+    costPerGame: number;
+    totalCost: number;
+    callTypeBreakdown?: Record<string, { callsPerGame: number; costPerGame: number }>;
+  }>;
 }
 
 function formatDate(dateStr: string): string {
@@ -82,6 +90,8 @@ function getStatusBadge(status: string) {
       return <Badge className="bg-yellow-500 hover:bg-yellow-600 text-white" data-testid="badge-series-running"><Loader2 className="h-3 w-3 mr-1 animate-spin" />Running</Badge>;
     case "completed":
       return <Badge className="bg-green-500 hover:bg-green-600 text-white" data-testid="badge-series-completed">Completed</Badge>;
+    case "budget_exceeded":
+      return <Badge className="bg-red-500 hover:bg-red-600 text-white" data-testid="badge-series-budget-exceeded"><DollarSign className="h-3 w-3 mr-1" />Budget Exceeded</Badge>;
     case "failed":
       return <Badge variant="destructive" data-testid="badge-series-failed">Failed</Badge>;
     default:
@@ -124,11 +134,23 @@ function CostEstimateDisplay({ estimate }: { estimate: CostEstimate }) {
         </div>
       </div>
       {estimate.breakdown.length > 0 && (
-        <div className="text-xs space-y-1 border-t pt-2 mt-2">
+        <div className="text-xs space-y-2 border-t pt-2 mt-2">
           {estimate.breakdown.map((b, i) => (
-            <div key={i} className="flex justify-between text-muted-foreground">
-              <span>{b.model} ({getProviderLabel(b.provider)})</span>
-              <span>${b.totalCost.toFixed(4)}</span>
+            <div key={i}>
+              <div className="flex justify-between text-muted-foreground font-medium">
+                <span>{b.model} ({getProviderLabel(b.provider)})</span>
+                <span>${b.totalCost.toFixed(4)}</span>
+              </div>
+              {b.callTypeBreakdown && (
+                <div className="ml-3 mt-1 space-y-0.5">
+                  {Object.entries(b.callTypeBreakdown).map(([type, info]) => (
+                    <div key={type} className="flex justify-between text-muted-foreground/70">
+                      <span className="capitalize">{type} ({info.callsPerGame} calls/game)</span>
+                      <span>${info.costPerGame.toFixed(6)}/game</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -140,6 +162,7 @@ function CostEstimateDisplay({ estimate }: { estimate: CostEstimate }) {
 function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
   const [totalGames, setTotalGames] = useState("5");
   const [tokenBudget, setTokenBudget] = useState("500");
+  const [budgetCapUsd, setBudgetCapUsd] = useState("");
   const [amberProvider, setAmberProvider] = useState("chatgpt");
   const [blueProvider, setBlueProvider] = useState("claude");
   const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
@@ -153,7 +176,7 @@ function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
       { name: `${getProviderLabel(blueProvider)} B2`, aiProvider: blueProvider, team: "blue" },
     ];
     const numGames = parseInt(totalGames) || 5;
-    apiRequest("POST", "/api/cost-estimate", { players, totalGames: numGames })
+    apiRequest("POST", "/api/cost-estimate", { players, totalGames: numGames, includeReflection: true })
       .then(r => r.json())
       .then(setCostEstimate)
       .catch(() => setCostEstimate(null));
@@ -172,6 +195,7 @@ function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
         },
         totalGames: parseInt(totalGames),
         noteTokenBudget: parseInt(tokenBudget),
+        budgetCapUsd: budgetCapUsd || undefined,
       });
       return res.json();
     },
@@ -244,6 +268,18 @@ function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
               value={tokenBudget}
               onChange={(e) => setTokenBudget(e.target.value)}
               data-testid="input-token-budget"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">Budget Cap (USD)</label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="No limit"
+              value={budgetCapUsd}
+              onChange={(e) => setBudgetCapUsd(e.target.value)}
+              data-testid="input-budget-cap"
             />
           </div>
         </div>
@@ -548,6 +584,23 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
             <div className="text-2xl font-bold text-blue-500" data-testid="text-blue-wins">{blueWins}</div>
           </CardContent>
         </Card>
+        {(series.actualCostUsd || series.budgetCapUsd) && (
+          <Card>
+            <CardContent className="pt-4">
+              <div className="text-sm text-muted-foreground flex items-center gap-1">
+                <DollarSign className="h-3 w-3" /> Cost
+              </div>
+              <div className="text-2xl font-bold" data-testid="text-series-actual-cost">
+                ${series.actualCostUsd ? parseFloat(series.actualCostUsd).toFixed(4) : "0.00"}
+              </div>
+              {series.budgetCapUsd && (
+                <div className="text-xs text-muted-foreground mt-1" data-testid="text-series-budget-cap">
+                  Cap: ${parseFloat(series.budgetCapUsd).toFixed(2)}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {matchDetails.length > 0 && (
@@ -712,6 +765,13 @@ export default function Series() {
                       <div className="text-sm text-muted-foreground">{formatDate(s.createdAt)}</div>
                     </div>
                     <div className="flex items-center gap-3">
+                      {s.actualCostUsd && (
+                        <Badge variant="outline" className="text-xs gap-1" data-testid={`badge-series-cost-${s.id}`}>
+                          <DollarSign className="h-3 w-3" />
+                          ${parseFloat(s.actualCostUsd).toFixed(4)}
+                          {s.budgetCapUsd && <span className="text-muted-foreground">/ ${parseFloat(s.budgetCapUsd).toFixed(2)}</span>}
+                        </Badge>
+                      )}
                       <span className="text-sm text-muted-foreground" data-testid={`text-series-progress-${s.id}`}>
                         {s.completedGames}/{s.totalGames} games
                       </span>

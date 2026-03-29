@@ -46,7 +46,10 @@ Preferred communication style: Simple, everyday language.
 - **Metrics**: `server/metrics.ts` computes various performance metrics (per-model, per-strategy, win rates, cost, parse quality).
 - **Eval Dashboard**: A dedicated dashboard (`/eval`) displays metrics, team composition analysis, A/B test results, and clue analysis.
 - **Reproducibility**: Headless matches use a deterministic PRNG seeded per match for reproducibility.
-- **Cost Estimation**: API endpoint and UI display pre-launch cost estimates for series and tournaments based on AI model usage.
+- **Cost Estimation**: API endpoint and UI display pre-launch cost estimates for series and tournaments based on AI model usage, with per-call-type breakdown (clue/guess/intercept/reflection) and ~6 rounds assumption.
+- **Budget Caps**: Tournaments and series support optional `budgetCapUsd` fields. Runtime guards check cumulative cost before each match/game and stop execution if the cap is exceeded (`budget_exceeded` status).
+- **Actual Cost Tracking**: `actualCostUsd` is tracked and updated during tournament/series execution, displayed alongside budget caps in the UI.
+- **Reasoning Trace Indicators**: Match list shows trace badges for matches with AI reasoning traces without needing to expand. Expanded AI call logs show per-call outcome linkage (correct/wrong/intercepted).
 
 ### UX Enhancements
 - **Visual Feedback**: Phase announcements, animated token awards, AI thinking indicators with provider-specific styling.

@@ -25,6 +25,7 @@ export async function createTournament(config: TournamentConfig) {
     config: config as any,
     totalMatches: allMatchConfigs.length,
     completedMatches: 0,
+    budgetCapUsd: config.budgetCapUsd || null,
   });
 
   for (let i = 0; i < allMatchConfigs.length; i++) {
@@ -48,6 +49,9 @@ export async function runTournament(tournamentId: number) {
   activeTournaments.set(tournamentId, true);
 
   try {
+    const tournament = await storage.getTournament(tournamentId);
+    const budgetCap = tournament?.budgetCapUsd ? parseFloat(tournament.budgetCapUsd) : null;
+
     await storage.updateTournament(tournamentId, {
       status: "running",
       startedAt: new Date(),
@@ -56,14 +60,26 @@ export async function runTournament(tournamentId: number) {
     const tournamentMatches = await storage.getTournamentMatches(tournamentId);
     const pendingMatches = tournamentMatches.filter(m => m.status === "pending");
 
-    log(`[tournament] Starting tournament ${tournamentId} with ${pendingMatches.length} matches`, "tournament");
+    log(`[tournament] Starting tournament ${tournamentId} with ${pendingMatches.length} matches${budgetCap ? ` (budget cap: $${budgetCap})` : ""}`, "tournament");
 
     let completed = tournamentMatches.filter(m => m.status === "completed").length;
+    const completedMatchIds: number[] = tournamentMatches
+      .filter(m => m.status === "completed" && m.matchId)
+      .map(m => m.matchId as number);
 
     for (const tm of pendingMatches) {
       if (!activeTournaments.get(tournamentId)) {
         log(`[tournament] Tournament ${tournamentId} was stopped`, "tournament");
         break;
+      }
+
+      if (budgetCap && completedMatchIds.length > 0) {
+        const currentCost = await storage.getCumulativeCost(completedMatchIds);
+        await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
+        if (currentCost >= budgetCap) {
+          log(`[tournament] Tournament ${tournamentId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "tournament");
+          break;
+        }
       }
 
       await storage.updateTournamentMatch(tm.id, { status: "running" });
@@ -83,6 +99,7 @@ export async function runTournament(tournamentId: number) {
           completedAt: new Date(),
         });
 
+        completedMatchIds.push(result.matchId);
         completed++;
         await storage.updateTournament(tournamentId, {
           completedMatches: completed,
@@ -102,9 +119,16 @@ export async function runTournament(tournamentId: number) {
       }
     }
 
+    if (completedMatchIds.length > 0) {
+      const finalCost = await storage.getCumulativeCost(completedMatchIds);
+      await storage.updateTournament(tournamentId, { actualCostUsd: finalCost.toFixed(6) });
+    }
+
     const finalMatches = await storage.getTournamentMatches(tournamentId);
     const failedCount = finalMatches.filter(m => m.status === "failed").length;
-    const finalStatus = failedCount > 0 ? "completed_with_errors" : "completed";
+    const budgetExceeded = budgetCap && completedMatchIds.length > 0 &&
+      (await storage.getCumulativeCost(completedMatchIds)) >= budgetCap;
+    const finalStatus = budgetExceeded ? "budget_exceeded" : failedCount > 0 ? "completed_with_errors" : "completed";
 
     await storage.updateTournament(tournamentId, {
       status: finalStatus,

@@ -18,7 +18,13 @@ interface CostEstimate {
   perGameCost: number;
   totalGames: number;
   avgRoundsPerGame: number;
-  breakdown: Array<{ model: string; provider: string; costPerGame: number; totalCost: number }>;
+  breakdown: Array<{
+    model: string;
+    provider: string;
+    costPerGame: number;
+    totalCost: number;
+    callTypeBreakdown?: Record<string, { callsPerGame: number; costPerGame: number }>;
+  }>;
 }
 
 interface Tournament {
@@ -28,6 +34,8 @@ interface Tournament {
   config: any;
   totalMatches: number;
   completedMatches: number;
+  budgetCapUsd: string | null;
+  actualCostUsd: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -91,6 +99,8 @@ function getStatusBadge(status: string) {
       return <Badge className="bg-green-500 hover:bg-green-600 text-white" data-testid="badge-status-completed">Completed</Badge>;
     case "completed_with_errors":
       return <Badge className="bg-orange-500 hover:bg-orange-600 text-white" data-testid="badge-status-completed-errors">Completed (errors)</Badge>;
+    case "budget_exceeded":
+      return <Badge className="bg-red-500 hover:bg-red-600 text-white" data-testid="badge-status-budget-exceeded"><DollarSign className="h-3 w-3 mr-1" />Budget Exceeded</Badge>;
     case "failed":
       return <Badge variant="destructive" data-testid="badge-status-failed">Failed</Badge>;
     default:
@@ -135,6 +145,15 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
             </div>
 
             <div className="flex items-center gap-3 flex-shrink-0">
+              {tournament.actualCostUsd && (
+                <Badge variant="outline" className="text-xs gap-1" data-testid={`tournament-actual-cost-${tournament.id}`}>
+                  <DollarSign className="h-3 w-3" />
+                  ${parseFloat(tournament.actualCostUsd).toFixed(4)}
+                  {tournament.budgetCapUsd && (
+                    <span className="text-muted-foreground">/ ${parseFloat(tournament.budgetCapUsd).toFixed(2)}</span>
+                  )}
+                </Badge>
+              )}
               <div className="text-sm text-muted-foreground" data-testid={`tournament-progress-${tournament.id}`}>
                 {tournament.completedMatches}/{tournament.totalMatches} matches
               </div>
@@ -374,7 +393,7 @@ function TournamentCostEstimate({ matchups, gamesPerMatchup }: { matchups: Match
     Promise.all(estimates).then(results => {
       const totalGames = matchups.length * gamesPerMatchup;
       const totalCost = results.reduce((s: number, r: CostEstimate) => s + r.estimatedTotalCost, 0);
-      const breakdownMap = new Map<string, { model: string; provider: string; totalCost: number; costPerGame: number }>();
+      const breakdownMap = new Map<string, { model: string; provider: string; totalCost: number; costPerGame: number; callTypeBreakdown?: Record<string, { callsPerGame: number; costPerGame: number }> }>();
       for (const r of results) {
         for (const b of r.breakdown) {
           const key = `${b.provider}:${b.model}`;
@@ -419,11 +438,23 @@ function TournamentCostEstimate({ matchups, gamesPerMatchup }: { matchups: Match
         </div>
       </div>
       {estimate.breakdown.length > 0 && (
-        <div className="text-xs space-y-1 border-t pt-2 mt-2">
+        <div className="text-xs space-y-2 border-t pt-2 mt-2">
           {estimate.breakdown.map((b, i) => (
-            <div key={i} className="flex justify-between text-muted-foreground">
-              <span>{b.model} ({getProviderLabel(b.provider)})</span>
-              <span>${b.totalCost.toFixed(4)}</span>
+            <div key={i}>
+              <div className="flex justify-between text-muted-foreground font-medium">
+                <span>{b.model} ({getProviderLabel(b.provider)})</span>
+                <span>${b.totalCost.toFixed(4)}</span>
+              </div>
+              {b.callTypeBreakdown && (
+                <div className="ml-3 mt-1 space-y-0.5">
+                  {Object.entries(b.callTypeBreakdown).map(([type, info]) => (
+                    <div key={type} className="flex justify-between text-muted-foreground/70">
+                      <span className="capitalize">{type} ({info.callsPerGame} calls/game)</span>
+                      <span>${info.costPerGame.toFixed(6)}/game</span>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -435,6 +466,7 @@ function TournamentCostEstimate({ matchups, gamesPerMatchup }: { matchups: Match
 function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [gamesPerMatchup, setGamesPerMatchup] = useState("3");
+  const [budgetCapUsd, setBudgetCapUsd] = useState("");
   const [matchups, setMatchups] = useState<MatchupConfig[]>([
     { amberProvider1: "chatgpt", amberProvider2: "chatgpt", blueProvider1: "claude", blueProvider2: "claude" },
   ]);
@@ -497,6 +529,7 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
         name: name || `Tournament ${new Date().toLocaleDateString()}`,
         matchConfigs,
         gamesPerMatchup: parseInt(gamesPerMatchup) || 3,
+        budgetCapUsd: budgetCapUsd ? budgetCapUsd : undefined,
       });
       return res.json();
     },
@@ -573,7 +606,7 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-3 gap-3">
           <div>
             <label className="text-sm font-medium mb-1 block">Tournament Name</label>
             <Input
@@ -592,6 +625,18 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
               value={gamesPerMatchup}
               onChange={(e) => setGamesPerMatchup(e.target.value)}
               data-testid="input-games-per-matchup"
+            />
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">Budget Cap (USD)</label>
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              placeholder="No limit"
+              value={budgetCapUsd}
+              onChange={(e) => setBudgetCapUsd(e.target.value)}
+              data-testid="input-budget-cap"
             />
           </div>
         </div>

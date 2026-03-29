@@ -77,6 +77,7 @@ export async function createSeries(config: SeriesConfig) {
     completedGames: 0,
     status: "pending",
     noteTokenBudget: tokenBudget,
+    budgetCapUsd: config.budgetCapUsd || null,
   });
 
   return s;
@@ -98,15 +99,17 @@ export async function runSeries(seriesId: number) {
 
     const config = s.config as SeriesConfig;
     const tokenBudget = s.noteTokenBudget || 500;
+    const budgetCap = s.budgetCapUsd ? parseFloat(s.budgetCapUsd) : null;
 
     await storage.updateSeries(seriesId, {
       status: "running",
       startedAt: new Date(),
     });
 
-    log(`[series] Starting series ${seriesId} with ${config.totalGames} games`, "series");
+    log(`[series] Starting series ${seriesId} with ${config.totalGames} games${budgetCap ? ` (budget cap: $${budgetCap})` : ""}`, "series");
 
     const playerHashes = dedupePlayerHashes(config.matchConfig.players);
+    const completedMatchIds: number[] = [];
 
     let completed = s.completedGames || 0;
     let failedCount = 0;
@@ -115,6 +118,15 @@ export async function runSeries(seriesId: number) {
       if (!activeSeries.get(seriesId)) {
         log(`[series] Series ${seriesId} was stopped`, "series");
         break;
+      }
+
+      if (budgetCap && completedMatchIds.length > 0) {
+        const currentCost = await storage.getCumulativeCost(completedMatchIds);
+        await storage.updateSeries(seriesId, { actualCostUsd: currentCost.toFixed(6) });
+        if (currentCost >= budgetCap) {
+          log(`[series] Series ${seriesId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "series");
+          break;
+        }
       }
 
       log(`[series] Series ${seriesId} - Game ${gameIndex + 1}/${config.totalGames}`, "series");
@@ -129,6 +141,7 @@ export async function runSeries(seriesId: number) {
         }
 
         const result = await runHeadlessMatch(config.matchConfig, scratchNotesMap);
+        completedMatchIds.push(result.matchId);
 
         for (const ph of playerHashes) {
           const latestNote = await storage.getLatestScratchNote(seriesId, ph.hash);
@@ -186,7 +199,14 @@ export async function runSeries(seriesId: number) {
       }
     }
 
-    const finalStatus = failedCount > 0 ? (failedCount === config.totalGames ? "failed" : "completed_with_errors") : "completed";
+    if (completedMatchIds.length > 0) {
+      const finalCost = await storage.getCumulativeCost(completedMatchIds);
+      await storage.updateSeries(seriesId, { actualCostUsd: finalCost.toFixed(6) });
+    }
+
+    const budgetExceeded = budgetCap && completedMatchIds.length > 0 &&
+      (await storage.getCumulativeCost(completedMatchIds)) >= budgetCap;
+    const finalStatus = budgetExceeded ? "budget_exceeded" : failedCount > 0 ? (failedCount === config.totalGames ? "failed" : "completed_with_errors") : "completed";
     await storage.updateSeries(seriesId, {
       status: finalStatus,
       completedAt: new Date(),

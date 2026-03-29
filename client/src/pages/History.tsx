@@ -78,6 +78,7 @@ interface MatchListResponse {
   page: number;
   limit: number;
   totalPages: number;
+  matchIdsWithTraces: number[];
 }
 
 interface MatchDetailResponse {
@@ -135,7 +136,31 @@ function ReasoningTraceViewer({ log }: { log: AiCallLog }) {
   );
 }
 
-function MatchRow({ match }: { match: Match }) {
+function getCallOutcome(aiLog: AiCallLog, rounds: MatchRound[]): { label: string; variant: "default" | "destructive" | "outline" | "secondary" } | null {
+  if (!aiLog.actionType || !aiLog.roundNumber) return null;
+  const round = rounds.find(r => r.roundNumber === aiLog.roundNumber);
+  if (!round) return null;
+
+  const action = aiLog.actionType.toLowerCase();
+  if (action === "clue" || action === "generate_clues") {
+    if (round.intercepted) return { label: "Intercepted", variant: "destructive" };
+    if (round.ownCorrect) return { label: "Safe", variant: "default" };
+    return { label: "Misread", variant: "destructive" };
+  }
+  if (action === "guess" || action === "generate_guess") {
+    return round.ownCorrect
+      ? { label: "Correct", variant: "default" }
+      : { label: "Wrong", variant: "destructive" };
+  }
+  if (action === "intercept" || action === "generate_interception") {
+    return round.intercepted
+      ? { label: "Intercepted!", variant: "default" }
+      : { label: "Missed", variant: "secondary" };
+  }
+  return null;
+}
+
+function MatchRow({ match, hasTraces }: { match: Match; hasTraces: boolean }) {
   const [expanded, setExpanded] = useState(false);
 
   const { data: detail, isLoading: detailLoading } = useQuery<MatchDetailResponse>({
@@ -183,6 +208,12 @@ function MatchRow({ match }: { match: Match }) {
             </div>
 
             <div className="flex items-center gap-3 flex-shrink-0">
+              {hasTraces && (
+                <Badge variant="outline" className="text-xs gap-1" data-testid={`badge-trace-indicator-${match.id}`}>
+                  <Lightbulb className="h-3 w-3" />
+                  Traces
+                </Badge>
+              )}
               <div className="text-sm text-muted-foreground" data-testid={`match-rounds-${match.id}`}>
                 {match.totalRounds} round{match.totalRounds !== 1 ? "s" : ""}
               </div>
@@ -290,43 +321,51 @@ function MatchRow({ match }: { match: Match }) {
                     </div>
 
                     <div className="space-y-2 max-h-[500px] overflow-y-auto">
-                      {detail.aiLogs.map(aiLog => (
-                        <div key={aiLog.id} className="text-xs border rounded p-2 bg-background" data-testid={`ai-log-${aiLog.id}`}>
-                          <div className="flex items-center gap-2 mb-1 flex-wrap">
-                            <Badge variant="outline" className={`text-xs px-1 py-0 ${getProviderColor(aiLog.provider)}`}>{aiLog.provider}</Badge>
-                            <Badge variant="secondary" className="text-xs px-1 py-0">{aiLog.actionType}</Badge>
-                            <span className="text-muted-foreground">R{aiLog.roundNumber}</span>
-                            <span className="text-muted-foreground flex items-center gap-1">
-                              <Clock className="h-3 w-3" />{aiLog.latencyMs}ms
-                            </span>
-                            {aiLog.parseQuality && aiLog.parseQuality !== "clean" && (
-                              <Badge variant={aiLog.parseQuality === "error" ? "destructive" : "outline"} className="text-xs px-1 py-0">
-                                {aiLog.parseQuality}
-                              </Badge>
-                            )}
-                            {aiLog.totalTokens && (
-                              <span className="text-muted-foreground">{aiLog.totalTokens} tok</span>
-                            )}
-                            {aiLog.estimatedCostUsd && (
-                              <span className="text-muted-foreground flex items-center gap-0.5">
-                                <DollarSign className="h-3 w-3" />{parseFloat(aiLog.estimatedCostUsd).toFixed(4)}
+                      {detail.aiLogs.map(aiLog => {
+                        const outcome = getCallOutcome(aiLog, detail.rounds);
+                        return (
+                          <div key={aiLog.id} className="text-xs border rounded p-2 bg-background" data-testid={`ai-log-${aiLog.id}`}>
+                            <div className="flex items-center gap-2 mb-1 flex-wrap">
+                              <Badge variant="outline" className={`text-xs px-1 py-0 ${getProviderColor(aiLog.provider)}`}>{aiLog.provider}</Badge>
+                              <Badge variant="secondary" className="text-xs px-1 py-0">{aiLog.actionType}</Badge>
+                              <span className="text-muted-foreground">R{aiLog.roundNumber}</span>
+                              {outcome && (
+                                <Badge variant={outcome.variant} className="text-xs px-1 py-0" data-testid={`ai-log-outcome-${aiLog.id}`}>
+                                  {outcome.label}
+                                </Badge>
+                              )}
+                              <span className="text-muted-foreground flex items-center gap-1">
+                                <Clock className="h-3 w-3" />{aiLog.latencyMs}ms
                               </span>
+                              {aiLog.parseQuality && aiLog.parseQuality !== "clean" && (
+                                <Badge variant={aiLog.parseQuality === "error" ? "destructive" : "outline"} className="text-xs px-1 py-0">
+                                  {aiLog.parseQuality}
+                                </Badge>
+                              )}
+                              {aiLog.totalTokens && (
+                                <span className="text-muted-foreground">{aiLog.totalTokens} tok</span>
+                              )}
+                              {aiLog.estimatedCostUsd && (
+                                <span className="text-muted-foreground flex items-center gap-0.5">
+                                  <DollarSign className="h-3 w-3" />{parseFloat(aiLog.estimatedCostUsd).toFixed(4)}
+                                </span>
+                              )}
+                              {aiLog.timedOut && <Badge variant="destructive" className="text-xs px-1 py-0">Timeout</Badge>}
+                              {aiLog.error && <Badge variant="destructive" className="text-xs px-1 py-0">Error</Badge>}
+                              {aiLog.reasoningTrace && (
+                                <Badge variant="outline" className="text-xs px-1 py-0 gap-0.5">
+                                  <Lightbulb className="h-3 w-3" /> Trace
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-muted-foreground truncate">Model: {aiLog.model}</div>
+                            {aiLog.rawResponse && (
+                              <div className="text-muted-foreground truncate">Response: {aiLog.rawResponse}</div>
                             )}
-                            {aiLog.timedOut && <Badge variant="destructive" className="text-xs px-1 py-0">Timeout</Badge>}
-                            {aiLog.error && <Badge variant="destructive" className="text-xs px-1 py-0">Error</Badge>}
-                            {aiLog.reasoningTrace && (
-                              <Badge variant="outline" className="text-xs px-1 py-0 gap-0.5">
-                                <Lightbulb className="h-3 w-3" /> Trace
-                              </Badge>
-                            )}
+                            <ReasoningTraceViewer log={aiLog} />
                           </div>
-                          <div className="text-muted-foreground truncate">Model: {aiLog.model}</div>
-                          {aiLog.rawResponse && (
-                            <div className="text-muted-foreground truncate">Response: {aiLog.rawResponse}</div>
-                          )}
-                          <ReasoningTraceViewer log={aiLog} />
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   </div>
                 )}
@@ -443,7 +482,7 @@ export default function History() {
               {data.total} match{data.total !== 1 ? "es" : ""} found
             </p>
             {data.matches.map(match => (
-              <MatchRow key={match.id} match={match} />
+              <MatchRow key={match.id} match={match} hasTraces={data.matchIdsWithTraces?.includes(match.id) ?? false} />
             ))}
             {data.totalPages > 1 && (
               <div className="flex items-center justify-center gap-2 mt-4">

@@ -150,6 +150,23 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(aiCallLogs).where(where).orderBy(aiCallLogs.createdAt);
   }
 
+  async getMatchIdsWithTraces(matchIds: number[]): Promise<Set<number>> {
+    if (matchIds.length === 0) return new Set();
+    const rows = await db.selectDistinct({ matchId: aiCallLogs.matchId })
+      .from(aiCallLogs)
+      .where(and(
+        inArray(aiCallLogs.matchId, matchIds),
+        sql`${aiCallLogs.reasoningTrace} IS NOT NULL`
+      ));
+    return new Set(rows.map(r => r.matchId));
+  }
+
+  async getCumulativeCost(matchIds: number[]): Promise<number> {
+    if (matchIds.length === 0) return 0;
+    const logs = await db.select({ cost: aiCallLogs.estimatedCostUsd }).from(aiCallLogs).where(inArray(aiCallLogs.matchId, matchIds));
+    return logs.reduce((sum, l) => sum + (l.cost ? parseFloat(l.cost) : 0), 0);
+  }
+
   async createTournament(data: InsertTournament): Promise<Tournament> {
     const [created] = await db.insert(tournaments).values(data).returning();
     return created;
