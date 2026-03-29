@@ -7,11 +7,14 @@ export interface PromptStrategy {
   interceptionTemplate: (params: InterceptionTemplateParams) => string;
 }
 
+import type { AblationFlag } from "@shared/schema";
+
 export interface ClueTemplateParams {
   keywords: string[];
   targetCode: [number, number, number];
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   scratchNotes?: string;
+  ablations?: AblationFlag[];
 }
 
 export interface GuessTemplateParams {
@@ -19,12 +22,38 @@ export interface GuessTemplateParams {
   clues: string[];
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   scratchNotes?: string;
+  ablations?: AblationFlag[];
 }
 
 export interface InterceptionTemplateParams {
   clues: string[];
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   scratchNotes?: string;
+  ablations?: AblationFlag[];
+}
+
+export function applyAblations<T extends { history?: any[]; scratchNotes?: string }>(
+  params: T,
+  ablations?: AblationFlag[],
+  callType?: "clue" | "guess" | "interception"
+): T {
+  if (!ablations || ablations.length === 0) return params;
+
+  const result = { ...params };
+
+  if (ablations.includes("no_history")) {
+    (result as any).history = [];
+  }
+
+  if (ablations.includes("no_opponent_history") && callType === "interception") {
+    (result as any).history = [];
+  }
+
+  if (ablations.includes("no_scratch_notes")) {
+    (result as any).scratchNotes = undefined;
+  }
+
+  return result;
 }
 
 function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {

@@ -2,6 +2,7 @@ import { TournamentConfig, HeadlessMatchConfig } from "@shared/schema";
 import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
 import { log } from "./index";
+import { getProviderThrottleState } from "./ai";
 
 const activeTournaments = new Map<number, boolean>();
 
@@ -15,7 +16,10 @@ export async function createTournament(config: TournamentConfig, estimatedCostUs
 
   for (const mc of config.matchConfigs) {
     for (let i = 0; i < gamesPerMatchup; i++) {
-      allMatchConfigs.push(mc);
+      const matchWithAblations = config.ablations
+        ? { ...mc, ablations: mc.ablations || config.ablations }
+        : mc;
+      allMatchConfigs.push(matchWithAblations);
     }
   }
 
@@ -68,21 +72,11 @@ export async function runTournament(tournamentId: number) {
       .filter(m => m.status === "completed" && m.matchId)
       .map(m => m.matchId as number);
 
-    for (const tm of pendingMatches) {
-      if (!activeTournaments.get(tournamentId)) {
-        log(`[tournament] Tournament ${tournamentId} was stopped`, "tournament");
-        break;
-      }
+    const tournamentConfig = tournament?.config as TournamentConfig | undefined;
+    const concurrency = Math.max(1, Math.min(5, tournamentConfig?.concurrency || 1));
+    const delayBetweenMatches = tournamentConfig?.delayBetweenMatchesMs || 0;
 
-      if (budgetCap && completedMatchIds.length > 0) {
-        const currentCost = await storage.getCumulativeCost(completedMatchIds);
-        await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
-        if (currentCost >= budgetCap) {
-          log(`[tournament] Tournament ${tournamentId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "tournament");
-          break;
-        }
-      }
-
+    async function runSingleMatch(tm: typeof pendingMatches[0]): Promise<void> {
       await storage.updateTournamentMatch(tm.id, { status: "running" });
 
       try {
@@ -117,6 +111,55 @@ export async function runTournament(tournamentId: number) {
         await storage.updateTournament(tournamentId, {
           completedMatches: completed,
         });
+      }
+    }
+
+    if (concurrency <= 1) {
+      for (const tm of pendingMatches) {
+        if (!activeTournaments.get(tournamentId)) {
+          log(`[tournament] Tournament ${tournamentId} was stopped`, "tournament");
+          break;
+        }
+
+        if (budgetCap && completedMatchIds.length > 0) {
+          const currentCost = await storage.getCumulativeCost(completedMatchIds);
+          await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
+          if (currentCost >= budgetCap) {
+            log(`[tournament] Tournament ${tournamentId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "tournament");
+            break;
+          }
+        }
+
+        await runSingleMatch(tm);
+
+        if (delayBetweenMatches > 0) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenMatches));
+        }
+      }
+    } else {
+      let i = 0;
+      while (i < pendingMatches.length) {
+        if (!activeTournaments.get(tournamentId)) {
+          log(`[tournament] Tournament ${tournamentId} was stopped`, "tournament");
+          break;
+        }
+
+        if (budgetCap && completedMatchIds.length > 0) {
+          const currentCost = await storage.getCumulativeCost(completedMatchIds);
+          await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
+          if (currentCost >= budgetCap) {
+            log(`[tournament] Tournament ${tournamentId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "tournament");
+            break;
+          }
+        }
+
+        const batch = pendingMatches.slice(i, i + concurrency);
+        await Promise.all(batch.map(tm => runSingleMatch(tm)));
+        i += batch.length;
+
+        if (delayBetweenMatches > 0 && i < pendingMatches.length) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenMatches));
+        }
       }
     }
 

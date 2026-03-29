@@ -471,10 +471,24 @@ function TournamentCostEstimate({ matchups, gamesPerMatchup }: { matchups: Match
   );
 }
 
+type AblationFlag = "no_history" | "no_scratch_notes" | "no_opponent_history" | "no_chain_of_thought" | "random_clues";
+
+const ABLATION_PRESETS: { name: string; description: string; flags: AblationFlag[] }[] = [
+  { name: "No History", description: "Remove all round history from prompts", flags: ["no_history"] },
+  { name: "No Notes", description: "Remove scratch notes / strategy memory", flags: ["no_scratch_notes"] },
+  { name: "No CoT", description: "Disable chain-of-thought reasoning", flags: ["no_chain_of_thought"] },
+  { name: "Memory Wipe", description: "No history + no notes", flags: ["no_history", "no_scratch_notes"] },
+  { name: "Blind Play", description: "No history, notes, or opponent info", flags: ["no_history", "no_scratch_notes", "no_opponent_history"] },
+  { name: "Random Baseline", description: "Replace clues with random words", flags: ["random_clues"] },
+];
+
 function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [gamesPerMatchup, setGamesPerMatchup] = useState("3");
   const [budgetCapUsd, setBudgetCapUsd] = useState("");
+  const [concurrency, setConcurrency] = useState("1");
+  const [delayMs, setDelayMs] = useState("0");
+  const [ablationFlags, setAblationFlags] = useState<AblationFlag[]>([]);
   const [matchups, setMatchups] = useState<MatchupConfig[]>([
     { amberProvider1: "chatgpt", amberProvider2: "chatgpt", blueProvider1: "claude", blueProvider2: "claude" },
   ]);
@@ -538,6 +552,9 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
         matchConfigs,
         gamesPerMatchup: parseInt(gamesPerMatchup) || 3,
         budgetCapUsd: budgetCapUsd ? budgetCapUsd : undefined,
+        concurrency: parseInt(concurrency) || 1,
+        delayBetweenMatchesMs: parseInt(delayMs) || 0,
+        ablations: ablationFlags.length > 0 ? { flags: ablationFlags } : undefined,
       });
       return res.json();
     },
@@ -647,6 +664,76 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
               data-testid="input-budget-cap"
             />
           </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-sm font-medium mb-1 block">Parallel Matches (1-5)</label>
+            <Input
+              type="number"
+              min="1"
+              max="5"
+              value={concurrency}
+              onChange={(e) => setConcurrency(e.target.value)}
+              data-testid="input-concurrency"
+            />
+            <span className="text-xs text-muted-foreground mt-1 block">Run multiple matches simultaneously</span>
+          </div>
+          <div>
+            <label className="text-sm font-medium mb-1 block">Delay Between Matches (ms)</label>
+            <Input
+              type="number"
+              min="0"
+              max="60000"
+              step="1000"
+              placeholder="0"
+              value={delayMs}
+              onChange={(e) => setDelayMs(e.target.value)}
+              data-testid="input-delay-ms"
+            />
+            <span className="text-xs text-muted-foreground mt-1 block">Rate limit protection</span>
+          </div>
+        </div>
+
+        <div>
+          <label className="text-sm font-medium mb-2 block">Ablation Experiment</label>
+          <p className="text-xs text-muted-foreground mb-2">Disable specific AI capabilities to study their impact on performance</p>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
+            {ABLATION_PRESETS.map((preset) => {
+              const isActive = preset.flags.every(f => ablationFlags.includes(f)) && preset.flags.length > 0;
+              return (
+                <button
+                  key={preset.name}
+                  className={`border rounded-lg p-2 text-left transition-colors ${isActive ? "border-primary bg-primary/10" : "hover:bg-muted/50"}`}
+                  onClick={() => {
+                    if (isActive) {
+                      setAblationFlags(ablationFlags.filter(f => !preset.flags.includes(f)));
+                    } else {
+                      setAblationFlags([...new Set([...ablationFlags, ...preset.flags])]);
+                    }
+                  }}
+                  data-testid={`ablation-preset-${preset.name.toLowerCase().replace(/\s+/g, '-')}`}
+                >
+                  <div className="text-xs font-medium">{preset.name}</div>
+                  <div className="text-[10px] text-muted-foreground">{preset.description}</div>
+                </button>
+              );
+            })}
+          </div>
+          {ablationFlags.length > 0 && (
+            <div className="flex items-center gap-2 mt-2 flex-wrap">
+              <span className="text-xs text-muted-foreground">Active:</span>
+              {ablationFlags.map(f => (
+                <Badge key={f} variant="secondary" className="text-[10px] gap-1" data-testid={`ablation-active-${f}`}>
+                  {f.replace(/_/g, " ")}
+                  <button onClick={() => setAblationFlags(ablationFlags.filter(af => af !== f))} className="ml-1 hover:text-destructive">&times;</button>
+                </Badge>
+              ))}
+              <Button variant="ghost" size="sm" className="h-5 text-xs px-2" onClick={() => setAblationFlags([])} data-testid="button-clear-ablations">
+                Clear all
+              </Button>
+            </div>
+          )}
         </div>
 
         <div>

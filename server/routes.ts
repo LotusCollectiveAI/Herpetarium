@@ -8,8 +8,9 @@ import { createTournament, runTournament, isTournamentRunning } from "./tourname
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { z } from "zod";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
-import { MODEL_COST_PER_1K } from "./ai";
+import { MODEL_COST_PER_1K, getProviderThrottleState } from "./ai";
 import { getDefaultConfig } from "@shared/schema";
+import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 
 function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: any }>, totalGames: number, includeReflection = false): number {
   const AVG_ROUNDS_PER_GAME = 6;
@@ -53,11 +54,16 @@ const headlessMatchConfigSchema = z.object({
   seed: z.union([z.string(), z.number().int().transform(String)]).optional(),
 });
 
+const ablationFlagSchema = z.enum(["no_history", "no_scratch_notes", "no_opponent_history", "no_chain_of_thought", "random_clues"]);
+
 const tournamentConfigSchema = z.object({
   name: z.string().min(1).max(200),
   matchConfigs: z.array(headlessMatchConfigSchema).min(1),
   gamesPerMatchup: z.number().int().min(1).max(100).optional(),
   budgetCapUsd: z.string().optional(),
+  concurrency: z.number().int().min(1).max(5).optional(),
+  delayBetweenMatchesMs: z.number().int().min(0).max(60000).optional(),
+  ablations: z.object({ flags: z.array(ablationFlagSchema).min(1) }).optional(),
 });
 
 export async function registerRoutes(
@@ -623,6 +629,89 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch series" });
+    }
+  });
+
+  app.get("/api/throttle-state", (_req, res) => {
+    res.json(getProviderThrottleState());
+  });
+
+  app.get("/api/series/:id/tom", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid series ID" });
+      }
+
+      const s = await storage.getSeries(id);
+      if (!s) {
+        return res.status(404).json({ error: "Series not found" });
+      }
+
+      const notes = await storage.getScratchNotes(id);
+      const config = s.config as any;
+      const players = config.matchConfig?.players || [];
+
+      const matchIds = [...new Set(notes.filter(n => n.matchId).map(n => n.matchId as number))];
+      const allLogs = await storage.getAllAiCallLogs(matchIds);
+
+      const timelines = players.map((p: any) => {
+        const hash = getPlayerConfigHash(p.aiProvider, p.team, p.name);
+        const playerNotes = notes
+          .filter(n => n.playerConfigHash === hash)
+          .map(n => ({ gameIndex: n.gameIndex, notesText: n.notesText, matchId: n.matchId }));
+
+        return buildTomTimeline(allLogs, playerNotes, p.name, p.aiProvider, p.team);
+      });
+
+      res.json({ seriesId: id, timelines });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to compute ToM analysis" });
+    }
+  });
+
+  app.get("/api/eval/tom", async (req, res) => {
+    try {
+      const model = req.query.model as string | undefined;
+      const dateFrom = req.query.dateFrom as string | undefined;
+      const dateTo = req.query.dateTo as string | undefined;
+
+      const allMatches = await storage.getAllMatches({ model, dateFrom, dateTo });
+      const matchIds = allMatches.map(m => m.id);
+      const allLogs = await storage.getAllAiCallLogs(matchIds);
+
+      const tomByModel: Record<string, { totalLevel: number; count: number; maxLevel: number; scores: number[] }> = {};
+      for (const log of allLogs) {
+        if (!log.rawResponse && !log.reasoningTrace) continue;
+        const key = `${log.provider}:${log.model}`;
+        const tom = computeMatchTomMetrics([log]);
+        const analysis = Object.values(tom)[0];
+        if (!analysis) continue;
+
+        if (!tomByModel[key]) {
+          tomByModel[key] = { totalLevel: 0, count: 0, maxLevel: 0, scores: [] };
+        }
+        tomByModel[key].totalLevel += analysis.level;
+        tomByModel[key].count++;
+        tomByModel[key].maxLevel = Math.max(tomByModel[key].maxLevel, analysis.level);
+        tomByModel[key].scores.push(analysis.score);
+      }
+
+      const summary = Object.entries(tomByModel).map(([key, data]) => {
+        const [provider, model] = key.split(":");
+        return {
+          provider,
+          model,
+          avgLevel: +(data.totalLevel / data.count).toFixed(2),
+          maxLevel: data.maxLevel,
+          avgScore: +(data.scores.reduce((a, b) => a + b, 0) / data.scores.length).toFixed(2),
+          sampleSize: data.count,
+        };
+      });
+
+      res.json({ summary });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to compute ToM metrics" });
     }
   });
 

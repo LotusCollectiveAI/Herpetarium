@@ -2,12 +2,101 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
 import type { AIPlayerConfig, ParseQuality } from "@shared/schema";
-import { getPromptStrategy } from "./promptStrategies";
+import { getPromptStrategy, applyAblations } from "./promptStrategies";
 import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
 
 let openaiClient: OpenAI | null = null;
 let anthropicClient: Anthropic | null = null;
 let geminiClient: GoogleGenAI | null = null;
+
+interface ProviderThrottleState {
+  lastRateLimitAt: number;
+  backoffMs: number;
+  totalRetries: number;
+  totalRateLimits: number;
+}
+
+const providerThrottleState: Record<string, ProviderThrottleState> = {};
+
+export function getProviderThrottleState(): Record<string, ProviderThrottleState> {
+  return { ...providerThrottleState };
+}
+
+export function resetProviderThrottleState() {
+  for (const key of Object.keys(providerThrottleState)) {
+    delete providerThrottleState[key];
+  }
+}
+
+function getThrottleState(provider: string): ProviderThrottleState {
+  if (!providerThrottleState[provider]) {
+    providerThrottleState[provider] = { lastRateLimitAt: 0, backoffMs: 0, totalRetries: 0, totalRateLimits: 0 };
+  }
+  return providerThrottleState[provider];
+}
+
+function isRateLimitError(err: unknown): { isRateLimit: boolean; retryAfterMs?: number } {
+  if (!err || typeof err !== "object") return { isRateLimit: false };
+  const e = err as any;
+  const status = e.status || e.statusCode || e.code;
+  if (status === 429 || status === "429") {
+    let retryAfterMs: number | undefined;
+    const retryAfter = e.headers?.["retry-after"] || e.headers?.get?.("retry-after");
+    if (retryAfter) {
+      const seconds = parseFloat(retryAfter);
+      if (!isNaN(seconds)) retryAfterMs = seconds * 1000;
+    }
+    return { isRateLimit: true, retryAfterMs };
+  }
+  const message = String(e.message || e.error || "").toLowerCase();
+  if (message.includes("rate limit") || message.includes("too many requests") || message.includes("429")) {
+    return { isRateLimit: true };
+  }
+  return { isRateLimit: false };
+}
+
+const MAX_RETRIES = 3;
+const BASE_BACKOFF_MS = 1000;
+const MAX_BACKOFF_MS = 30000;
+
+async function callAIWithBackoff(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  const state = getThrottleState(config.provider);
+
+  if (state.backoffMs > 0) {
+    const elapsed = Date.now() - state.lastRateLimitAt;
+    const remaining = state.backoffMs - elapsed;
+    if (remaining > 0) {
+      await new Promise(resolve => setTimeout(resolve, remaining));
+    }
+  }
+
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const result = await callAIRaw(config, systemPrompt, userPrompt);
+      if (state.backoffMs > 0) {
+        state.backoffMs = Math.max(0, state.backoffMs * 0.5);
+      }
+      return result;
+    } catch (err) {
+      const { isRateLimit, retryAfterMs } = isRateLimitError(err);
+      if (isRateLimit && attempt < MAX_RETRIES) {
+        state.totalRateLimits++;
+        state.totalRetries++;
+        state.lastRateLimitAt = Date.now();
+
+        const jitter = Math.random() * 500;
+        const backoff = retryAfterMs || Math.min(BASE_BACKOFF_MS * Math.pow(2, attempt) + jitter, MAX_BACKOFF_MS);
+        state.backoffMs = backoff;
+
+        console.warn(`[ai-backoff] ${config.provider}/${config.model} rate limited (attempt ${attempt + 1}/${MAX_RETRIES}), waiting ${Math.round(backoff)}ms`);
+        await new Promise(resolve => setTimeout(resolve, backoff));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Max retries exceeded");
+}
 
 function getOpenAI(): OpenAI {
   if (!openaiClient) {
@@ -277,7 +366,7 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
   };
 }
 
-async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+function callAIRaw(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
   switch (config.provider) {
     case "chatgpt":
       return callOpenAI(config, systemPrompt, userPrompt);
@@ -286,6 +375,10 @@ async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: 
     case "gemini":
       return callGemini(config, systemPrompt, userPrompt);
   }
+}
+
+async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  return callAIWithBackoff(config, systemPrompt, userPrompt);
 }
 
 interface ParseResult<T> {
@@ -372,12 +465,22 @@ function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfi
 
 export async function generateClues(configOrProvider: AIPlayerConfig | string, params: ClueTemplateParams): Promise<AICallResult<string[]>> {
   const config = resolveConfig(configOrProvider);
+  const ablatedParams = applyAblations(params, params.ablations, "clue");
+
+  if (ablatedParams.ablations?.includes("random_clues")) {
+    const randomWords = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "theta", "kappa", "sigma", "omega"];
+    const pick = () => randomWords[Math.floor(Math.random() * randomWords.length)];
+    return { result: [pick(), pick(), pick()], prompt: "ABLATION:random_clues", rawResponse: "", model: config.model, latencyMs: 0, parseQuality: "clean" };
+  }
+
   const strategy = getPromptStrategy(config.promptStrategy);
-  const prompt = strategy.clueTemplate(params);
-  const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
+  const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
+  const prompt = activeStrategy.clueTemplate(ablatedParams);
+  const fullPrompt = `${activeStrategy.systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, strategy.systemPrompt, prompt);
+    const raw = await callAI(config, activeStrategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCluesResponse(raw.text);
     return {
@@ -394,12 +497,15 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
 
 export async function generateGuess(configOrProvider: AIPlayerConfig | string, params: GuessTemplateParams): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
+  const ablatedParams = applyAblations(params, params.ablations, "guess");
   const strategy = getPromptStrategy(config.promptStrategy);
-  const prompt = strategy.guessTemplate(params);
-  const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
+  const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
+  const prompt = activeStrategy.guessTemplate(ablatedParams);
+  const fullPrompt = `${activeStrategy.systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, strategy.systemPrompt, prompt);
+    const raw = await callAI(config, activeStrategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {
@@ -495,12 +601,15 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
 
 export async function generateInterception(configOrProvider: AIPlayerConfig | string, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
+  const ablatedParams = applyAblations(params, params.ablations, "interception");
   const strategy = getPromptStrategy(config.promptStrategy);
-  const prompt = strategy.interceptionTemplate(params);
-  const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
+  const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
+  const prompt = activeStrategy.interceptionTemplate(ablatedParams);
+  const fullPrompt = `${activeStrategy.systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, strategy.systemPrompt, prompt);
+    const raw = await callAI(config, activeStrategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {

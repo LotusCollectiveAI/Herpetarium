@@ -539,6 +539,146 @@ function NoteEvolutionView({ notes, playerName, team }: { notes: ScratchNote[]; 
   );
 }
 
+interface TomAnalysis {
+  level: number;
+  label: string;
+  evidence: string[];
+  score: number;
+}
+
+interface GameTomProfile {
+  gameIndex: number;
+  matchId: number | null;
+  clues: TomAnalysis;
+  interceptions: TomAnalysis;
+  overall: TomAnalysis;
+}
+
+interface PlayerTomTimeline {
+  provider: string;
+  team: string;
+  playerName: string;
+  games: GameTomProfile[];
+  avgLevel: number;
+  maxLevel: number;
+  progression: "improving" | "stable" | "declining";
+}
+
+function TomLevelBadge({ level }: { level: number }) {
+  const colors = [
+    "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+    "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
+    "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+    "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
+  ];
+  const labels = ["L0: Reactive", "L1: Self-Aware", "L2: ToM", "L3: Meta"];
+  return (
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${colors[level] || colors[0]}`} data-testid={`tom-level-${level}`}>
+      {labels[level] || `L${level}`}
+    </span>
+  );
+}
+
+function ProgressionBadge({ progression }: { progression: string }) {
+  const styles: Record<string, string> = {
+    improving: "text-green-600 dark:text-green-400",
+    stable: "text-muted-foreground",
+    declining: "text-red-600 dark:text-red-400",
+  };
+  const icons: Record<string, string> = { improving: "↑", stable: "→", declining: "↓" };
+  return <span className={`text-xs font-medium ${styles[progression] || ""}`}>{icons[progression] || ""} {progression}</span>;
+}
+
+function CognitiveDepthChart({ seriesId }: { seriesId: number }) {
+  const { data, isLoading } = useQuery<{ seriesId: number; timelines: PlayerTomTimeline[] }>({
+    queryKey: ["/api/series", seriesId, "tom"],
+  });
+
+  if (isLoading) return <Skeleton className="h-32 w-full" />;
+  if (!data || data.timelines.length === 0) return null;
+
+  const maxGames = Math.max(...data.timelines.map(t => t.games.length), 1);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Brain className="h-4 w-4" />
+          Cognitive Depth (Theory of Mind)
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {data.timelines.map((timeline) => (
+          <div key={`${timeline.provider}-${timeline.team}`} className="space-y-2" data-testid={`tom-timeline-${timeline.playerName}`}>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Bot className="h-4 w-4" />
+                <span className={`text-sm font-medium ${getTeamColor(timeline.team)}`}>{timeline.playerName} ({timeline.team})</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <TomLevelBadge level={timeline.maxLevel} />
+                <ProgressionBadge progression={timeline.progression} />
+                <span className="text-xs text-muted-foreground">avg: {timeline.avgLevel.toFixed(1)}</span>
+              </div>
+            </div>
+
+            <div className="flex items-end gap-1 h-20">
+              {timeline.games.map((game) => {
+                const barHeight = ((game.overall.level + 1) / 4) * 100;
+                const barColor = timeline.team === "amber"
+                  ? ["bg-gray-300", "bg-amber-300", "bg-amber-500", "bg-amber-700"][game.overall.level]
+                  : ["bg-gray-300", "bg-blue-300", "bg-blue-500", "bg-blue-700"][game.overall.level];
+                return (
+                  <div
+                    key={game.gameIndex}
+                    className="flex-1 flex flex-col items-center gap-0.5"
+                    data-testid={`tom-bar-${game.gameIndex}`}
+                    title={`Game ${game.gameIndex + 1}: ${game.overall.label} (score: ${game.overall.score})`}
+                  >
+                    <div className={`w-full rounded-t ${barColor} transition-all`} style={{ height: `${barHeight}%` }} />
+                    <span className="text-[8px] text-muted-foreground">G{game.gameIndex + 1}</span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {timeline.games.some(g => g.overall.evidence.length > 0) && (
+              <Collapsible>
+                <CollapsibleTrigger className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1">
+                  <ChevronRight className="h-3 w-3" /> Evidence samples
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <div className="mt-1 p-2 bg-muted/30 rounded text-xs space-y-1 max-h-32 overflow-y-auto">
+                    {timeline.games
+                      .filter(g => g.overall.evidence.length > 0)
+                      .slice(-3)
+                      .map((g, i) => (
+                        <div key={i}>
+                          <span className="font-medium">G{g.gameIndex + 1}:</span>{" "}
+                          <span className="text-muted-foreground italic">"{g.overall.evidence[0]}"</span>
+                        </div>
+                      ))}
+                  </div>
+                </CollapsibleContent>
+              </Collapsible>
+            )}
+          </div>
+        ))}
+
+        <div className="border-t pt-2 mt-2">
+          <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+            <span>Levels:</span>
+            <TomLevelBadge level={0} />
+            <TomLevelBadge level={1} />
+            <TomLevelBadge level={2} />
+            <TomLevelBadge level={3} />
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function SeriesDetailView({ seriesId }: { seriesId: number }) {
   const [, setLocation] = useLocation();
   const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
@@ -714,6 +854,8 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
           </div>
         </CardContent>
       </Card>
+
+      <CognitiveDepthChart seriesId={seriesId} />
     </div>
   );
 }

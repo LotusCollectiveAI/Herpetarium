@@ -1,4 +1,4 @@
-import { GameState, Player, HeadlessMatchConfig, AIProvider, AIPlayerConfig, getDefaultConfig } from "@shared/schema";
+import { GameState, Player, HeadlessMatchConfig, AIProvider, AIPlayerConfig, getDefaultConfig, AblationFlag } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -88,7 +88,7 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
   }
 }
 
-async function processClues(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>): Promise<GameState> {
+async function processClues(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>, ablations?: AblationFlag[]): Promise<GameState> {
   for (const team of ["amber", "blue"] as const) {
     const clueGiverId = game.currentClueGiver[team];
     if (!clueGiverId || game.currentClues[team]) continue;
@@ -106,7 +106,7 @@ async function processClues(game: GameState, matchId: number, scratchNotesMap?: 
 
     const noteKey = `${clueGiver.aiProvider}-${team}`;
     const fallbackClues = code.map(n => keywords[n - 1].slice(0, 3));
-    const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey] };
+    const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey], ablations };
 
     const { result: callResult, timedOut } = await withTimeout(
       generateClues(config, clueParams),
@@ -121,7 +121,7 @@ async function processClues(game: GameState, matchId: number, scratchNotesMap?: 
   return game;
 }
 
-async function processGuesses(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>): Promise<GameState> {
+async function processGuesses(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>, ablations?: AblationFlag[]): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
   for (const team of ["amber", "blue"] as const) {
@@ -146,7 +146,7 @@ async function processGuesses(game: GameState, matchId: number, scratchNotesMap?
     }));
 
     const noteKey = `${aiGuesser.aiProvider}-${team}`;
-    const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey] };
+    const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations };
     const { result: callResult, timedOut } = await withTimeout(
       generateGuess(config, guessParams),
       AI_TIMEOUT_MS,
@@ -160,7 +160,7 @@ async function processGuesses(game: GameState, matchId: number, scratchNotesMap?
   return game;
 }
 
-async function processInterceptions(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>): Promise<GameState> {
+async function processInterceptions(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>, ablations?: AblationFlag[]): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
   for (const team of ["amber", "blue"] as const) {
@@ -180,7 +180,7 @@ async function processInterceptions(game: GameState, matchId: number, scratchNot
     }));
 
     const noteKey = `${aiInterceptor.aiProvider}-${team}`;
-    const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey] };
+    const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations };
     const { result: callResult, timedOut } = await withTimeout(
       generateInterception(config, interceptParams),
       AI_TIMEOUT_MS,
@@ -291,25 +291,27 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
   const matchId = match.id;
   log(`[headless] Match ${matchId} started (game ${game.id})`, "headless");
 
+  const ablations = config.ablations?.flags;
+
   while (game.phase !== "game_over" && game.round < MAX_ROUNDS) {
     game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 
-    game = await processClues(game, matchId, scratchNotesMap);
+    game = await processClues(game, matchId, scratchNotesMap, ablations);
 
     if (game.phase !== "own_team_guessing") {
       log(`[headless] Match ${matchId} - Unexpected phase after clues: ${game.phase}`, "headless");
       break;
     }
 
-    game = await processGuesses(game, matchId, scratchNotesMap);
+    game = await processGuesses(game, matchId, scratchNotesMap, ablations);
 
     if (game.phase !== "opponent_intercepting") {
       log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
       break;
     }
 
-    game = await processInterceptions(game, matchId, scratchNotesMap);
+    game = await processInterceptions(game, matchId, scratchNotesMap, ablations);
 
     if (game.phase === "round_results" || game.phase === "game_over") {
       await persistRoundResults(matchId, game);

@@ -15,7 +15,7 @@ import { queryClient } from "@/lib/queryClient";
 import {
   Lock, ArrowLeft, BarChart3, FlaskConical, FileDown, Eye,
   TrendingUp, Shield, AlertTriangle, Target, Shuffle, BookOpen,
-  ChevronDown, ChevronRight, Check, X, ShieldCheck
+  ChevronDown, ChevronRight, Check, X, ShieldCheck, Brain
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
@@ -1000,6 +1000,117 @@ function ClueAnalysisSection() {
   );
 }
 
+interface TomSummaryEntry {
+  provider: string;
+  model: string;
+  avgLevel: number;
+  maxLevel: number;
+  avgScore: number;
+  sampleSize: number;
+}
+
+function TomComparisonSection({ filterModel, filterDateFrom, filterDateTo }: { filterModel?: string; filterDateFrom?: string; filterDateTo?: string }) {
+  const tomParams = new URLSearchParams();
+  if (filterModel) tomParams.set("model", filterModel);
+  if (filterDateFrom) tomParams.set("dateFrom", filterDateFrom);
+  if (filterDateTo) tomParams.set("dateTo", filterDateTo);
+  const tomQuery = tomParams.toString();
+  const { data, isLoading } = useQuery<{ summary: TomSummaryEntry[] }>({
+    queryKey: ["/api/eval/tom", tomQuery],
+    queryFn: () => fetch(`/api/eval/tom${tomQuery ? "?" + tomQuery : ""}`).then(r => r.json()),
+  });
+
+  if (isLoading) return <Skeleton className="h-48 w-full" />;
+
+  const summary = data?.summary || [];
+
+  const levelLabels = ["L0: Reactive", "L1: Self-Aware", "L2: Theory of Mind", "L3: Meta-Strategic"];
+  const levelColors = [
+    "bg-gray-200 text-gray-700 dark:bg-gray-700 dark:text-gray-300",
+    "bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300",
+    "bg-blue-100 text-blue-700 dark:bg-blue-900 dark:text-blue-300",
+    "bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-300",
+  ];
+
+  const providerLabel = (p: string) => {
+    switch (p) {
+      case "chatgpt": return "ChatGPT";
+      case "claude": return "Claude";
+      case "gemini": return "Gemini";
+      default: return p;
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2" data-testid="text-tom-title">
+          <Brain className="h-5 w-5" />
+          Theory of Mind Depth Comparison
+        </CardTitle>
+        <CardDescription>
+          How deeply each model reasons about opponent thinking
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {summary.length === 0 ? (
+          <p className="text-muted-foreground text-sm" data-testid="text-tom-empty">No AI call data available for analysis. Run some matches first.</p>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-3">
+              {summary
+                .sort((a, b) => b.avgLevel - a.avgLevel)
+                .map((entry) => (
+                  <div key={`${entry.provider}:${entry.model}`} className="flex items-center gap-4 p-3 border rounded-lg" data-testid={`tom-model-${entry.model}`}>
+                    <div className="flex-1">
+                      <div className="font-medium text-sm">{entry.model}</div>
+                      <div className="text-xs text-muted-foreground">{providerLabel(entry.provider)}</div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <div className="text-center">
+                        <div className="text-xs text-muted-foreground">Avg Level</div>
+                        <div className="font-bold" data-testid={`tom-avg-${entry.model}`}>{entry.avgLevel.toFixed(1)}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-muted-foreground">Max</div>
+                        <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${levelColors[entry.maxLevel]}`} data-testid={`tom-max-${entry.model}`}>
+                          {levelLabels[entry.maxLevel]}
+                        </span>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-muted-foreground">Score</div>
+                        <div className="font-bold text-sm" data-testid={`tom-score-${entry.model}`}>{entry.avgScore.toFixed(2)}</div>
+                      </div>
+                      <div className="text-center">
+                        <div className="text-xs text-muted-foreground">Samples</div>
+                        <div className="text-sm">{entry.sampleSize}</div>
+                      </div>
+                    </div>
+                    <div className="w-32 h-3 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-green-400 via-blue-400 to-purple-500 rounded-full transition-all"
+                        style={{ width: `${(entry.avgLevel / 3) * 100}%` }}
+                      />
+                    </div>
+                  </div>
+                ))}
+            </div>
+
+            <div className="border-t pt-3 mt-3">
+              <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+                <span>Levels:</span>
+                {levelLabels.map((label, i) => (
+                  <span key={i} className={`px-1.5 py-0.5 rounded ${levelColors[i]}`}>{label}</span>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function ExportSection() {
   const handleExport = (endpoint: string, filename: string) => {
     window.open(endpoint, "_blank");
@@ -1110,7 +1221,7 @@ export default function EvalDashboard() {
         </div>
 
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-6">
+          <TabsList className="grid w-full grid-cols-7">
             <TabsTrigger value="overview" data-testid="tab-overview">
               <BarChart3 className="h-4 w-4 mr-1" />
               Overview
@@ -1122,6 +1233,10 @@ export default function EvalDashboard() {
             <TabsTrigger value="teams" data-testid="tab-teams">
               <Shuffle className="h-4 w-4 mr-1" />
               Team Composition
+            </TabsTrigger>
+            <TabsTrigger value="tom" data-testid="tab-tom">
+              <Brain className="h-4 w-4 mr-1" />
+              ToM
             </TabsTrigger>
             <TabsTrigger value="experiments" data-testid="tab-experiments">
               <FlaskConical className="h-4 w-4 mr-1" />
@@ -1316,6 +1431,10 @@ export default function EvalDashboard() {
                 </CardContent>
               </Card>
             )}
+          </TabsContent>
+
+          <TabsContent value="tom" className="space-y-6">
+            <TomComparisonSection filterModel={filterModel} filterDateFrom={filterDateFrom} filterDateTo={filterDateTo} />
           </TabsContent>
 
           <TabsContent value="experiments">

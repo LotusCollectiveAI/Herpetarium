@@ -334,6 +334,7 @@ export interface HeadlessMatchConfig {
   }>;
   fastMode?: boolean;
   seed?: string;
+  ablations?: HeadlessMatchAblations;
 }
 
 export interface TournamentConfig {
@@ -341,6 +342,15 @@ export interface TournamentConfig {
   matchConfigs: HeadlessMatchConfig[];
   gamesPerMatchup?: number;
   budgetCapUsd?: string;
+  concurrency?: number;
+  delayBetweenMatchesMs?: number;
+  ablations?: HeadlessMatchAblations;
+}
+
+export type AblationFlag = "no_history" | "no_scratch_notes" | "no_opponent_history" | "no_chain_of_thought" | "random_clues";
+
+export interface HeadlessMatchAblations {
+  flags: AblationFlag[];
 }
 
 // Series tables for persistent scratch notes
