@@ -8,6 +8,7 @@ import { GameProvider } from "@/lib/gameContext";
 import Home from "@/pages/Home";
 import Game from "@/pages/Game";
 import History from "@/pages/History";
+import Tournaments from "@/pages/Tournaments";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -16,6 +17,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/game/:id" component={Game} />
       <Route path="/history" component={History} />
+      <Route path="/tournaments" component={Tournaments} />
       <Route component={NotFound} />
     </Switch>
   );

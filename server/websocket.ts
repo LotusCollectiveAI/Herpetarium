@@ -483,8 +483,25 @@ async function processAIInterceptions(gameId: string) {
     await persistRoundResults(gameId, game);
     if (game.phase === "game_over") {
       await persistGameCompletion(gameId, game);
+    } else if (game.phase === "round_results") {
+      const allAI = game.players.every(p => p.isAI);
+      if (allAI) {
+        setTimeout(() => autoAdvanceRound(gameId), 1000);
+      }
     }
   }
+}
+
+async function autoAdvanceRound(gameId: string) {
+  const game = games.get(gameId);
+  if (!game || game.phase !== "round_results") return;
+
+  const updated = startNewRound(game);
+  games.set(gameId, updated);
+  sendGameState(gameId);
+  log(`Auto-advancing all-AI game ${gameId} to round ${updated.round}`, "websocket");
+
+  setTimeout(() => processAITurn(gameId), 500);
 }
 
 async function handleMessage(ws: WebSocket, message: WSMessage) {

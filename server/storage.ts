@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, matches, matchRounds, aiCallLogs } from "@shared/schema";
+import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, like, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -19,6 +19,15 @@ export interface IStorage {
 
   createAiCallLog(log: InsertAiCallLog): Promise<AiCallLog>;
   getAiCallLogs(matchId: number): Promise<AiCallLog[]>;
+
+  createTournament(data: InsertTournament): Promise<Tournament>;
+  updateTournament(id: number, data: Partial<InsertTournament>): Promise<Tournament | undefined>;
+  getTournament(id: number): Promise<Tournament | undefined>;
+  getTournaments(): Promise<Tournament[]>;
+
+  createTournamentMatch(data: InsertTournamentMatch): Promise<TournamentMatch>;
+  updateTournamentMatch(id: number, data: Partial<InsertTournamentMatch>): Promise<TournamentMatch | undefined>;
+  getTournamentMatches(tournamentId: number): Promise<TournamentMatch[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -114,6 +123,39 @@ export class DatabaseStorage implements IStorage {
 
   async getAiCallLogs(matchId: number): Promise<AiCallLog[]> {
     return db.select().from(aiCallLogs).where(eq(aiCallLogs.matchId, matchId)).orderBy(aiCallLogs.createdAt);
+  }
+
+  async createTournament(data: InsertTournament): Promise<Tournament> {
+    const [created] = await db.insert(tournaments).values(data).returning();
+    return created;
+  }
+
+  async updateTournament(id: number, data: Partial<InsertTournament>): Promise<Tournament | undefined> {
+    const [updated] = await db.update(tournaments).set(data).where(eq(tournaments.id, id)).returning();
+    return updated;
+  }
+
+  async getTournament(id: number): Promise<Tournament | undefined> {
+    const [tournament] = await db.select().from(tournaments).where(eq(tournaments.id, id)).limit(1);
+    return tournament;
+  }
+
+  async getTournaments(): Promise<Tournament[]> {
+    return db.select().from(tournaments).orderBy(desc(tournaments.createdAt));
+  }
+
+  async createTournamentMatch(data: InsertTournamentMatch): Promise<TournamentMatch> {
+    const [created] = await db.insert(tournamentMatches).values(data).returning();
+    return created;
+  }
+
+  async updateTournamentMatch(id: number, data: Partial<InsertTournamentMatch>): Promise<TournamentMatch | undefined> {
+    const [updated] = await db.update(tournamentMatches).set(data).where(eq(tournamentMatches.id, id)).returning();
+    return updated;
+  }
+
+  async getTournamentMatches(tournamentId: number): Promise<TournamentMatch[]> {
+    return db.select().from(tournamentMatches).where(eq(tournamentMatches.tournamentId, tournamentId)).orderBy(tournamentMatches.matchIndex);
   }
 }
 

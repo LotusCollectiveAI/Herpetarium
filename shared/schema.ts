@@ -259,6 +259,56 @@ export const insertAiCallLogSchema = createInsertSchema(aiCallLogs).omit({ id: t
 export type InsertAiCallLog = z.infer<typeof insertAiCallLogSchema>;
 export type AiCallLog = typeof aiCallLogs.$inferSelect;
 
+// Tournament tables
+
+export const tournaments = pgTable("tournaments", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  config: jsonb("config").notNull(),
+  totalMatches: integer("total_matches").notNull().default(0),
+  completedMatches: integer("completed_matches").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertTournamentSchema = createInsertSchema(tournaments).omit({ id: true, createdAt: true });
+export type InsertTournament = z.infer<typeof insertTournamentSchema>;
+export type Tournament = typeof tournaments.$inferSelect;
+
+export const tournamentMatches = pgTable("tournament_matches", {
+  id: serial("id").primaryKey(),
+  tournamentId: integer("tournament_id").notNull(),
+  matchId: integer("match_id"),
+  matchIndex: integer("match_index").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  config: jsonb("config").notNull(),
+  result: jsonb("result"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertTournamentMatchSchema = createInsertSchema(tournamentMatches).omit({ id: true, createdAt: true });
+export type InsertTournamentMatch = z.infer<typeof insertTournamentMatchSchema>;
+export type TournamentMatch = typeof tournamentMatches.$inferSelect;
+
+// Match config type for headless runner
+export interface HeadlessMatchConfig {
+  players: Array<{
+    name: string;
+    aiProvider: AIProvider;
+    team: "amber" | "blue";
+  }>;
+  fastMode?: boolean;
+}
+
+export interface TournamentConfig {
+  name: string;
+  matchConfigs: HeadlessMatchConfig[];
+  gamesPerMatchup?: number;
+}
+
 // Legacy exports for compatibility
 export { users, insertUserSchema } from "./models/user";
 export type { InsertUser, User } from "./models/user";

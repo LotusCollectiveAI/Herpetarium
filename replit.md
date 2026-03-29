@@ -51,12 +51,19 @@ Preferred communication style: Simple, everyday language.
 - Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status
 
 ### Match Persistence
-- **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`
+- **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`, `tournaments`, `tournament_matches`
 - Match record created when teams are confirmed (before first round)
 - Round results persisted after each round completes (with dedup guard)
 - Game completion updates match with winner and final token counts
 - **API Endpoints**: GET `/api/matches` (paginated, filterable), GET `/api/matches/:id` (full detail with rounds and AI logs)
 - **UI**: `/history` page shows past games with expandable round details and AI call logs
+
+### Headless Game Runner & Tournament Mode
+- **Headless Runner** (`server/headlessRunner.ts`): Runs complete AI-vs-AI games without WebSocket or browser. Takes a match config (player names, AI providers, team assignments) and executes all phases automatically.
+- **Tournament System** (`server/tournament.ts`): Creates and runs tournaments with multiple match configurations. Matches run sequentially to manage API rate limits.
+- **Auto-advance**: When all players in a WebSocket game are AI, the server automatically advances from round_results to the next round (1s delay).
+- **API Endpoints**: POST `/api/matches/run` (queue headless match), POST `/api/matches/run/sync` (run and wait for result), POST `/api/tournaments` (create and start tournament), GET `/api/tournaments` (list all), GET `/api/tournaments/:id` (detail with stats)
+- **UI**: `/tournaments` page with tournament creation form, leaderboard with model win rates, per-match results, and live refresh for running tournaments
 
 ### Input Validation
 - Frontend clue validation: single-word only, no blanks, no keywords or root words
@@ -83,15 +90,17 @@ client/           # React frontend
     components/   # UI components (game-specific and shadcn/ui)
                   # DeductionNotes.tsx - Collapsible notes panel for tracking opponent keywords (localStorage)
                   # RoundHistory.tsx - Supports both list and columnar view (columnar=true for interception)
-    pages/        # Route pages (Home, Game, History)
+    pages/        # Route pages (Home, Game, History, Tournaments)
     lib/          # Utilities, context providers, query client
     hooks/        # Custom React hooks
 server/           # Express backend
   index.ts        # Server entry point
-  routes.ts       # API route registration (games, match history)
-  websocket.ts    # WebSocket handler for game logic + match persistence
+  routes.ts       # API route registration (games, matches, tournaments)
+  websocket.ts    # WebSocket handler for game logic + match persistence + auto-advance
   game.ts         # Game state management functions
   ai.ts           # AI provider integrations (configurable models, reasoning support, trace capture) with call logging
+  headlessRunner.ts # Headless game runner for all-AI games
+  tournament.ts   # Tournament creation and execution
   db.ts           # Database connection setup
   storage.ts      # Storage interface with match/round/AI log CRUD
   promptStrategies.ts # Named prompt strategy presets (default, advanced)
