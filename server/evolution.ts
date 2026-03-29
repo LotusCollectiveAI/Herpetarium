@@ -590,20 +590,29 @@ async function produceNextGeneration(
       newGenomes.push(created);
     } else {
       const parent = tournamentSelect(population);
-      const parentFitness = computeFitness(parent);
-      const { mutated, log: mLog } = await mutateModulesWithAI(parent.modules as GenomeModules, config, parentFitness, currentGen);
+      let childModules = { ...(parent.modules as GenomeModules) };
+      let mutationLog = `Clone of genome ${parent.id}`;
+      let lineageTag = `clone-g${nextGen}-${newGenomes.length}`;
+
+      if (Math.random() < config.mutationRate) {
+        const parentFitness = computeFitness(parent);
+        const { mutated, log: mLog } = await mutateModulesWithAI(childModules, config, parentFitness, currentGen);
+        childModules = mutated;
+        mutationLog = `Mutation of genome ${parent.id}: ${mLog}`;
+        lineageTag = `mutant-g${nextGen}-${newGenomes.length}`;
+      }
 
       const created = await storage.createStrategyGenome({
         evolutionRunId: runId,
         generationNumber: nextGen,
         parentIds: [parent.id],
-        modules: mutated,
+        modules: childModules,
         eloRating: parent.eloRating,
         matchesPlayed: 0,
         wins: 0,
         losses: 0,
-        lineageTag: `mutant-g${nextGen}-${newGenomes.length}`,
-        mutationLog: `Mutation of genome ${parent.id}: ${mLog}`,
+        lineageTag,
+        mutationLog,
       });
       newGenomes.push(created);
     }
