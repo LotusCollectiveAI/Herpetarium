@@ -1,6 +1,6 @@
-import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches } from "@shared/schema";
+import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, like, sql } from "drizzle-orm";
+import { eq, desc, and, or, like, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -13,12 +13,16 @@ export interface IStorage {
   getMatch(id: number): Promise<Match | undefined>;
   getMatchByGameId(gameId: string): Promise<Match | undefined>;
   getMatches(params: { page: number; limit: number; model?: string; winner?: string; dateFrom?: string; dateTo?: string }): Promise<{ matches: Match[]; total: number }>;
+  getAllMatches(params?: { model?: string; strategy?: string; dateFrom?: string; dateTo?: string }): Promise<Match[]>;
+  getMatchesByIds(ids: number[]): Promise<Match[]>;
 
   createMatchRound(round: InsertMatchRound): Promise<MatchRound>;
   getMatchRounds(matchId: number): Promise<MatchRound[]>;
+  getMatchRoundsForMatches(matchIds: number[]): Promise<MatchRound[]>;
 
   createAiCallLog(log: InsertAiCallLog): Promise<AiCallLog>;
   getAiCallLogs(matchId: number): Promise<AiCallLog[]>;
+  getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]>;
 
   createTournament(data: InsertTournament): Promise<Tournament>;
   updateTournament(id: number, data: Partial<InsertTournament>): Promise<Tournament | undefined>;
@@ -28,6 +32,11 @@ export interface IStorage {
   createTournamentMatch(data: InsertTournamentMatch): Promise<TournamentMatch>;
   updateTournamentMatch(id: number, data: Partial<InsertTournamentMatch>): Promise<TournamentMatch | undefined>;
   getTournamentMatches(tournamentId: number): Promise<TournamentMatch[]>;
+
+  createExperiment(experiment: InsertExperiment): Promise<Experiment>;
+  getExperiment(id: number): Promise<Experiment | undefined>;
+  getExperiments(): Promise<Experiment[]>;
+  updateExperiment(id: number, data: Partial<InsertExperiment>): Promise<Experiment | undefined>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -125,6 +134,12 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(aiCallLogs).where(eq(aiCallLogs.matchId, matchId)).orderBy(aiCallLogs.createdAt);
   }
 
+  async getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]> {
+    if (matchIds && matchIds.length === 0) return [];
+    const where = matchIds ? inArray(aiCallLogs.matchId, matchIds) : undefined;
+    return db.select().from(aiCallLogs).where(where).orderBy(aiCallLogs.createdAt);
+  }
+
   async createTournament(data: InsertTournament): Promise<Tournament> {
     const [created] = await db.insert(tournaments).values(data).returning();
     return created;
@@ -156,6 +171,58 @@ export class DatabaseStorage implements IStorage {
 
   async getTournamentMatches(tournamentId: number): Promise<TournamentMatch[]> {
     return db.select().from(tournamentMatches).where(eq(tournamentMatches.tournamentId, tournamentId)).orderBy(tournamentMatches.matchIndex);
+  }
+
+  async getAllMatches(params?: { model?: string; strategy?: string; dateFrom?: string; dateTo?: string }): Promise<Match[]> {
+    const conditions = [];
+    if (params?.model) {
+      conditions.push(
+        sql`${matches.playerConfigs}::text ILIKE ${'%' + params.model + '%'}`
+      );
+    }
+    if (params?.strategy) {
+      conditions.push(
+        sql`${matches.playerConfigs}::text ILIKE ${'%' + params.strategy + '%'}`
+      );
+    }
+    if (params?.dateFrom) {
+      conditions.push(sql`${matches.createdAt} >= ${params.dateFrom}::timestamp`);
+    }
+    if (params?.dateTo) {
+      conditions.push(sql`${matches.createdAt} <= ${params.dateTo}::timestamp`);
+    }
+    conditions.push(sql`${matches.winner} IS NOT NULL`);
+    const where = conditions.length > 0 ? and(...conditions) : undefined;
+    return db.select().from(matches).where(where).orderBy(desc(matches.createdAt));
+  }
+
+  async getMatchesByIds(ids: number[]): Promise<Match[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(matches).where(inArray(matches.id, ids));
+  }
+
+  async getMatchRoundsForMatches(matchIds: number[]): Promise<MatchRound[]> {
+    if (matchIds.length === 0) return [];
+    return db.select().from(matchRounds).where(inArray(matchRounds.matchId, matchIds)).orderBy(matchRounds.roundNumber, matchRounds.team);
+  }
+
+  async createExperiment(experiment: InsertExperiment): Promise<Experiment> {
+    const [created] = await db.insert(experiments).values(experiment).returning();
+    return created;
+  }
+
+  async getExperiment(id: number): Promise<Experiment | undefined> {
+    const [exp] = await db.select().from(experiments).where(eq(experiments.id, id)).limit(1);
+    return exp;
+  }
+
+  async getExperiments(): Promise<Experiment[]> {
+    return db.select().from(experiments).orderBy(desc(experiments.createdAt));
+  }
+
+  async updateExperiment(id: number, data: Partial<InsertExperiment>): Promise<Experiment | undefined> {
+    const [updated] = await db.update(experiments).set(data).where(eq(experiments.id, id)).returning();
+    return updated;
   }
 }
 

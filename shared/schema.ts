@@ -293,6 +293,26 @@ export const insertTournamentMatchSchema = createInsertSchema(tournamentMatches)
 export type InsertTournamentMatch = z.infer<typeof insertTournamentMatchSchema>;
 export type TournamentMatch = typeof tournamentMatches.$inferSelect;
 
+export const experiments = pgTable("experiments", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  model: varchar("model", { length: 100 }).notNull(),
+  provider: varchar("provider", { length: 20 }).notNull(),
+  strategyA: varchar("strategy_a", { length: 50 }).notNull(),
+  strategyB: varchar("strategy_b", { length: 50 }).notNull(),
+  numGames: integer("num_games").notNull().default(10),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  matchIdsA: jsonb("match_ids_a").notNull().default([]),
+  matchIdsB: jsonb("match_ids_b").notNull().default([]),
+  results: jsonb("results"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertExperimentSchema = createInsertSchema(experiments).omit({ id: true, createdAt: true });
+export type InsertExperiment = z.infer<typeof insertExperimentSchema>;
+export type Experiment = typeof experiments.$inferSelect;
+
 // Match config type for headless runner
 export interface HeadlessMatchConfig {
   players: Array<{

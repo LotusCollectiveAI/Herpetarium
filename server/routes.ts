@@ -6,6 +6,7 @@ import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning } from "./tournament";
 import { z } from "zod";
+import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues } from "./metrics";
 
 const headlessMatchConfigSchema = z.object({
   players: z.array(z.object({
@@ -199,6 +200,203 @@ export async function registerRoutes(
       res.json({ tournament, matches: tournamentMatchesData, matchDetails, stats });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch tournament" });
+    }
+  });
+
+  app.get("/api/matches/:id/analysis", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid match ID" });
+      }
+
+      const match = await storage.getMatch(id);
+      if (!match) {
+        return res.status(404).json({ error: "Match not found" });
+      }
+
+      const rounds = await storage.getMatchRounds(id);
+      const analysis = analyzeClues(match, rounds);
+
+      res.json({ match, analysis });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to analyze match" });
+    }
+  });
+
+  app.get("/api/eval/metrics", async (req, res) => {
+    try {
+      const model = req.query.model as string | undefined;
+      const strategy = req.query.strategy as string | undefined;
+      const dateFrom = req.query.dateFrom as string | undefined;
+      const dateTo = req.query.dateTo as string | undefined;
+
+      const allMatches = await storage.getAllMatches({ model, strategy, dateFrom, dateTo });
+      const matchIds = allMatches.map(m => m.id);
+      const allRounds = await storage.getMatchRoundsForMatches(matchIds);
+
+      const roundsByMatch = allMatches.map(m =>
+        allRounds.filter(r => r.matchId === m.id)
+      );
+
+      const modelMetrics = computeModelMetrics(allMatches, roundsByMatch);
+      const matchupMetrics = computeMatchupMetrics(allMatches);
+      const strategyMetrics = computeStrategyMetrics(allMatches, roundsByMatch);
+
+      const totalMatches = allMatches.length;
+      const totalRounds = allRounds.length;
+      const avgRoundsPerGame = totalMatches > 0 ? totalRounds / totalMatches / 2 : 0;
+
+      res.json({
+        modelMetrics,
+        matchupMetrics,
+        strategyMetrics,
+        summary: {
+          totalMatches,
+          totalRounds,
+          avgRoundsPerGame,
+        },
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to compute metrics" });
+    }
+  });
+
+  app.post("/api/experiments", async (req, res) => {
+    try {
+      const { name, model, provider, strategyA, strategyB, numGames } = req.body;
+      if (!name || !model || !provider || !strategyA || !strategyB) {
+        return res.status(400).json({ error: "Missing required fields" });
+      }
+
+      const experiment = await storage.createExperiment({
+        name,
+        model,
+        provider,
+        strategyA,
+        strategyB,
+        numGames: numGames || 10,
+        status: "pending",
+        matchIdsA: [],
+        matchIdsB: [],
+        results: null,
+      });
+
+      res.json(experiment);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to create experiment" });
+    }
+  });
+
+  app.get("/api/experiments", async (req, res) => {
+    try {
+      const exps = await storage.getExperiments();
+      res.json(exps);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch experiments" });
+    }
+  });
+
+  app.get("/api/experiments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid experiment ID" });
+      }
+
+      const experiment = await storage.getExperiment(id);
+      if (!experiment) {
+        return res.status(404).json({ error: "Experiment not found" });
+      }
+
+      const matchIdsA = (experiment.matchIdsA as number[]) || [];
+      const matchIdsB = (experiment.matchIdsB as number[]) || [];
+
+      const matchesA = await storage.getMatchesByIds(matchIdsA);
+      const matchesB = await storage.getMatchesByIds(matchIdsB);
+
+      const allMatchIds = [...matchIdsA, ...matchIdsB];
+      const allRounds = await storage.getMatchRoundsForMatches(allMatchIds);
+
+      const roundsA = matchesA.map(m => allRounds.filter(r => r.matchId === m.id));
+      const roundsB = matchesB.map(m => allRounds.filter(r => r.matchId === m.id));
+
+      const modelMetricsA = computeModelMetrics(matchesA, roundsA);
+      const modelMetricsB = computeModelMetrics(matchesB, roundsB);
+
+      res.json({
+        experiment,
+        metricsA: modelMetricsA,
+        metricsB: modelMetricsB,
+        matchesA,
+        matchesB,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch experiment" });
+    }
+  });
+
+  app.get("/api/export/matches", async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      const allMatches = await storage.getAllMatches();
+      const matchIds = allMatches.map(m => m.id);
+      const allRounds = await storage.getMatchRoundsForMatches(matchIds);
+
+      if (format === "csv") {
+        const csvRows = ["id,gameId,createdAt,completedAt,winner,totalRounds,amberWhiteTokens,amberBlackTokens,blueWhiteTokens,blueBlackTokens"];
+        allMatches.forEach(m => {
+          csvRows.push([
+            m.id, m.gameId,
+            m.createdAt ? new Date(m.createdAt).toISOString() : "",
+            m.completedAt ? new Date(m.completedAt).toISOString() : "",
+            m.winner || "",
+            m.totalRounds,
+            m.amberWhiteTokens, m.amberBlackTokens,
+            m.blueWhiteTokens, m.blueBlackTokens,
+          ].join(","));
+        });
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", "attachment; filename=matches.csv");
+        res.send(csvRows.join("\n"));
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Content-Disposition", "attachment; filename=matches.json");
+        res.json({ matches: allMatches, rounds: allRounds });
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to export matches" });
+    }
+  });
+
+  app.get("/api/export/ai-logs", async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      const allLogs = await storage.getAllAiCallLogs();
+
+      if (format === "csv") {
+        const csvRows = ["id,matchId,gameId,roundNumber,provider,model,actionType,latencyMs,timedOut,error,createdAt"];
+        allLogs.forEach(l => {
+          csvRows.push([
+            l.id, l.matchId || "", l.gameId || "",
+            l.roundNumber || "",
+            l.provider, l.model, l.actionType,
+            l.latencyMs || "",
+            l.timedOut,
+            l.error ? `"${l.error.replace(/"/g, '""')}"` : "",
+            l.createdAt ? new Date(l.createdAt).toISOString() : "",
+          ].join(","));
+        });
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", "attachment; filename=ai-logs.csv");
+        res.send(csvRows.join("\n"));
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Content-Disposition", "attachment; filename=ai-logs.json");
+        res.json(allLogs);
+      }
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to export AI logs" });
     }
   });
 

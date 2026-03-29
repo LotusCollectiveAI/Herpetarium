@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ChevronDown, ChevronRight, ArrowLeft, Trophy, Clock, Users, Bot, Brain } from "lucide-react";
+import { Lock, ChevronDown, ChevronRight, ArrowLeft, Trophy, Clock, Users, Bot, Brain, FileDown } from "lucide-react";
 
 interface PlayerConfig {
   id: string;
@@ -294,6 +294,26 @@ export default function History() {
             Home
           </Button>
           <h1 className="text-2xl font-bold" data-testid="text-history-title">Match History</h1>
+          <div className="ml-auto flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => window.open("/api/export/matches?format=json", "_blank")}
+              data-testid="button-export-history-json"
+            >
+              <FileDown className="h-4 w-4 mr-1" />
+              JSON
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => window.open("/api/export/matches?format=csv", "_blank")}
+              data-testid="button-export-history-csv"
+            >
+              <FileDown className="h-4 w-4 mr-1" />
+              CSV
+            </Button>
+          </div>
         </div>
 
         <Card className="mb-6">

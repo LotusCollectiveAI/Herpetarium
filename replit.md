@@ -51,7 +51,7 @@ Preferred communication style: Simple, everyday language.
 - Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status
 
 ### Match Persistence
-- **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`, `tournaments`, `tournament_matches`
+- **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`, `experiments`, `tournaments`, `tournament_matches`
 - Match record created when teams are confirmed (before first round)
 - Round results persisted after each round completes (with dedup guard)
 - Game completion updates match with winner and final token counts
@@ -64,6 +64,13 @@ Preferred communication style: Simple, everyday language.
 - **Auto-advance**: When all players in a WebSocket game are AI, the server automatically advances from round_results to the next round (1s delay).
 - **API Endpoints**: POST `/api/matches/run` (queue headless match), POST `/api/matches/run/sync` (run and wait for result), POST `/api/tournaments` (create and start tournament), GET `/api/tournaments` (list all), GET `/api/tournaments/:id` (detail with stats)
 - **UI**: `/tournaments` page with tournament creation form, leaderboard with model win rates, per-match results, and live refresh for running tournaments
+
+### Eval Harness & A/B Testing
+- **Metrics Module**: `server/metrics.ts` computes per-model, per-strategy, and per-matchup metrics (win rate, interception success/vulnerability, miscommunication, clue diversity, avg rounds)
+- **Eval Dashboard**: `/eval` page with tabs for Overview (charts, tables, filters), A/B Tests (experiments), Clue Analysis, and Data Export
+- **A/B Testing**: Experiments system to compare prompt strategies. POST `/api/experiments`, GET `/api/experiments`, GET `/api/experiments/:id`
+- **Clue Analysis**: GET `/api/matches/:id/analysis` maps each clue to its target keyword, highlights "too obvious" (intercepted) vs "too obscure" (miscommunicated) clues
+- **Data Export**: GET `/api/export/matches` and `/api/export/ai-logs` endpoints supporting JSON and CSV formats. Export buttons on both History and Eval Dashboard pages
 
 ### Input Validation
 - Frontend clue validation: single-word only, no blanks, no keywords or root words
@@ -96,12 +103,13 @@ client/           # React frontend
     components/   # UI components (game-specific and shadcn/ui)
                   # DeductionNotes.tsx - Collapsible notes panel for tracking opponent keywords (localStorage)
                   # RoundHistory.tsx - Supports both list and columnar view (columnar=true for interception)
-    pages/        # Route pages (Home, Game, History, Tournaments)
+    pages/        # Route pages (Home, Game, History, Tournaments, EvalDashboard)
     lib/          # Utilities, context providers, query client
     hooks/        # Custom React hooks
 server/           # Express backend
   index.ts        # Server entry point
-  routes.ts       # API route registration (games, matches, tournaments)
+  routes.ts       # API route registration (games, matches, tournaments, eval metrics, experiments, export)
+  metrics.ts      # Metrics computation module (model, strategy, matchup, clue analysis)
   websocket.ts    # WebSocket handler for game logic + match persistence + auto-advance
   game.ts         # Game state management functions
   ai.ts           # AI provider integrations (configurable models, reasoning support, trace capture) with call logging

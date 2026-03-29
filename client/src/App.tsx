@@ -9,6 +9,7 @@ import Home from "@/pages/Home";
 import Game from "@/pages/Game";
 import History from "@/pages/History";
 import Tournaments from "@/pages/Tournaments";
+import EvalDashboard from "@/pages/EvalDashboard";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -18,6 +19,7 @@ function Router() {
       <Route path="/game/:id" component={Game} />
       <Route path="/history" component={History} />
       <Route path="/tournaments" component={Tournaments} />
+      <Route path="/eval" component={EvalDashboard} />
       <Route component={NotFound} />
     </Switch>
   );
