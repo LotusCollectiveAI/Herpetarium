@@ -75,10 +75,14 @@ Preferred communication style: Simple, everyday language.
 - **UI**: `/tournaments` page with tournament creation form, leaderboard with model win rates, per-match results, and live refresh for running tournaments
 
 ### Eval Harness & A/B Testing
-- **Metrics Module**: `server/metrics.ts` computes per-model, per-strategy, and per-matchup metrics (win rate, interception success/vulnerability, miscommunication, clue diversity, avg rounds)
-- **Eval Dashboard**: `/eval` page with tabs for Overview (charts, tables, filters), A/B Tests (experiments), Clue Analysis, and Data Export
+- **Metrics Module**: `server/metrics.ts` computes per-model, per-strategy, per-matchup, team composition, and self-play metrics
+- **Eval Dashboard**: `/eval` page with tabs for Overview (charts, tables, filters), Team Composition (mixed vs homogeneous win rates, synergy scores, self-play variance), A/B Tests (experiments), Clue Analysis (with cross-model communication flags), and Data Export
+- **Team Composition Analytics**: Mixed vs homogeneous team win rates, per-pair synergy scores, interception vulnerability by composition type
+- **Self-Play Analytics**: Outcome variance, game length distribution, amber vs blue win balance for same-model matchups
+- **Cross-Model Communication Analysis**: Clue analysis view flags cross-architecture clues, shows whether cross-model interpretation succeeded or failed
+- **Tournament Presets**: Quick preset buttons on tournament creation: Cross-Model Round Robin, Self-Play Series, Provider Showdown, Full Matrix — each auto-fills matchups for one-click launch
 - **A/B Testing**: Experiments system to compare prompt strategies. POST `/api/experiments`, GET `/api/experiments`, GET `/api/experiments/:id`
-- **Clue Analysis**: GET `/api/matches/:id/analysis` maps each clue to its target keyword, highlights "too obvious" (intercepted) vs "too obscure" (miscommunicated) clues
+- **Clue Analysis**: GET `/api/matches/:id/analysis` maps each clue to its target keyword, highlights "too obvious" (intercepted) vs "too obscure" (miscommunicated) clues, includes cross-model analysis data
 - **Data Export**: GET `/api/export/matches` and `/api/export/ai-logs` endpoints supporting JSON and CSV formats. Export buttons on both History and Eval Dashboard pages
 
 ### Input Validation

@@ -215,7 +215,43 @@ function parseCluesResponse(response: string): string[] {
   return ["hint", "clue", "guess"];
 }
 
-export async function generateClues(config: AIPlayerConfig, params: ClueTemplateParams): Promise<AICallResult<string[]>> {
+export const MODEL_MAP: Record<string, string> = {
+  chatgpt: "gpt-4o",
+  claude: "claude-sonnet-4-20250514",
+  gemini: "gemini-2.0-flash",
+};
+
+export function buildCluePrompt(params: ClueTemplateParams): string {
+  const strategy = getPromptStrategy("default");
+  return `${strategy.systemPrompt}\n\n${strategy.clueTemplate(params)}`;
+}
+
+export function buildGuessPrompt(params: GuessTemplateParams): string {
+  const strategy = getPromptStrategy("default");
+  return `${strategy.systemPrompt}\n\n${strategy.guessTemplate(params)}`;
+}
+
+export function buildInterceptionPrompt(params: InterceptionTemplateParams): string {
+  const strategy = getPromptStrategy("default");
+  return `${strategy.systemPrompt}\n\n${strategy.interceptionTemplate(params)}`;
+}
+
+function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfig {
+  if (typeof configOrProvider === "string") {
+    const provider = configOrProvider as AIPlayerConfig["provider"];
+    return {
+      provider,
+      model: MODEL_MAP[provider] || "gpt-4o",
+      timeoutMs: 120000,
+      temperature: 0.7,
+      promptStrategy: "default",
+    };
+  }
+  return configOrProvider;
+}
+
+export async function generateClues(configOrProvider: AIPlayerConfig | string, params: ClueTemplateParams): Promise<AICallResult<string[]>> {
+  const config = resolveConfig(configOrProvider);
   const strategy = getPromptStrategy(config.promptStrategy);
   const prompt = strategy.clueTemplate(params);
   const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
@@ -231,7 +267,8 @@ export async function generateClues(config: AIPlayerConfig, params: ClueTemplate
   }
 }
 
-export async function generateGuess(config: AIPlayerConfig, params: GuessTemplateParams): Promise<AICallResult<[number, number, number]>> {
+export async function generateGuess(configOrProvider: AIPlayerConfig | string, params: GuessTemplateParams): Promise<AICallResult<[number, number, number]>> {
+  const config = resolveConfig(configOrProvider);
   const strategy = getPromptStrategy(config.promptStrategy);
   const prompt = strategy.guessTemplate(params);
   const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
@@ -321,7 +358,8 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
   }
 }
 
-export async function generateInterception(config: AIPlayerConfig, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
+export async function generateInterception(configOrProvider: AIPlayerConfig | string, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
+  const config = resolveConfig(configOrProvider);
   const strategy = getPromptStrategy(config.promptStrategy);
   const prompt = strategy.interceptionTemplate(params);
   const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;

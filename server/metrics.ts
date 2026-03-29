@@ -95,6 +95,13 @@ function getTeamModels(match: Match, team: string): string[] {
     .map(p => p.aiConfig?.model || p.aiProvider || "unknown");
 }
 
+function getTeamProviders(match: Match, team: string): string[] {
+  const configs = getPlayerConfigs(match);
+  return configs
+    .filter(p => p.team === team && p.isAI)
+    .map(p => p.aiConfig?.provider || p.aiProvider || "unknown");
+}
+
 function getTeamStrategy(match: Match, team: string): string {
   const configs = getPlayerConfigs(match);
   const aiPlayer = configs.find(p => p.team === team && p.isAI);
@@ -370,6 +377,291 @@ export function computeStrategyMetrics(
   }
 
   return result;
+}
+
+export interface TeamCompositionMetrics {
+  mixedTeamWins: number;
+  mixedTeamLosses: number;
+  mixedTeamGames: number;
+  mixedTeamWinRate: number;
+  homogeneousTeamWins: number;
+  homogeneousTeamLosses: number;
+  homogeneousTeamGames: number;
+  homogeneousTeamWinRate: number;
+  synergyScores: Array<{
+    provider1: string;
+    provider2: string;
+    wins: number;
+    losses: number;
+    games: number;
+    winRate: number;
+    interceptionVulnerability: number;
+  }>;
+  interceptionByComposition: {
+    mixedIntercepted: number;
+    mixedCluesGiven: number;
+    mixedInterceptionRate: number;
+    homogeneousIntercepted: number;
+    homogeneousCluesGiven: number;
+    homogeneousInterceptionRate: number;
+  };
+}
+
+export interface SelfPlayMetrics {
+  modelStats: Array<{
+    model: string;
+    games: number;
+    amberWins: number;
+    blueWins: number;
+    winRateVariance: number;
+    avgGameLength: number;
+    gameLengths: number[];
+    tokenAccumulation: Array<{
+      round: number;
+      avgAmberWhite: number;
+      avgAmberBlack: number;
+      avgBlueWhite: number;
+      avgBlueBlack: number;
+    }>;
+  }>;
+  totalSelfPlayGames: number;
+  avgSelfPlayLength: number;
+  avgNonSelfPlayLength: number;
+}
+
+export interface CrossModelClueAnalysis extends ClueAnalysis {
+  clueGiverProvider: string;
+  guesserProviders: string[];
+  isCrossModel: boolean;
+}
+
+export function computeTeamCompositionMetrics(
+  matches: Match[],
+  rounds: MatchRound[][]
+): TeamCompositionMetrics {
+  let mixedWins = 0, mixedLosses = 0, mixedGames = 0;
+  let homoWins = 0, homoLosses = 0, homoGames = 0;
+  let mixedIntercepted = 0, mixedCluesGiven = 0;
+  let homoIntercepted = 0, homoCluesGiven = 0;
+
+  const pairStats: Record<string, { wins: number; losses: number; games: number; intercepted: number; cluesGiven: number }> = {};
+
+  matches.forEach((match, idx) => {
+    const matchRounds = rounds[idx] || [];
+    const teams = ["amber", "blue"] as const;
+
+    teams.forEach(team => {
+      const providers = [...new Set(getTeamProviders(match, team))];
+      const isMixed = providers.length > 1;
+      const pairKey = providers.sort().join("+");
+      const teamRounds = matchRounds.filter(r => r.team === team);
+
+      if (!pairStats[pairKey]) {
+        pairStats[pairKey] = { wins: 0, losses: 0, games: 0, intercepted: 0, cluesGiven: 0 };
+      }
+      pairStats[pairKey].games++;
+
+      const teamIntercepted = teamRounds.filter(r => r.intercepted).length;
+      const teamCluesGiven = teamRounds.length;
+
+      pairStats[pairKey].intercepted += teamIntercepted;
+      pairStats[pairKey].cluesGiven += teamCluesGiven;
+
+      if (isMixed) {
+        mixedGames++;
+        mixedIntercepted += teamIntercepted;
+        mixedCluesGiven += teamCluesGiven;
+        if (match.winner === team) { mixedWins++; pairStats[pairKey].wins++; }
+        else if (match.winner) { mixedLosses++; pairStats[pairKey].losses++; }
+      } else {
+        homoGames++;
+        homoIntercepted += teamIntercepted;
+        homoCluesGiven += teamCluesGiven;
+        if (match.winner === team) { homoWins++; pairStats[pairKey].wins++; }
+        else if (match.winner) { homoLosses++; pairStats[pairKey].losses++; }
+      }
+    });
+  });
+
+  const synergyScores = Object.entries(pairStats).map(([key, stats]) => {
+    const parts = key.split("+");
+    return {
+      provider1: parts[0],
+      provider2: parts[1] || parts[0],
+      wins: stats.wins,
+      losses: stats.losses,
+      games: stats.games,
+      winRate: stats.games > 0 ? stats.wins / stats.games : 0,
+      interceptionVulnerability: stats.cluesGiven > 0 ? stats.intercepted / stats.cluesGiven : 0,
+    };
+  });
+
+  return {
+    mixedTeamWins: mixedWins,
+    mixedTeamLosses: mixedLosses,
+    mixedTeamGames: mixedGames,
+    mixedTeamWinRate: mixedGames > 0 ? mixedWins / mixedGames : 0,
+    homogeneousTeamWins: homoWins,
+    homogeneousTeamLosses: homoLosses,
+    homogeneousTeamGames: homoGames,
+    homogeneousTeamWinRate: homoGames > 0 ? homoWins / homoGames : 0,
+    synergyScores,
+    interceptionByComposition: {
+      mixedIntercepted,
+      mixedCluesGiven,
+      mixedInterceptionRate: mixedCluesGiven > 0 ? mixedIntercepted / mixedCluesGiven : 0,
+      homogeneousIntercepted: homoIntercepted,
+      homogeneousCluesGiven: homoCluesGiven,
+      homogeneousInterceptionRate: homoCluesGiven > 0 ? homoIntercepted / homoCluesGiven : 0,
+    },
+  };
+}
+
+export function computeSelfPlayMetrics(
+  matches: Match[],
+  rounds: MatchRound[][]
+): SelfPlayMetrics {
+  const selfPlayByModel: Record<string, {
+    games: number;
+    amberWins: number;
+    blueWins: number;
+    gameLengths: number[];
+    outcomes: number[];
+    roundData: Record<number, {
+      amberMiscomm: number[];
+      amberIntercept: number[];
+      blueMiscomm: number[];
+      blueIntercept: number[];
+    }>;
+  }> = {};
+
+  let totalSelfPlayLength = 0;
+  let totalSelfPlayGames = 0;
+  let totalNonSelfPlayLength = 0;
+  let totalNonSelfPlayGames = 0;
+
+  matches.forEach((match, idx) => {
+    const amberProviders = [...new Set(getTeamProviders(match, "amber"))];
+    const blueProviders = [...new Set(getTeamProviders(match, "blue"))];
+
+    const isSelfPlay = amberProviders.length === 1 && blueProviders.length === 1 &&
+      amberProviders[0] === blueProviders[0];
+
+    if (isSelfPlay) {
+      const model = amberProviders[0];
+      if (!selfPlayByModel[model]) {
+        selfPlayByModel[model] = { games: 0, amberWins: 0, blueWins: 0, gameLengths: [], outcomes: [], roundData: {} };
+      }
+      const stats = selfPlayByModel[model];
+      stats.games++;
+      stats.gameLengths.push(match.totalRounds);
+      totalSelfPlayLength += match.totalRounds;
+      totalSelfPlayGames++;
+
+      if (match.winner === "amber") { stats.amberWins++; stats.outcomes.push(1); }
+      else if (match.winner === "blue") { stats.blueWins++; stats.outcomes.push(0); }
+
+      const matchRounds = rounds[idx] || [];
+      let awCum = 0, abCum = 0, bwCum = 0, bbCum = 0;
+
+      const maxRound = Math.max(...matchRounds.map(r => r.roundNumber), 0);
+      for (let r = 1; r <= maxRound; r++) {
+        const amberRounds = matchRounds.filter(mr => mr.roundNumber === r && mr.team === "amber");
+        const blueRounds = matchRounds.filter(mr => mr.roundNumber === r && mr.team === "blue");
+
+        for (const ar of amberRounds) {
+          if (!ar.ownCorrect) awCum++;
+          if (ar.intercepted) abCum++;
+        }
+        for (const br of blueRounds) {
+          if (!br.ownCorrect) bwCum++;
+          if (br.intercepted) bbCum++;
+        }
+
+        if (!stats.roundData[r]) {
+          stats.roundData[r] = { amberMiscomm: [], amberIntercept: [], blueMiscomm: [], blueIntercept: [] };
+        }
+        stats.roundData[r].amberMiscomm.push(awCum);
+        stats.roundData[r].amberIntercept.push(abCum);
+        stats.roundData[r].blueMiscomm.push(bwCum);
+        stats.roundData[r].blueIntercept.push(bbCum);
+      }
+    } else {
+      totalNonSelfPlayLength += match.totalRounds;
+      totalNonSelfPlayGames++;
+    }
+  });
+
+  const modelStats = Object.entries(selfPlayByModel).map(([model, stats]) => {
+    const winRate = stats.games > 0 ? stats.amberWins / stats.games : 0.5;
+    const winRateVariance = stats.outcomes.length > 1
+      ? stats.outcomes.reduce((acc, w) => acc + Math.pow(w - winRate, 2), 0) / stats.outcomes.length
+      : 0;
+
+    const avgGameLength = stats.gameLengths.length > 0
+      ? stats.gameLengths.reduce((a, b) => a + b, 0) / stats.gameLengths.length
+      : 0;
+
+    const avg = (arr: number[]) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+    const tokenAccumulation = Object.entries(stats.roundData)
+      .sort(([a], [b]) => parseInt(a) - parseInt(b))
+      .map(([round, data]) => ({
+        round: parseInt(round),
+        avgAmberWhite: avg(data.amberMiscomm),
+        avgAmberBlack: avg(data.amberIntercept),
+        avgBlueWhite: avg(data.blueMiscomm),
+        avgBlueBlack: avg(data.blueIntercept),
+      }));
+
+    return {
+      model,
+      games: stats.games,
+      amberWins: stats.amberWins,
+      blueWins: stats.blueWins,
+      winRateVariance,
+      avgGameLength,
+      gameLengths: stats.gameLengths,
+      tokenAccumulation,
+    };
+  });
+
+  return {
+    modelStats,
+    totalSelfPlayGames,
+    avgSelfPlayLength: totalSelfPlayGames > 0 ? totalSelfPlayLength / totalSelfPlayGames : 0,
+    avgNonSelfPlayLength: totalNonSelfPlayGames > 0 ? totalNonSelfPlayLength / totalNonSelfPlayGames : 0,
+  };
+}
+
+export function analyzeCrossModelClues(
+  match: Match,
+  rounds: MatchRound[]
+): CrossModelClueAnalysis[] {
+  const baseAnalysis = analyzeClues(match, rounds);
+  const configs = getPlayerConfigs(match);
+
+  return baseAnalysis.map((analysis, i) => {
+    const round = rounds[i];
+    const clueGiver = configs.find(p => p.id === round.clueGiverId);
+    const clueGiverProvider = clueGiver?.aiConfig?.provider || clueGiver?.aiProvider || "unknown";
+
+    const teammates = configs.filter(p =>
+      p.team === round.team && p.id !== round.clueGiverId && p.isAI
+    );
+    const guesserProviders = teammates.map(p =>
+      p.aiConfig?.provider || p.aiProvider || "unknown"
+    );
+
+    const isCrossModel = guesserProviders.some(gp => gp !== clueGiverProvider);
+
+    return {
+      ...analysis,
+      clueGiverProvider,
+      guesserProviders,
+      isCrossModel,
+    };
+  });
 }
 
 export function computeExperimentResults(

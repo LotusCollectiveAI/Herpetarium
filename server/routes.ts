@@ -7,7 +7,7 @@ import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning } from "./tournament";
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { z } from "zod";
-import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues } from "./metrics";
+import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues } from "./metrics";
 
 const headlessMatchConfigSchema = z.object({
   players: z.array(z.object({
@@ -218,8 +218,9 @@ export async function registerRoutes(
 
       const rounds = await storage.getMatchRounds(id);
       const analysis = analyzeClues(match, rounds);
+      const crossModelAnalysis = analyzeCrossModelClues(match, rounds);
 
-      res.json({ match, analysis });
+      res.json({ match, analysis, crossModelAnalysis });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to analyze match" });
     }
@@ -248,10 +249,15 @@ export async function registerRoutes(
       const totalRounds = allRounds.length;
       const avgRoundsPerGame = totalMatches > 0 ? totalRounds / totalMatches / 2 : 0;
 
+      const teamCompositionMetrics = computeTeamCompositionMetrics(allMatches, roundsByMatch);
+      const selfPlayMetrics = computeSelfPlayMetrics(allMatches, roundsByMatch);
+
       res.json({
         modelMetrics,
         matchupMetrics,
         strategyMetrics,
+        teamCompositionMetrics,
+        selfPlayMetrics,
         summary: {
           totalMatches,
           totalRounds,

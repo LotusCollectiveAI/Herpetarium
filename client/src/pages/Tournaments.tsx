@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2 } from "lucide-react";
+import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3 } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -233,6 +233,121 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
   );
 }
 
+const PROVIDERS = ["chatgpt", "claude", "gemini"] as const;
+
+function generateCrossModelRoundRobin(): MatchupConfig[] {
+  const matchups: MatchupConfig[] = [];
+  const teamCombos: [string, string][] = [];
+  for (let i = 0; i < PROVIDERS.length; i++) {
+    for (let j = i + 1; j < PROVIDERS.length; j++) {
+      teamCombos.push([PROVIDERS[i], PROVIDERS[j]]);
+    }
+  }
+  for (let i = 0; i < teamCombos.length; i++) {
+    for (let j = i + 1; j < teamCombos.length; j++) {
+      matchups.push({
+        amberProvider1: teamCombos[i][0],
+        amberProvider2: teamCombos[i][1],
+        blueProvider1: teamCombos[j][0],
+        blueProvider2: teamCombos[j][1],
+      });
+    }
+  }
+  return matchups;
+}
+
+function generateSelfPlaySeries(): MatchupConfig[] {
+  return PROVIDERS.map(p => ({
+    amberProvider1: p,
+    amberProvider2: p,
+    blueProvider1: p,
+    blueProvider2: p,
+  }));
+}
+
+function generateProviderShowdown(): MatchupConfig[] {
+  const matchups: MatchupConfig[] = [];
+  for (let i = 0; i < PROVIDERS.length; i++) {
+    for (let j = i + 1; j < PROVIDERS.length; j++) {
+      matchups.push({
+        amberProvider1: PROVIDERS[i],
+        amberProvider2: PROVIDERS[i],
+        blueProvider1: PROVIDERS[j],
+        blueProvider2: PROVIDERS[j],
+      });
+    }
+  }
+  return matchups;
+}
+
+function generateFullMatrix(): MatchupConfig[] {
+  const matchups: MatchupConfig[] = [];
+  const teamCombos: [string, string][] = [];
+  for (const p of PROVIDERS) {
+    teamCombos.push([p, p]);
+  }
+  for (let i = 0; i < PROVIDERS.length; i++) {
+    for (let j = i + 1; j < PROVIDERS.length; j++) {
+      teamCombos.push([PROVIDERS[i], PROVIDERS[j]]);
+    }
+  }
+  for (let i = 0; i < teamCombos.length; i++) {
+    for (let j = i; j < teamCombos.length; j++) {
+      matchups.push({
+        amberProvider1: teamCombos[i][0],
+        amberProvider2: teamCombos[i][1],
+        blueProvider1: teamCombos[j][0],
+        blueProvider2: teamCombos[j][1],
+      });
+    }
+  }
+  return matchups;
+}
+
+interface PresetConfig {
+  name: string;
+  icon: any;
+  description: string;
+  generate: () => MatchupConfig[];
+  defaultName: string;
+  defaultGames: string;
+}
+
+const TOURNAMENT_PRESETS: PresetConfig[] = [
+  {
+    name: "Cross-Model Round Robin",
+    icon: Users,
+    description: "Every 2-model team vs every other",
+    generate: generateCrossModelRoundRobin,
+    defaultName: "Cross-Model Round Robin",
+    defaultGames: "3",
+  },
+  {
+    name: "Self-Play Series",
+    icon: Repeat,
+    description: "Same model on both teams",
+    generate: generateSelfPlaySeries,
+    defaultName: "Self-Play Series",
+    defaultGames: "5",
+  },
+  {
+    name: "Provider Showdown",
+    icon: Zap,
+    description: "Each provider vs each other (homogeneous teams)",
+    generate: generateProviderShowdown,
+    defaultName: "Provider Showdown",
+    defaultGames: "5",
+  },
+  {
+    name: "Full Matrix",
+    icon: Grid3X3,
+    description: "All combinations including mixed & self-play",
+    generate: generateFullMatrix,
+    defaultName: "Full Matrix",
+    defaultGames: "2",
+  },
+];
+
 function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [gamesPerMatchup, setGamesPerMatchup] = useState("3");
@@ -240,6 +355,47 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
     { amberProvider1: "chatgpt", amberProvider2: "chatgpt", blueProvider1: "claude", blueProvider2: "claude" },
   ]);
   const { toast } = useToast();
+
+  const applyPreset = (preset: PresetConfig) => {
+    setMatchups(preset.generate());
+    setName(preset.defaultName);
+    setGamesPerMatchup(preset.defaultGames);
+    toast({ title: `Preset applied: ${preset.name}`, description: `${preset.generate().length} matchups configured.` });
+  };
+
+  const launchPreset = (preset: PresetConfig) => {
+    const presetMatchups = preset.generate();
+    const matchConfigs = presetMatchups.map(m => ({
+      players: [
+        { name: `${getProviderLabel(m.amberProvider1)} A1`, aiProvider: m.amberProvider1, team: "amber" as const },
+        { name: `${getProviderLabel(m.amberProvider2)} A2`, aiProvider: m.amberProvider2, team: "amber" as const },
+        { name: `${getProviderLabel(m.blueProvider1)} B1`, aiProvider: m.blueProvider1, team: "blue" as const },
+        { name: `${getProviderLabel(m.blueProvider2)} B2`, aiProvider: m.blueProvider2, team: "blue" as const },
+      ],
+      fastMode: true,
+    }));
+
+    launchMutation.mutate({
+      name: preset.defaultName,
+      matchConfigs,
+      gamesPerMatchup: parseInt(preset.defaultGames) || 3,
+    });
+  };
+
+  const launchMutation = useMutation({
+    mutationFn: async (config: { name: string; matchConfigs: any[]; gamesPerMatchup: number }) => {
+      const res = await apiRequest("POST", "/api/tournaments", config);
+      return res.json();
+    },
+    onSuccess: () => {
+      toast({ title: "Tournament launched", description: "Your preset tournament is now running." });
+      queryClient.invalidateQueries({ queryKey: ["/api/tournaments"] });
+      onCreated();
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -296,6 +452,43 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        <div>
+          <label className="text-sm font-medium mb-2 block">Quick Presets</label>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {TOURNAMENT_PRESETS.map((preset) => {
+              const Icon = preset.icon;
+              return (
+                <div key={preset.name} className="border rounded-lg p-3 flex flex-col items-center gap-2 text-center">
+                  <Icon className="h-5 w-5 text-primary" />
+                  <span className="text-xs font-medium">{preset.name}</span>
+                  <span className="text-[10px] text-muted-foreground leading-tight">{preset.description}</span>
+                  <div className="flex gap-1 w-full mt-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="flex-1 text-xs h-7"
+                      onClick={() => applyPreset(preset)}
+                      data-testid={`preset-${preset.name.toLowerCase().replace(/\s+/g, '-')}`}
+                    >
+                      Configure
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="flex-1 text-xs h-7"
+                      onClick={() => launchPreset(preset)}
+                      disabled={launchMutation.isPending}
+                      data-testid={`launch-${preset.name.toLowerCase().replace(/\s+/g, '-')}`}
+                    >
+                      {launchMutation.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3 mr-1" />}
+                      Launch
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="text-sm font-medium mb-1 block">Tournament Name</label>

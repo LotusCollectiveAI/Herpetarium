@@ -47,10 +47,68 @@ interface MatchupMetrics {
   modelBWinRate: number;
 }
 
+interface TeamCompositionMetrics {
+  mixedTeamWins: number;
+  mixedTeamLosses: number;
+  mixedTeamGames: number;
+  mixedTeamWinRate: number;
+  homogeneousTeamWins: number;
+  homogeneousTeamLosses: number;
+  homogeneousTeamGames: number;
+  homogeneousTeamWinRate: number;
+  synergyScores: Array<{
+    provider1: string;
+    provider2: string;
+    wins: number;
+    losses: number;
+    games: number;
+    winRate: number;
+    interceptionVulnerability: number;
+  }>;
+  interceptionByComposition: {
+    mixedIntercepted: number;
+    mixedCluesGiven: number;
+    mixedInterceptionRate: number;
+    homogeneousIntercepted: number;
+    homogeneousCluesGiven: number;
+    homogeneousInterceptionRate: number;
+  };
+}
+
+interface SelfPlayMetrics {
+  modelStats: Array<{
+    model: string;
+    games: number;
+    amberWins: number;
+    blueWins: number;
+    winRateVariance: number;
+    avgGameLength: number;
+    gameLengths: number[];
+    tokenAccumulation: Array<{
+      round: number;
+      avgAmberWhite: number;
+      avgAmberBlack: number;
+      avgBlueWhite: number;
+      avgBlueBlack: number;
+    }>;
+  }>;
+  totalSelfPlayGames: number;
+  avgSelfPlayLength: number;
+  avgNonSelfPlayLength: number;
+}
+
+interface CrossModelClueAnalysis extends ClueAnalysisItem {
+  clueGiverProvider: string;
+  guesserProviders: string[];
+  isCrossModel: boolean;
+}
+
 interface EvalData {
   modelMetrics: ModelMetrics[];
   matchupMetrics: MatchupMetrics[];
   strategyMetrics: Record<string, ModelMetrics>;
+  teamCompositionMetrics: TeamCompositionMetrics;
+  selfPlayMetrics: SelfPlayMetrics;
   summary: {
     totalMatches: number;
     totalRounds: number;
@@ -97,6 +155,7 @@ interface MatchAnalysisResponse {
     blueKeywords: string[];
   };
   analysis: ClueAnalysisItem[];
+  crossModelAnalysis: CrossModelClueAnalysis[];
 }
 
 const CHART_COLORS = ["#f59e0b", "#3b82f6", "#10b981", "#8b5cf6", "#ef4444", "#ec4899"];
@@ -510,6 +569,219 @@ function ExperimentRow({ experiment }: { experiment: Experiment }) {
   );
 }
 
+function TeamCompositionSection({ data }: { data: EvalData }) {
+  const tc = data.teamCompositionMetrics;
+  const sp = data.selfPlayMetrics;
+
+  const compositionChartData = [
+    {
+      name: "Mixed Teams",
+      "Win Rate": +(tc.mixedTeamWinRate * 100).toFixed(1),
+      "Interception Rate": +(tc.interceptionByComposition.mixedInterceptionRate * 100).toFixed(1),
+      Games: tc.mixedTeamGames,
+    },
+    {
+      name: "Homogeneous Teams",
+      "Win Rate": +(tc.homogeneousTeamWinRate * 100).toFixed(1),
+      "Interception Rate": +(tc.interceptionByComposition.homogeneousInterceptionRate * 100).toFixed(1),
+      Games: tc.homogeneousTeamGames,
+    },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <MetricCard
+          title="Mixed Team Win Rate"
+          value={pct(tc.mixedTeamWinRate)}
+          icon={Shuffle}
+          description={`${tc.mixedTeamWins}W/${tc.mixedTeamLosses}L (${tc.mixedTeamGames} games)`}
+        />
+        <MetricCard
+          title="Homogeneous Win Rate"
+          value={pct(tc.homogeneousTeamWinRate)}
+          icon={Shield}
+          description={`${tc.homogeneousTeamWins}W/${tc.homogeneousTeamLosses}L (${tc.homogeneousTeamGames} games)`}
+        />
+        <MetricCard
+          title="Self-Play Games"
+          value={sp.totalSelfPlayGames}
+          icon={Target}
+          description={`Avg length: ${sp.avgSelfPlayLength.toFixed(1)} rounds`}
+        />
+        <MetricCard
+          title="Avg Game Length Diff"
+          value={`${(sp.avgSelfPlayLength - sp.avgNonSelfPlayLength).toFixed(1)}R`}
+          icon={TrendingUp}
+          description="Self-play vs non-self-play"
+        />
+      </div>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Shuffle className="h-5 w-5" />
+            Mixed vs Homogeneous Teams
+          </CardTitle>
+          <CardDescription>
+            Do mixed-provider teams outperform single-provider teams?
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {tc.mixedTeamGames + tc.homogeneousTeamGames > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={compositionChartData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" fontSize={12} />
+                <YAxis unit="%" fontSize={12} />
+                <Tooltip />
+                <Legend />
+                <Bar dataKey="Win Rate" fill="#f59e0b" />
+                <Bar dataKey="Interception Rate" fill="#ef4444" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-center text-muted-foreground py-8">No team composition data yet. Run some tournaments with mixed teams.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Target className="h-5 w-5" />
+            Synergy Scores
+          </CardTitle>
+          <CardDescription>
+            Which provider pairings work best together?
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {tc.synergyScores.length > 0 ? (
+            <div className="space-y-3">
+              {tc.synergyScores
+                .sort((a, b) => b.winRate - a.winRate)
+                .map((s, i) => {
+                  const label = s.provider1 === s.provider2
+                    ? `${s.provider1} (solo)`
+                    : `${s.provider1} + ${s.provider2}`;
+                  return (
+                    <div key={i} className="border rounded-lg p-3" data-testid={`synergy-${s.provider1}-${s.provider2}`}>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="font-medium text-sm">{label}</span>
+                        <div className="flex items-center gap-2">
+                          <Badge variant="outline">{s.games} games</Badge>
+                          <Badge variant={s.winRate >= 0.5 ? "default" : "secondary"}>
+                            {pct(s.winRate)} win rate
+                          </Badge>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <div
+                          className="h-2 rounded bg-green-500"
+                          style={{ width: `${s.winRate * 100}%` }}
+                        />
+                        <div
+                          className="h-2 rounded bg-red-300 dark:bg-red-800"
+                          style={{ width: `${(1 - s.winRate) * 100}%` }}
+                        />
+                      </div>
+                      <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                        <span>{s.wins}W / {s.losses}L</span>
+                        <span>Interception vulnerability: {pct(s.interceptionVulnerability)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          ) : (
+            <p className="text-center text-muted-foreground py-8">No synergy data yet.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <BarChart3 className="h-5 w-5" />
+            Self-Play Variance Analysis
+          </CardTitle>
+          <CardDescription>
+            How much randomness exists when the same model plays itself?
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {sp.modelStats.length > 0 ? (
+            <div className="space-y-4">
+              {sp.modelStats.map((ms) => (
+                <div key={ms.model} className="border rounded-lg p-4" data-testid={`self-play-${ms.model}`}>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="font-semibold">{ms.model}</span>
+                    <Badge variant="outline">{ms.games} self-play games</Badge>
+                  </div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                    <div>
+                      <div className="text-muted-foreground text-xs">Amber Wins</div>
+                      <div className="font-bold text-amber-600 dark:text-amber-400">{ms.amberWins}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-xs">Blue Wins</div>
+                      <div className="font-bold text-blue-600 dark:text-blue-400">{ms.blueWins}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-xs">Win Rate Variance</div>
+                      <div className="font-bold">{ms.winRateVariance.toFixed(3)}</div>
+                    </div>
+                    <div>
+                      <div className="text-muted-foreground text-xs">Avg Game Length</div>
+                      <div className="font-bold">{ms.avgGameLength.toFixed(1)} rounds</div>
+                    </div>
+                  </div>
+                  {ms.gameLengths.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs text-muted-foreground mb-1">Game Length Distribution</div>
+                      <div className="flex items-end gap-1 h-12">
+                        {ms.gameLengths.map((len, i) => (
+                          <div
+                            key={i}
+                            className="bg-primary/60 rounded-t flex-1 min-w-[4px]"
+                            style={{ height: `${Math.min((len / Math.max(...ms.gameLengths)) * 100, 100)}%` }}
+                            title={`Game ${i + 1}: ${len} rounds`}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {ms.tokenAccumulation.length > 0 && (
+                    <div className="mt-3">
+                      <div className="text-xs text-muted-foreground mb-2">Round-by-Round Token Accumulation (cumulative avg)</div>
+                      <ResponsiveContainer width="100%" height={180}>
+                        <BarChart data={ms.tokenAccumulation}>
+                          <CartesianGrid strokeDasharray="3 3" />
+                          <XAxis dataKey="round" fontSize={10} label={{ value: "Round", position: "insideBottom", offset: -2, fontSize: 10 }} />
+                          <YAxis fontSize={10} />
+                          <Tooltip />
+                          <Legend wrapperStyle={{ fontSize: 10 }} />
+                          <Bar dataKey="avgAmberWhite" name="Amber Miscomm" fill="#f59e0b" />
+                          <Bar dataKey="avgAmberBlack" name="Amber Intercept" fill="#d97706" />
+                          <Bar dataKey="avgBlueWhite" name="Blue Miscomm" fill="#3b82f6" />
+                          <Bar dataKey="avgBlueBlack" name="Blue Intercept" fill="#1d4ed8" />
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-center text-muted-foreground py-8">No self-play data yet. Run a Self-Play Series tournament.</p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
 function ClueAnalysisSection() {
   const [matchId, setMatchId] = useState("");
   const [submittedId, setSubmittedId] = useState<number | null>(null);
@@ -571,71 +843,144 @@ function ClueAnalysisSection() {
       )}
 
       {analysis && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">
-              Match #{analysis.match.id} — {analysis.match.gameId}
-              {analysis.match.winner && (
-                <Badge className={`ml-2 ${analysis.match.winner === "amber" ? "bg-amber-500" : "bg-blue-500"} text-white`}>
-                  {analysis.match.winner} wins
-                </Badge>
-              )}
-            </CardTitle>
-            <CardDescription>
-              {analysis.match.totalRounds} rounds | Amber keywords: {(analysis.match.amberKeywords as string[]).join(", ")} | Blue keywords: {(analysis.match.blueKeywords as string[]).join(", ")}
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {analysis.analysis.map((item, i) => (
-                <div
-                  key={i}
-                  className={`border rounded-lg p-4 ${
-                    item.status === "too_obvious" ? "border-red-300 bg-red-50 dark:bg-red-950/20" :
-                    item.status === "too_obscure" ? "border-yellow-300 bg-yellow-50 dark:bg-yellow-950/20" :
-                    "border-green-300 bg-green-50 dark:bg-green-950/20"
-                  }`}
-                  data-testid={`clue-analysis-${item.roundNumber}-${item.team}`}
-                >
-                  <div className="flex items-center gap-2 mb-3">
-                    <Badge variant="outline">Round {item.roundNumber}</Badge>
-                    <Badge className={item.team === "amber" ? "bg-amber-500 text-white" : "bg-blue-500 text-white"}>
-                      {item.team}
-                    </Badge>
-                    <span className="text-sm text-muted-foreground">by {item.clueGiver}</span>
-                    <Badge
-                      variant={item.status === "good" ? "default" : "destructive"}
-                      className="ml-auto"
+        <>
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-lg">
+                Match #{analysis.match.id} — {analysis.match.gameId}
+                {analysis.match.winner && (
+                  <Badge className={`ml-2 ${analysis.match.winner === "amber" ? "bg-amber-500" : "bg-blue-500"} text-white`}>
+                    {analysis.match.winner} wins
+                  </Badge>
+                )}
+              </CardTitle>
+              <CardDescription>
+                {analysis.match.totalRounds} rounds | Amber keywords: {(analysis.match.amberKeywords as string[]).join(", ")} | Blue keywords: {(analysis.match.blueKeywords as string[]).join(", ")}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-4">
+                {(analysis.crossModelAnalysis || analysis.analysis).map((item, i) => {
+                  const crossItem = analysis.crossModelAnalysis?.[i] as CrossModelClueAnalysis | undefined;
+                  return (
+                    <div
+                      key={i}
+                      className={`border rounded-lg p-4 ${
+                        item.status === "too_obvious" ? "border-red-300 bg-red-50 dark:bg-red-950/20" :
+                        item.status === "too_obscure" ? "border-yellow-300 bg-yellow-50 dark:bg-yellow-950/20" :
+                        "border-green-300 bg-green-50 dark:bg-green-950/20"
+                      }`}
+                      data-testid={`clue-analysis-${item.roundNumber}-${item.team}`}
                     >
-                      {item.status === "good" && <><Check className="h-3 w-3 mr-1" />Good</>}
-                      {item.status === "too_obvious" && <><AlertTriangle className="h-3 w-3 mr-1" />Too Obvious</>}
-                      {item.status === "too_obscure" && <><X className="h-3 w-3 mr-1" />Too Obscure</>}
-                    </Badge>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                    {item.clueKeywordMap.map((ckm, j) => (
-                      <div key={j} className="border rounded p-2 bg-background">
-                        <div className="text-xs text-muted-foreground mb-1">Position {ckm.position}</div>
-                        <div className="font-medium text-sm">Keyword: <span className="text-primary">{ckm.keyword}</span></div>
-                        <div className="text-sm">Clue: <span className="font-mono">{ckm.clue}</span></div>
+                      <div className="flex items-center gap-2 mb-3 flex-wrap">
+                        <Badge variant="outline">Round {item.roundNumber}</Badge>
+                        <Badge className={item.team === "amber" ? "bg-amber-500 text-white" : "bg-blue-500 text-white"}>
+                          {item.team}
+                        </Badge>
+                        <span className="text-sm text-muted-foreground">by {item.clueGiver}</span>
+                        {crossItem && (
+                          <Badge
+                            variant="outline"
+                            className={crossItem.isCrossModel
+                              ? "border-purple-400 text-purple-600 dark:text-purple-400"
+                              : "border-gray-300 text-gray-500"
+                            }
+                            data-testid={`cross-model-badge-${item.roundNumber}-${item.team}`}
+                          >
+                            {crossItem.isCrossModel ? "Cross-Model" : "Same-Model"}
+                          </Badge>
+                        )}
+                        <Badge
+                          variant={item.status === "good" ? "default" : "destructive"}
+                          className="ml-auto"
+                        >
+                          {item.status === "good" && <><Check className="h-3 w-3 mr-1" />Good</>}
+                          {item.status === "too_obvious" && <><AlertTriangle className="h-3 w-3 mr-1" />Too Obvious</>}
+                          {item.status === "too_obscure" && <><X className="h-3 w-3 mr-1" />Too Obscure</>}
+                        </Badge>
                       </div>
-                    ))}
-                  </div>
 
-                  <div className="flex gap-3 mt-2 text-xs text-muted-foreground">
-                    <span>Code: [{item.code.join(", ")}]</span>
-                    <span>{item.ownCorrect ? "✓ Own team decoded" : "✗ Own team failed"}</span>
-                    {item.intercepted && <span className="text-red-500">⚠ Intercepted by opponent</span>}
-                  </div>
-                </div>
-              ))}
-              {analysis.analysis.length === 0 && (
-                <p className="text-center text-muted-foreground py-4">No round data found for this match.</p>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                      {crossItem && crossItem.isCrossModel && (
+                        <div className="mb-3 p-2 rounded bg-purple-50 dark:bg-purple-950/20 border border-purple-200 dark:border-purple-800 text-xs">
+                          <span className="font-medium text-purple-700 dark:text-purple-300">
+                            Clue giver: {crossItem.clueGiverProvider} → Guesser(s): {crossItem.guesserProviders.join(", ")}
+                          </span>
+                          {!item.ownCorrect && (
+                            <span className="ml-2 text-red-600 dark:text-red-400">Cross-architecture interpretation failed</span>
+                          )}
+                          {item.ownCorrect && !item.intercepted && (
+                            <span className="ml-2 text-green-600 dark:text-green-400">Cross-architecture communication succeeded</span>
+                          )}
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {item.clueKeywordMap.map((ckm, j) => (
+                          <div key={j} className="border rounded p-2 bg-background">
+                            <div className="text-xs text-muted-foreground mb-1">Position {ckm.position}</div>
+                            <div className="font-medium text-sm">Keyword: <span className="text-primary">{ckm.keyword}</span></div>
+                            <div className="text-sm">Clue: <span className="font-mono">{ckm.clue}</span></div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex gap-3 mt-2 text-xs text-muted-foreground">
+                        <span>Code: [{item.code.join(", ")}]</span>
+                        <span>{item.ownCorrect ? "✓ Own team decoded" : "✗ Own team failed"}</span>
+                        {item.intercepted && <span className="text-red-500">⚠ Intercepted by opponent</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {analysis.analysis.length === 0 && (
+                  <p className="text-center text-muted-foreground py-4">No round data found for this match.</p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {analysis.crossModelAnalysis && analysis.crossModelAnalysis.some(c => c.isCrossModel) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-lg flex items-center gap-2">
+                  <Shuffle className="h-5 w-5" />
+                  Cross-Model Communication Summary
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {(() => {
+                  const cross = analysis.crossModelAnalysis.filter(c => c.isCrossModel);
+                  const same = analysis.crossModelAnalysis.filter(c => !c.isCrossModel);
+                  const crossSuccess = cross.filter(c => c.ownCorrect).length;
+                  const sameSuccess = same.filter(c => c.ownCorrect).length;
+                  const crossIntercepted = cross.filter(c => c.intercepted).length;
+                  const sameIntercepted = same.filter(c => c.intercepted).length;
+
+                  return (
+                    <div className="grid grid-cols-2 gap-4" data-testid="cross-model-summary">
+                      <div className="border rounded-lg p-4">
+                        <h4 className="font-semibold text-sm mb-2 text-purple-600 dark:text-purple-400">Cross-Model Clues</h4>
+                        <div className="space-y-1 text-sm">
+                          <div className="flex justify-between"><span className="text-muted-foreground">Total</span><span>{cross.length}</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Decoded</span><span className="text-green-600">{crossSuccess} ({cross.length > 0 ? pct(crossSuccess / cross.length) : "0%"})</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Intercepted</span><span className="text-red-600">{crossIntercepted} ({cross.length > 0 ? pct(crossIntercepted / cross.length) : "0%"})</span></div>
+                        </div>
+                      </div>
+                      <div className="border rounded-lg p-4">
+                        <h4 className="font-semibold text-sm mb-2">Same-Model Clues</h4>
+                        <div className="space-y-1 text-sm">
+                          <div className="flex justify-between"><span className="text-muted-foreground">Total</span><span>{same.length}</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Decoded</span><span className="text-green-600">{sameSuccess} ({same.length > 0 ? pct(sameSuccess / same.length) : "0%"})</span></div>
+                          <div className="flex justify-between"><span className="text-muted-foreground">Intercepted</span><span className="text-red-600">{sameIntercepted} ({same.length > 0 ? pct(sameIntercepted / same.length) : "0%"})</span></div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </CardContent>
+            </Card>
+          )}
+        </>
       )}
     </div>
   );
@@ -751,10 +1096,14 @@ export default function EvalDashboard() {
         </div>
 
         <Tabs defaultValue="overview" className="space-y-6">
-          <TabsList className="grid w-full grid-cols-4">
+          <TabsList className="grid w-full grid-cols-5">
             <TabsTrigger value="overview" data-testid="tab-overview">
               <BarChart3 className="h-4 w-4 mr-1" />
               Overview
+            </TabsTrigger>
+            <TabsTrigger value="teams" data-testid="tab-teams">
+              <Shuffle className="h-4 w-4 mr-1" />
+              Team Composition
             </TabsTrigger>
             <TabsTrigger value="experiments" data-testid="tab-experiments">
               <FlaskConical className="h-4 w-4 mr-1" />
@@ -854,6 +1203,24 @@ export default function EvalDashboard() {
                   <BarChart3 className="h-12 w-12 mx-auto mb-4 opacity-40" />
                   <p className="text-lg font-medium">No data yet</p>
                   <p className="text-sm mt-1">Play some games to start seeing metrics</p>
+                </CardContent>
+              </Card>
+            )}
+          </TabsContent>
+
+          <TabsContent value="teams">
+            {isLoading ? (
+              <div className="space-y-4">
+                {[1, 2, 3].map(i => <Skeleton key={i} className="h-24" />)}
+              </div>
+            ) : data ? (
+              <TeamCompositionSection data={data} />
+            ) : (
+              <Card>
+                <CardContent className="py-12 text-center text-muted-foreground">
+                  <Shuffle className="h-12 w-12 mx-auto mb-4 opacity-40" />
+                  <p className="text-lg font-medium">No data yet</p>
+                  <p className="text-sm mt-1">Run some tournaments with mixed teams to see composition analytics</p>
                 </CardContent>
               </Card>
             )}
