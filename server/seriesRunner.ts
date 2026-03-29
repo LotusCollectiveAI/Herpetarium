@@ -110,7 +110,12 @@ export async function runSeries(seriesId: number) {
     log(`[series] Starting series ${seriesId} with ${config.totalGames} games${budgetCap ? ` (budget cap: $${budgetCap})` : ""}`, "series");
 
     const playerHashes = dedupePlayerHashes(config.matchConfig.players);
-    const completedMatchIds: number[] = [];
+
+    const existingNotes = await storage.getScratchNotes(seriesId);
+    const completedMatchIds: number[] = existingNotes
+      .filter(n => n.matchId != null)
+      .map(n => n.matchId as number)
+      .filter((id, idx, arr) => arr.indexOf(id) === idx);
 
     let completed = s.completedGames || 0;
     let failedCount = 0;

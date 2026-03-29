@@ -16,6 +16,7 @@ interface PlayerConfig {
   name: string;
   isAI: boolean;
   aiProvider: string | null;
+  aiConfig?: { model?: string };
   team: string;
 }
 
@@ -142,6 +143,12 @@ function inferTeamFromAiLog(aiLog: AiCallLog, players: PlayerConfig[]): string |
   const blueMatches = aiPlayersOnTeam("blue");
   if (amberMatches.length > 0 && blueMatches.length === 0) return "amber";
   if (blueMatches.length > 0 && amberMatches.length === 0) return "blue";
+  if (amberMatches.length > 0 && blueMatches.length > 0 && aiLog.model) {
+    const amberModelMatch = amberMatches.filter(p => p.aiConfig?.model === aiLog.model);
+    const blueModelMatch = blueMatches.filter(p => p.aiConfig?.model === aiLog.model);
+    if (amberModelMatch.length > 0 && blueModelMatch.length === 0) return "amber";
+    if (blueModelMatch.length > 0 && amberModelMatch.length === 0) return "blue";
+  }
   return null;
 }
 
