@@ -477,10 +477,11 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
   const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.clueTemplate(ablatedParams);
-  const fullPrompt = `${activeStrategy.systemPrompt}\n\n${prompt}`;
+  const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
+  const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, activeStrategy.systemPrompt, prompt);
+    const raw = await callAI(config, systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCluesResponse(raw.text);
     return {
@@ -502,10 +503,11 @@ export async function generateGuess(configOrProvider: AIPlayerConfig | string, p
   const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.guessTemplate(ablatedParams);
-  const fullPrompt = `${activeStrategy.systemPrompt}\n\n${prompt}`;
+  const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
+  const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, activeStrategy.systemPrompt, prompt);
+    const raw = await callAI(config, systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {
@@ -606,10 +608,11 @@ export async function generateInterception(configOrProvider: AIPlayerConfig | st
   const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.interceptionTemplate(ablatedParams);
-  const fullPrompt = `${activeStrategy.systemPrompt}\n\n${prompt}`;
+  const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
+  const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, activeStrategy.systemPrompt, prompt);
+    const raw = await callAI(config, systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {

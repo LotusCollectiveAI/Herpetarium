@@ -51,6 +51,17 @@ Preferred communication style: Simple, everyday language.
 - **Actual Cost Tracking**: `actualCostUsd` is tracked and updated during tournament/series execution, displayed alongside budget caps in the UI.
 - **Reasoning Trace Indicators**: Match list shows trace badges for matches with AI reasoning traces without needing to expand. Expanded AI call logs show per-call outcome linkage (correct/wrong/intercepted).
 
+### Evolutionary Engine
+- **Modular Genomes**: Strategy genomes decomposed into 4 modules: `cluePhilosophy`, `opponentModeling`, `riskTolerance`, `memoryPolicy` — each a structured text block injected as system prompt overrides.
+- **Population Management**: Configurable population size (4-20), stored in `strategy_genomes` table with Elo ratings, fitness scores, and lineage tracking.
+- **Fitness Evaluation**: Composite score = 40% win rate + 30% normalized Elo + 15% interception rate - 15% miscommunication rate. Round-robin matches within each generation.
+- **Selection & Reproduction**: Tournament selection (size 3), module-level crossover, rule-based mutation from pre-defined variant pools. Elitism preserves top performers.
+- **Phase Detection**: Automatic detection of evolutionary phases (exploration, exploitation, convergence, collapse) based on fitness variance, diversity metrics, and generation-over-generation trends.
+- **System Prompt Override**: `runHeadlessMatch` accepts team-specific system prompts, threaded through `processClues`/`processGuesses`/`processInterceptions` via `systemPromptOverride` on template params.
+- **DB Tables**: `strategy_genomes`, `evolution_runs`, `generations` — all with Drizzle schema, pushed via `db:push`.
+- **Frontend**: `/evolution` route with run creation form, fitness charts (recharts), genome cards with module breakdown, lineage browser, phase transition markers.
+- **API**: `POST /api/evolution`, `GET /api/evolution`, `GET /api/evolution/:id`, `GET /api/evolution/:id/genomes`, `GET /api/evolution/:id/genome/:genomeId`, `POST /api/evolution/:id/stop`.
+
 ### UX Enhancements
 - **Visual Feedback**: Phase announcements, animated token awards, AI thinking indicators with provider-specific styling.
 - **Mobile Support**: Tabbed interface for interception on smaller screens.

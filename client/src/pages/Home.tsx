@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Users, Bot, Lock, Zap, History, Trophy, BarChart3, Brain } from "lucide-react";
+import { Play, Users, Bot, Lock, Zap, History, Trophy, BarChart3, Brain, Dna } from "lucide-react";
 import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -225,6 +225,10 @@ export default function Home() {
         <Button variant="ghost" size="sm" onClick={() => setLocation("/series")} data-testid="link-series">
           <Brain className="h-4 w-4 mr-1" />
           Series
+        </Button>
+        <Button variant="ghost" size="sm" onClick={() => setLocation("/evolution")} data-testid="link-evolution">
+          <Dna className="h-4 w-4 mr-1" />
+          Evolution
         </Button>
       </footer>
     </div>

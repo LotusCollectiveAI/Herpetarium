@@ -332,6 +332,7 @@ export interface HeadlessMatchConfig {
     name: string;
     aiProvider: AIProvider;
     team: "amber" | "blue";
+    aiConfig?: AIPlayerConfig;
   }>;
   fastMode?: boolean;
   seed?: string;
@@ -397,6 +398,101 @@ export interface SeriesConfig {
   noteTokenBudget?: number;
   budgetCapUsd?: string;
   estimatedCostUsd?: string;
+}
+
+// Evolution tables
+
+export interface GenomeModules {
+  cluePhilosophy: string;
+  opponentModeling: string;
+  riskTolerance: string;
+  memoryPolicy: string;
+}
+
+export const strategyGenomes = pgTable("strategy_genomes", {
+  id: serial("id").primaryKey(),
+  evolutionRunId: integer("evolution_run_id").notNull(),
+  generationNumber: integer("generation_number").notNull(),
+  parentIds: jsonb("parent_ids").$type<number[]>().default([]),
+  modules: jsonb("modules").$type<GenomeModules>().notNull(),
+  fitnessScore: varchar("fitness_score", { length: 20 }),
+  eloRating: integer("elo_rating").notNull().default(1200),
+  matchesPlayed: integer("matches_played").notNull().default(0),
+  wins: integer("wins").notNull().default(0),
+  losses: integer("losses").notNull().default(0),
+  interceptionRate: varchar("interception_rate", { length: 20 }),
+  miscommunicationRate: varchar("miscommunication_rate", { length: 20 }),
+  lineageTag: varchar("lineage_tag", { length: 100 }),
+  mutationLog: text("mutation_log"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertStrategyGenomeSchema = createInsertSchema(strategyGenomes).omit({ id: true, createdAt: true });
+export type InsertStrategyGenome = z.infer<typeof insertStrategyGenomeSchema>;
+export type StrategyGenome = typeof strategyGenomes.$inferSelect;
+
+export const evolutionRuns = pgTable("evolution_runs", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  config: jsonb("config").notNull(),
+  populationSize: integer("population_size").notNull().default(8),
+  totalGenerations: integer("total_generations").notNull().default(10),
+  currentGeneration: integer("current_generation").notNull().default(0),
+  mutationRate: varchar("mutation_rate", { length: 10 }).notNull().default("0.3"),
+  crossoverRate: varchar("crossover_rate", { length: 10 }).notNull().default("0.7"),
+  elitismCount: integer("elitism_count").notNull().default(2),
+  budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
+  actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
+  phaseTransitions: jsonb("phase_transitions").$type<PhaseTransition[]>().default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertEvolutionRunSchema = createInsertSchema(evolutionRuns).omit({ id: true, createdAt: true });
+export type InsertEvolutionRun = z.infer<typeof insertEvolutionRunSchema>;
+export type EvolutionRun = typeof evolutionRuns.$inferSelect;
+
+export const generations = pgTable("generations", {
+  id: serial("id").primaryKey(),
+  evolutionRunId: integer("evolution_run_id").notNull(),
+  generationNumber: integer("generation_number").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  avgFitness: varchar("avg_fitness", { length: 20 }),
+  maxFitness: varchar("max_fitness", { length: 20 }),
+  minFitness: varchar("min_fitness", { length: 20 }),
+  fitnessStdDev: varchar("fitness_std_dev", { length: 20 }),
+  avgElo: integer("avg_elo"),
+  maxElo: integer("max_elo"),
+  diversityScore: varchar("diversity_score", { length: 20 }),
+  matchIds: jsonb("match_ids").$type<number[]>().default([]),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertGenerationSchema = createInsertSchema(generations).omit({ id: true, createdAt: true });
+export type InsertGeneration = z.infer<typeof insertGenerationSchema>;
+export type Generation = typeof generations.$inferSelect;
+
+export interface PhaseTransition {
+  fromGeneration: number;
+  toGeneration: number;
+  type: "exploration" | "exploitation" | "convergence" | "collapse";
+  evidence: string;
+  detectedAt: string;
+}
+
+export interface EvolutionConfig {
+  baseProvider: AIProvider;
+  baseModel: string;
+  populationSize: number;
+  totalGenerations: number;
+  mutationRate: number;
+  crossoverRate: number;
+  elitismCount: number;
+  matchesPerEvaluation: number;
+  budgetCapUsd?: string;
 }
 
 // Legacy exports for compatibility

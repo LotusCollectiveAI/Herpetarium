@@ -6,6 +6,7 @@ import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning } from "./tournament";
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
+import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun } from "./evolution";
 import { z } from "zod";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
 import { MODEL_COST_PER_1K, getProviderThrottleState } from "./ai";
@@ -847,6 +848,103 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to estimate cost" });
+    }
+  });
+
+  const evolutionConfigSchema = z.object({
+    baseProvider: z.enum(["chatgpt", "claude", "gemini"]),
+    baseModel: z.string(),
+    populationSize: z.number().min(4).max(20).default(8),
+    totalGenerations: z.number().min(1).max(50).default(10),
+    mutationRate: z.number().min(0).max(1).default(0.3),
+    crossoverRate: z.number().min(0).max(1).default(0.7),
+    elitismCount: z.number().min(0).max(10).default(2),
+    matchesPerEvaluation: z.number().min(1).max(5).default(1),
+    budgetCapUsd: z.string().optional(),
+  });
+
+  app.post("/api/evolution", async (req, res) => {
+    try {
+      const config = evolutionConfigSchema.parse(req.body);
+      const run = await createEvolutionRun(config);
+      runEvolution(run.id).catch(err => console.error(`[evolution] Background run error:`, err));
+      res.json(run);
+    } catch (error: any) {
+      res.status(400).json({ error: error.message || "Failed to create evolution run" });
+    }
+  });
+
+  app.get("/api/evolution", async (_req, res) => {
+    try {
+      const runs = await storage.getEvolutionRuns();
+      res.json(runs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch evolution runs" });
+    }
+  });
+
+  app.get("/api/evolution/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid run ID" });
+      const run = await storage.getEvolutionRun(id);
+      if (!run) return res.status(404).json({ error: "Evolution run not found" });
+
+      const gens = await storage.getGenerations(id);
+      const currentGenGenomes = run.currentGeneration > 0
+        ? await storage.getStrategyGenomes(id, run.currentGeneration - 1)
+        : await storage.getStrategyGenomes(id, 0);
+
+      res.json({
+        ...run,
+        generations: gens,
+        currentPopulation: currentGenGenomes,
+        isRunning: isEvolutionRunning(id),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch evolution run" });
+    }
+  });
+
+  app.get("/api/evolution/:id/genomes", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid run ID" });
+      const gen = req.query.generation !== undefined ? parseInt(req.query.generation as string) : undefined;
+      if (gen !== undefined && isNaN(gen)) return res.status(400).json({ error: "Invalid generation number" });
+      const genomes = await storage.getStrategyGenomes(id, gen);
+      res.json(genomes);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch genomes" });
+    }
+  });
+
+  app.get("/api/evolution/:id/genome/:genomeId", async (req, res) => {
+    try {
+      const genomeId = parseInt(req.params.genomeId);
+      if (isNaN(genomeId)) return res.status(400).json({ error: "Invalid genome ID" });
+      const genome = await storage.getStrategyGenome(genomeId);
+      if (!genome) return res.status(404).json({ error: "Genome not found" });
+
+      const parents = genome.parentIds && (genome.parentIds as number[]).length > 0
+        ? await Promise.all((genome.parentIds as number[]).map(pid => storage.getStrategyGenome(pid)))
+        : [];
+
+      res.json({ ...genome, parents: parents.filter(Boolean) });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch genome" });
+    }
+  });
+
+  app.post("/api/evolution/:id/stop", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) return res.status(400).json({ error: "Invalid run ID" });
+      stopEvolutionRun(id);
+      await storage.updateEvolutionRun(id, { status: "stopped" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop evolution run" });
     }
   });
 

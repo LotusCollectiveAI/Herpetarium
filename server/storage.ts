@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, type Series, type InsertSeries, type ScratchNote, type InsertScratchNote, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments, series, scratchNotes } from "@shared/schema";
+import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, type Series, type InsertSeries, type ScratchNote, type InsertScratchNote, type StrategyGenome, type InsertStrategyGenome, type EvolutionRun, type InsertEvolutionRun, type Generation, type InsertGeneration, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments, series, scratchNotes, strategyGenomes, evolutionRuns, generations } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, like, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -47,6 +47,22 @@ export interface IStorage {
   getScratchNotes(seriesId: number): Promise<ScratchNote[]>;
   getLatestScratchNote(seriesId: number, playerConfigHash: string): Promise<ScratchNote | undefined>;
   getScratchNotesForPlayer(seriesId: number, playerConfigHash: string): Promise<ScratchNote[]>;
+
+  createEvolutionRun(data: InsertEvolutionRun): Promise<EvolutionRun>;
+  updateEvolutionRun(id: number, data: Partial<InsertEvolutionRun>): Promise<EvolutionRun | undefined>;
+  getEvolutionRun(id: number): Promise<EvolutionRun | undefined>;
+  getEvolutionRuns(): Promise<EvolutionRun[]>;
+
+  createGeneration(data: InsertGeneration): Promise<Generation>;
+  updateGeneration(id: number, data: Partial<InsertGeneration>): Promise<Generation | undefined>;
+  getGenerations(evolutionRunId: number): Promise<Generation[]>;
+  getGeneration(evolutionRunId: number, generationNumber: number): Promise<Generation | undefined>;
+
+  createStrategyGenome(data: InsertStrategyGenome): Promise<StrategyGenome>;
+  updateStrategyGenome(id: number, data: Partial<InsertStrategyGenome>): Promise<StrategyGenome | undefined>;
+  getStrategyGenomes(evolutionRunId: number, generationNumber?: number): Promise<StrategyGenome[]>;
+  getStrategyGenome(id: number): Promise<StrategyGenome | undefined>;
+  getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -292,6 +308,80 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(scratchNotes)
       .where(and(eq(scratchNotes.seriesId, seriesId), eq(scratchNotes.playerConfigHash, playerConfigHash)))
       .orderBy(scratchNotes.gameIndex);
+  }
+
+  async createEvolutionRun(data: InsertEvolutionRun): Promise<EvolutionRun> {
+    const [created] = await db.insert(evolutionRuns).values(data).returning();
+    return created;
+  }
+
+  async updateEvolutionRun(id: number, data: Partial<InsertEvolutionRun>): Promise<EvolutionRun | undefined> {
+    const [updated] = await db.update(evolutionRuns).set(data).where(eq(evolutionRuns.id, id)).returning();
+    return updated;
+  }
+
+  async getEvolutionRun(id: number): Promise<EvolutionRun | undefined> {
+    const [run] = await db.select().from(evolutionRuns).where(eq(evolutionRuns.id, id)).limit(1);
+    return run;
+  }
+
+  async getEvolutionRuns(): Promise<EvolutionRun[]> {
+    return db.select().from(evolutionRuns).orderBy(desc(evolutionRuns.createdAt));
+  }
+
+  async createGeneration(data: InsertGeneration): Promise<Generation> {
+    const [created] = await db.insert(generations).values(data).returning();
+    return created;
+  }
+
+  async updateGeneration(id: number, data: Partial<InsertGeneration>): Promise<Generation | undefined> {
+    const [updated] = await db.update(generations).set(data).where(eq(generations.id, id)).returning();
+    return updated;
+  }
+
+  async getGenerations(evolutionRunId: number): Promise<Generation[]> {
+    return db.select().from(generations)
+      .where(eq(generations.evolutionRunId, evolutionRunId))
+      .orderBy(generations.generationNumber);
+  }
+
+  async getGeneration(evolutionRunId: number, generationNumber: number): Promise<Generation | undefined> {
+    const [gen] = await db.select().from(generations)
+      .where(and(eq(generations.evolutionRunId, evolutionRunId), eq(generations.generationNumber, generationNumber)))
+      .limit(1);
+    return gen;
+  }
+
+  async createStrategyGenome(data: InsertStrategyGenome): Promise<StrategyGenome> {
+    const [created] = await db.insert(strategyGenomes).values(data).returning();
+    return created;
+  }
+
+  async updateStrategyGenome(id: number, data: Partial<InsertStrategyGenome>): Promise<StrategyGenome | undefined> {
+    const [updated] = await db.update(strategyGenomes).set(data).where(eq(strategyGenomes.id, id)).returning();
+    return updated;
+  }
+
+  async getStrategyGenomes(evolutionRunId: number, generationNumber?: number): Promise<StrategyGenome[]> {
+    const conditions = [eq(strategyGenomes.evolutionRunId, evolutionRunId)];
+    if (generationNumber !== undefined) {
+      conditions.push(eq(strategyGenomes.generationNumber, generationNumber));
+    }
+    return db.select().from(strategyGenomes)
+      .where(and(...conditions))
+      .orderBy(desc(strategyGenomes.eloRating));
+  }
+
+  async getStrategyGenome(id: number): Promise<StrategyGenome | undefined> {
+    const [genome] = await db.select().from(strategyGenomes).where(eq(strategyGenomes.id, id)).limit(1);
+    return genome;
+  }
+
+  async getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]> {
+    return db.select().from(strategyGenomes)
+      .where(and(eq(strategyGenomes.evolutionRunId, evolutionRunId), eq(strategyGenomes.generationNumber, generationNumber)))
+      .orderBy(desc(strategyGenomes.eloRating))
+      .limit(limit);
   }
 }
 

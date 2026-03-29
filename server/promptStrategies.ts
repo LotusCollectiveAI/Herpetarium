@@ -15,6 +15,7 @@ export interface ClueTemplateParams {
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   scratchNotes?: string;
   ablations?: AblationFlag[];
+  systemPromptOverride?: string;
 }
 
 export interface GuessTemplateParams {
@@ -23,6 +24,7 @@ export interface GuessTemplateParams {
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   scratchNotes?: string;
   ablations?: AblationFlag[];
+  systemPromptOverride?: string;
 }
 
 export interface InterceptionTemplateParams {
@@ -30,6 +32,7 @@ export interface InterceptionTemplateParams {
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   scratchNotes?: string;
   ablations?: AblationFlag[];
+  systemPromptOverride?: string;
 }
 
 interface AblationTarget {
