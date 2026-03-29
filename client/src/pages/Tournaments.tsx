@@ -9,9 +9,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign } from "lucide-react";
+import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import type { TournamentConfig } from "@shared/schema";
 
 interface CostEstimate {
   estimatedTotalCost: number;
@@ -118,13 +119,27 @@ function getProviderLabel(provider: string) {
   }
 }
 
+interface ThrottleState {
+  lastRateLimitAt: number;
+  backoffMs: number;
+  totalRetries: number;
+  totalRateLimits: number;
+}
+
 function TournamentRow({ tournament }: { tournament: Tournament }) {
   const [expanded, setExpanded] = useState(false);
+  const isRunning = tournament.status === "running";
 
   const { data: detail, isLoading: detailLoading } = useQuery<TournamentDetail>({
     queryKey: ["/api/tournaments", tournament.id],
     enabled: expanded,
-    refetchInterval: tournament.status === "running" ? 5000 : false,
+    refetchInterval: isRunning ? 5000 : false,
+  });
+
+  const { data: throttleState } = useQuery<Record<string, ThrottleState>>({
+    queryKey: ["/api/throttle-state"],
+    enabled: isRunning,
+    refetchInterval: isRunning ? 3000 : false,
   });
 
   return (
@@ -165,6 +180,18 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
               <div className="text-sm text-muted-foreground" data-testid={`tournament-progress-${tournament.id}`}>
                 {tournament.completedMatches}/{tournament.totalMatches} matches
               </div>
+              {isRunning && throttleState && Object.values(throttleState).some(s => s.totalRateLimits > 0) && (
+                <Badge variant="outline" className="text-xs gap-1 text-orange-600 border-orange-300 dark:text-orange-400 dark:border-orange-600" data-testid={`throttle-indicator-${tournament.id}`}>
+                  <AlertTriangle className="h-3 w-3" />
+                  Rate limited
+                </Badge>
+              )}
+              {isRunning && (tournament.config as TournamentConfig)?.concurrency && (tournament.config as TournamentConfig).concurrency! > 1 && (
+                <Badge variant="outline" className="text-xs gap-1" data-testid={`parallel-indicator-${tournament.id}`}>
+                  <Layers className="h-3 w-3" />
+                  {(tournament.config as TournamentConfig).concurrency}x parallel
+                </Badge>
+              )}
               {getStatusBadge(tournament.status)}
             </div>
           </CardContent>
@@ -179,6 +206,31 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
               </div>
             ) : detail ? (
               <>
+                {isRunning && throttleState && Object.entries(throttleState).some(([, s]) => s.totalRateLimits > 0) && (
+                  <div className="bg-orange-50 dark:bg-orange-950/30 border border-orange-200 dark:border-orange-800 rounded-lg p-3" data-testid="throttle-detail">
+                    <h4 className="text-sm font-semibold mb-2 flex items-center gap-1 text-orange-700 dark:text-orange-400">
+                      <AlertTriangle className="h-4 w-4" /> Rate Limit Status
+                    </h4>
+                    <div className="grid grid-cols-3 gap-2">
+                      {Object.entries(throttleState)
+                        .filter(([, s]) => s.totalRateLimits > 0)
+                        .map(([provider, state]) => (
+                          <div key={provider} className="text-xs p-2 bg-background rounded border" data-testid={`throttle-provider-${provider}`}>
+                            <div className="font-medium">{getProviderLabel(provider)}</div>
+                            <div className="text-muted-foreground mt-1">
+                              {state.totalRateLimits} rate limit{state.totalRateLimits !== 1 ? "s" : ""}, {state.totalRetries} retries
+                            </div>
+                            {state.backoffMs > 0 && (
+                              <div className="text-orange-600 dark:text-orange-400 mt-0.5">
+                                Backoff: {(state.backoffMs / 1000).toFixed(1)}s
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+
                 {detail.stats && Object.keys(detail.stats.modelStats).length > 0 && (
                   <div>
                     <h4 className="text-sm font-semibold mb-3 flex items-center gap-1">

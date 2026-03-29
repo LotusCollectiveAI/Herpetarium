@@ -286,6 +286,7 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     blueWhiteTokens: 0,
     blueBlackTokens: 0,
     gameSeed: seed,
+    ablations: config.ablations || null,
   });
 
   const matchId = match.id;

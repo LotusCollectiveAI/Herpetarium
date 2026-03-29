@@ -32,25 +32,30 @@ export interface InterceptionTemplateParams {
   ablations?: AblationFlag[];
 }
 
-export function applyAblations<T extends { history?: any[]; scratchNotes?: string }>(
+interface AblationTarget {
+  history?: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  scratchNotes?: string;
+}
+
+export function applyAblations<T extends AblationTarget>(
   params: T,
   ablations?: AblationFlag[],
   callType?: "clue" | "guess" | "interception"
 ): T {
   if (!ablations || ablations.length === 0) return params;
 
-  const result = { ...params };
+  const result: T = { ...params };
 
   if (ablations.includes("no_history")) {
-    (result as any).history = [];
+    result.history = [];
   }
 
   if (ablations.includes("no_opponent_history") && callType === "interception") {
-    (result as any).history = [];
+    result.history = [];
   }
 
   if (ablations.includes("no_scratch_notes")) {
-    (result as any).scratchNotes = undefined;
+    result.scratchNotes = undefined;
   }
 
   return result;

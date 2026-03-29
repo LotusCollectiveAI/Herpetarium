@@ -215,6 +215,7 @@ export const matches = pgTable("matches", {
   blueWhiteTokens: integer("blue_white_tokens").notNull().default(0),
   blueBlackTokens: integer("blue_black_tokens").notNull().default(0),
   gameSeed: varchar("game_seed", { length: 50 }),
+  ablations: jsonb("ablations"),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
