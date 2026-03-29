@@ -475,12 +475,21 @@ export const insertGenerationSchema = createInsertSchema(generations).omit({ id:
 export type InsertGeneration = z.infer<typeof insertGenerationSchema>;
 export type Generation = typeof generations.$inferSelect;
 
+export interface PopulationSnapshot {
+  genomeId: number;
+  lineageTag: string | null;
+  fitnessScore: number;
+  eloRating: number;
+  modules: GenomeModules;
+}
+
 export interface PhaseTransition {
   fromGeneration: number;
   toGeneration: number;
   type: "exploration" | "exploitation" | "convergence" | "collapse";
   evidence: string;
   detectedAt: string;
+  populationSnapshot?: PopulationSnapshot[];
 }
 
 export interface EvolutionConfig {

@@ -1,4 +1,4 @@
-import type { GenomeModules, StrategyGenome, EvolutionConfig, PhaseTransition, AIPlayerConfig } from "@shared/schema";
+import type { GenomeModules, StrategyGenome, EvolutionConfig, PhaseTransition, AIPlayerConfig, PopulationSnapshot } from "@shared/schema";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { callAI } from "./ai";
@@ -130,6 +130,45 @@ function tournamentSelect(genomes: StrategyGenome[], tournamentSize: number = 3)
     candidates.push(genomes[Math.floor(Math.random() * genomes.length)]);
   }
   return candidates.sort((a, b) => computeFitness(b) - computeFitness(a))[0];
+}
+
+function computeModuleSimilarity(a: GenomeModules, b: GenomeModules): number {
+  const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
+  let matches = 0;
+  for (const key of keys) {
+    if (a[key] === b[key]) matches++;
+  }
+  return matches / keys.length;
+}
+
+function buildFrequencyWeightedPairings(population: StrategyGenome[], matchesPerEval: number): Array<[number, number]> {
+  const pairs: Array<[number, number]> = [];
+
+  const rarityScores: number[] = population.map((genome, idx) => {
+    const modules = genome.modules as GenomeModules;
+    let similarity = 0;
+    for (let j = 0; j < population.length; j++) {
+      if (j === idx) continue;
+      similarity += computeModuleSimilarity(modules, population[j].modules as GenomeModules);
+    }
+    const avgSim = population.length > 1 ? similarity / (population.length - 1) : 0;
+    return 1 - avgSim;
+  });
+
+  for (let i = 0; i < population.length; i++) {
+    for (let j = i + 1; j < population.length; j++) {
+      const pairRarity = (rarityScores[i] + rarityScores[j]) / 2;
+      const baseMatches = matchesPerEval;
+      const bonusMatches = pairRarity > 0.5 ? Math.ceil(matchesPerEval * pairRarity) : 0;
+      const totalMatches = baseMatches + bonusMatches;
+
+      for (let m = 0; m < totalMatches; m++) {
+        pairs.push([i, j]);
+      }
+    }
+  }
+
+  return pairs;
 }
 
 function computePopulationDiversity(genomes: StrategyGenome[]): number {
@@ -333,70 +372,68 @@ export async function runEvolution(runId: number) {
         stats.set(g.id, { elo: g.eloRating, wins: 0, losses: 0, matchesPlayed: 0, interceptedOpp: 0, interceptAttempts: 0, miscommunications: 0, ownGuesses: 0 });
       }
 
-      for (let i = 0; i < population.length; i++) {
-        for (let j = i + 1; j < population.length; j++) {
-          if (!activeRuns.get(runId)) break;
+      const matchPairs = buildFrequencyWeightedPairings(population, config.matchesPerEvaluation);
 
-          for (let m = 0; m < config.matchesPerEvaluation; m++) {
-            try {
-              const genomeA = population[i];
-              const genomeB = population[j];
-              const modulesA = genomeA.modules as GenomeModules;
-              const modulesB = genomeB.modules as GenomeModules;
+      for (const [idxA, idxB] of matchPairs) {
+        if (!activeRuns.get(runId)) break;
 
-              const result = await runHeadlessMatch({
-                players: [
-                  { name: `G${gen}-${i}`, aiProvider: config.baseProvider, team: "amber", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const } },
-                  { name: `G${gen}-${j}`, aiProvider: config.baseProvider, team: "blue", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const } },
-                ],
-                fastMode: true,
-                seed: `evo-${runId}-g${gen}-${i}v${j}-m${m}`,
-              }, undefined, {
-                amber: buildGenomeSystemPrompt(modulesA),
-                blue: buildGenomeSystemPrompt(modulesB),
-              });
+        try {
+          const genomeA = population[idxA];
+          const genomeB = population[idxB];
+          const modulesA = genomeA.modules as GenomeModules;
+          const modulesB = genomeB.modules as GenomeModules;
 
-              matchIds.push(result.matchId);
-              allMatchIds.push(result.matchId);
+          const result = await runHeadlessMatch({
+            players: [
+              { name: `G${gen}-${idxA}`, aiProvider: config.baseProvider, team: "amber", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const } },
+              { name: `G${gen}-${idxB}`, aiProvider: config.baseProvider, team: "blue", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const } },
+            ],
+            fastMode: true,
+            seed: `evo-${runId}-g${gen}-${idxA}v${idxB}-m${matchIds.length}`,
+          }, undefined, {
+            amber: buildGenomeSystemPrompt(modulesA),
+            blue: buildGenomeSystemPrompt(modulesB),
+          });
 
-              const sA = stats.get(genomeA.id)!;
-              const sB = stats.get(genomeB.id)!;
+          matchIds.push(result.matchId);
+          allMatchIds.push(result.matchId);
 
-              sA.matchesPlayed++;
-              sB.matchesPlayed++;
+          const sA = stats.get(genomeA.id)!;
+          const sB = stats.get(genomeB.id)!;
 
-              const amberWhite = result.teams.amber.whiteTokens;
-              const blueWhite = result.teams.blue.whiteTokens;
-              const amberBlack = result.teams.amber.blackTokens;
-              const blueBlack = result.teams.blue.blackTokens;
+          sA.matchesPlayed++;
+          sB.matchesPlayed++;
 
-              sA.miscommunications += amberWhite;
-              sA.ownGuesses += result.totalRounds;
-              sA.interceptedOpp += blueBlack;
-              sA.interceptAttempts += result.totalRounds;
+          const amberWhite = result.teams.amber.whiteTokens;
+          const blueWhite = result.teams.blue.whiteTokens;
+          const amberBlack = result.teams.amber.blackTokens;
+          const blueBlack = result.teams.blue.blackTokens;
 
-              sB.miscommunications += blueWhite;
-              sB.ownGuesses += result.totalRounds;
-              sB.interceptedOpp += amberBlack;
-              sB.interceptAttempts += result.totalRounds;
+          sA.miscommunications += amberWhite;
+          sA.ownGuesses += result.totalRounds;
+          sA.interceptedOpp += blueBlack;
+          sA.interceptAttempts += result.totalRounds;
 
-              if (result.winner === "amber") {
-                sA.wins++;
-                sB.losses++;
-                const { winnerNew, loserNew } = updateElo(sA.elo, sB.elo);
-                sA.elo = winnerNew;
-                sB.elo = loserNew;
-              } else if (result.winner === "blue") {
-                sB.wins++;
-                sA.losses++;
-                const { winnerNew, loserNew } = updateElo(sB.elo, sA.elo);
-                sB.elo = winnerNew;
-                sA.elo = loserNew;
-              }
-            } catch (err) {
-              log(`[evolution] Match failed in gen ${gen}: ${err}`, "evolution");
-            }
+          sB.miscommunications += blueWhite;
+          sB.ownGuesses += result.totalRounds;
+          sB.interceptedOpp += amberBlack;
+          sB.interceptAttempts += result.totalRounds;
+
+          if (result.winner === "amber") {
+            sA.wins++;
+            sB.losses++;
+            const { winnerNew, loserNew } = updateElo(sA.elo, sB.elo);
+            sA.elo = winnerNew;
+            sB.elo = loserNew;
+          } else if (result.winner === "blue") {
+            sB.wins++;
+            sA.losses++;
+            const { winnerNew, loserNew } = updateElo(sB.elo, sA.elo);
+            sB.elo = winnerNew;
+            sA.elo = loserNew;
           }
+        } catch (err) {
+          log(`[evolution] Match failed in gen ${gen}: ${err}`, "evolution");
         }
       }
 
@@ -448,6 +485,13 @@ export async function runEvolution(runId: number) {
 
       const transition = detectPhaseTransitions(gen, generationStats);
       if (transition) {
+        transition.populationSnapshot = updatedPop.map(g => ({
+          genomeId: g.id,
+          lineageTag: g.lineageTag,
+          fitnessScore: computeFitness(g),
+          eloRating: g.eloRating,
+          modules: g.modules as GenomeModules,
+        }));
         transitions.push(transition);
         await storage.updateEvolutionRun(runId, { phaseTransitions: transitions });
         log(`[evolution] Phase transition detected at gen ${gen}: ${transition.type} - ${transition.evidence}`, "evolution");
@@ -638,7 +682,7 @@ Mutate the "${targetKey}" module. Create a meaningfully different variant that c
 
   try {
     const result = await callAI(aiConfig, systemPrompt, userPrompt);
-    const newValue = result.content.trim();
+    const newValue = result.text.trim();
     if (newValue.length < 10 || newValue.length > 500) {
       return mutateModulesFallback(modules);
     }
