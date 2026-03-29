@@ -190,10 +190,11 @@ export async function registerRoutes(
         }
       }
 
-      const allPlayers = config.matchConfigs.flatMap(mc => mc.players);
       const gamesPerMatchup = config.gamesPerMatchup || 1;
-      const totalGames = config.matchConfigs.length * gamesPerMatchup;
-      const estimatedCost = computeEstimatedCost(allPlayers, totalGames);
+      let estimatedCost = 0;
+      for (const mc of config.matchConfigs) {
+        estimatedCost += computeEstimatedCost(mc.players, gamesPerMatchup);
+      }
 
       const tournament = await createTournament(config, estimatedCost > 0 ? estimatedCost.toFixed(4) : null);
 
