@@ -16,6 +16,7 @@ const headlessMatchConfigSchema = z.object({
     team: z.enum(["amber", "blue"]),
   })).min(2).max(4),
   fastMode: z.boolean().optional(),
+  seed: z.number().int().optional(),
 });
 
 const tournamentConfigSchema = z.object({
@@ -385,10 +386,58 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/export/rounds", async (req, res) => {
+    try {
+      const format = (req.query.format as string) || "json";
+      const model = req.query.model as string | undefined;
+      const dateFrom = req.query.dateFrom as string | undefined;
+      const dateTo = req.query.dateTo as string | undefined;
+
+      const allMatches = await storage.getAllMatches({ model, dateFrom, dateTo });
+      const matchIds = allMatches.map(m => m.id);
+      const allRounds = await storage.getMatchRoundsForMatches(matchIds);
+
+      if (format === "csv") {
+        const csvRows = ["id,matchId,roundNumber,team,clues,secretCode,ownGuess,opponentGuess,ownCorrect,intercepted,clueGiver"];
+        allRounds.forEach(r => {
+          const esc = (v: unknown) => typeof v === 'string' && v.includes(',') ? `"${v.replace(/"/g, '""')}"` : (v ?? "");
+          csvRows.push([
+            r.id, r.matchId, r.roundNumber, r.team,
+            esc(JSON.stringify(r.clues)),
+            esc(JSON.stringify(r.secretCode)),
+            esc(JSON.stringify(r.ownGuess)),
+            esc(JSON.stringify(r.opponentGuess)),
+            r.ownCorrect ?? "",
+            r.intercepted ?? "",
+            r.clueGiver || "",
+          ].join(","));
+        });
+        res.setHeader("Content-Type", "text/csv");
+        res.setHeader("Content-Disposition", "attachment; filename=rounds.csv");
+        res.send(csvRows.join("\n"));
+      } else {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Content-Disposition", "attachment; filename=rounds.json");
+        res.json(allRounds);
+      }
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Failed to export rounds";
+      res.status(500).json({ error: msg });
+    }
+  });
+
   app.get("/api/export/ai-logs", async (req, res) => {
     try {
       const format = (req.query.format as string) || "json";
-      const allLogs = await storage.getAllAiCallLogs();
+      const model = req.query.model as string | undefined;
+      const dateFrom = req.query.dateFrom as string | undefined;
+      const dateTo = req.query.dateTo as string | undefined;
+
+      const allMatches = model || dateFrom || dateTo
+        ? await storage.getAllMatches({ model, dateFrom, dateTo })
+        : undefined;
+      const matchIds = allMatches?.map(m => m.id);
+      const allLogs = await storage.getAllAiCallLogs(matchIds);
 
       if (format === "csv") {
         const csvRows = ["id,matchId,gameId,roundNumber,provider,model,actionType,latencyMs,timedOut,parseQuality,promptTokens,completionTokens,totalTokens,estimatedCostUsd,error,createdAt"];
