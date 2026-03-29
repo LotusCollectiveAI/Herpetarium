@@ -6,6 +6,7 @@ import { AIPlayerButton } from "@/components/AIPlayerButton";
 import { Users, Play, X, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import type { AIPlayerConfig } from "@shared/schema";
 
 export function LobbyView() {
   const { gameState, isHost, sendMessage, playerId } = useGame();
@@ -13,8 +14,8 @@ export function LobbyView() {
 
   if (!gameState) return null;
 
-  const handleAddAI = (provider: "chatgpt" | "claude" | "gemini") => {
-    sendMessage({ type: "add_ai", provider });
+  const handleAddAI = (config: AIPlayerConfig) => {
+    sendMessage({ type: "add_ai", provider: config.provider, config });
   };
 
   const handleRemovePlayer = (id: string) => {
@@ -85,11 +86,18 @@ export function LobbyView() {
                 >
                   <div className="flex items-center gap-3">
                     <PlayerAvatar player={player} isCurrentPlayer={player.id === playerId} />
-                    {player.id === gameState.hostId && (
-                      <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">
-                        Host
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      {player.id === gameState.hostId && (
+                        <span className="text-xs bg-primary/20 text-primary px-2 py-0.5 rounded">
+                          Host
+                        </span>
+                      )}
+                      {player.isAI && player.aiConfig && (
+                        <span className="text-xs text-muted-foreground">
+                          {player.aiConfig.promptStrategy !== "default" ? `${player.aiConfig.promptStrategy}` : ""}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   {isHost && player.id !== playerId && (
                     <Button
@@ -113,14 +121,14 @@ export function LobbyView() {
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">Add AI Players</CardTitle>
             <CardDescription>
-              Play with AI opponents powered by leading language models
+              Play with AI opponents — choose model, strategy, and timeout
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex flex-wrap gap-2">
-              <AIPlayerButton provider="chatgpt" onClick={() => handleAddAI("chatgpt")} />
-              <AIPlayerButton provider="claude" onClick={() => handleAddAI("claude")} />
-              <AIPlayerButton provider="gemini" onClick={() => handleAddAI("gemini")} />
+            <div className="space-y-3">
+              <AIPlayerButton provider="chatgpt" onAdd={handleAddAI} />
+              <AIPlayerButton provider="claude" onAdd={handleAddAI} />
+              <AIPlayerButton provider="gemini" onAdd={handleAddAI} />
             </div>
           </CardContent>
         </Card>

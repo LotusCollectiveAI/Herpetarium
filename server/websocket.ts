@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIProvider } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -16,7 +16,7 @@ import {
   getAIProviderName,
   shuffleArray,
 } from "./game";
-import { generateClues, generateGuess, generateInterception, AICallResult, MODEL_MAP, buildCluePrompt, buildGuessPrompt, buildInterceptionPrompt } from "./ai";
+import { generateClues, generateGuess, generateInterception, AICallResult } from "./ai";
 import { storage } from "./storage";
 import { log } from "./index";
 
@@ -26,25 +26,39 @@ interface ClientConnection {
   gameId: string;
 }
 
-const AI_TIMEOUT_MS = 30000;
+const DEFAULT_AI_TIMEOUT_MS = 120000;
+const MAX_AI_TIMEOUT_MS = 300000;
+
+function getPlayerTimeout(player: Player): number {
+  if (player.aiConfig?.timeoutMs) {
+    return Math.min(player.aiConfig.timeoutMs, MAX_AI_TIMEOUT_MS);
+  }
+  return DEFAULT_AI_TIMEOUT_MS;
+}
+
+function getPlayerConfig(player: Player): AIPlayerConfig {
+  if (player.aiConfig) return player.aiConfig;
+  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
+  return getDefaultConfig("chatgpt");
+}
 
 function withTimeout<T>(
   promise: Promise<AICallResult<T>>,
   timeoutMs: number,
   fallback: T,
-  meta: { prompt: string; model: string }
+  model: string
 ): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
   const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
 
   const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
     setTimeout(() => resolve({
-      result: { result: fallback, prompt: meta.prompt, rawResponse: "", model: meta.model, latencyMs: timeoutMs, error: "timeout" },
+      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout" },
       timedOut: true,
     }), timeoutMs)
   );
 
   return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: meta.prompt, rawResponse: "", model: meta.model, latencyMs: 0, error: "unknown error" },
+    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error" },
     timedOut: false,
   }));
 }
@@ -286,7 +300,10 @@ async function processAIClues(gameId: string) {
     if (!clueGiver?.isAI || !clueGiver.aiProvider) continue;
     
     const aiName = getAIProviderName(clueGiver.aiProvider);
-    broadcast(gameId, { type: "ai_thinking", aiName });
+    const config = getPlayerConfig(clueGiver);
+    const timeoutMs = getPlayerTimeout(clueGiver);
+    
+    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
     
     const code = game.currentCode[team]!;
     const keywords = game.teams[team].keywords;
@@ -296,23 +313,26 @@ async function processAIClues(gameId: string) {
     }));
     
     const fallbackClues = code.map(n => keywords[n - 1].slice(0, 3));
-    const clueParams = { keywords, targetCode: code, history };
     
     const { result: callResult, timedOut } = await withTimeout(
-      generateClues(clueGiver.aiProvider, clueParams),
-      AI_TIMEOUT_MS,
+      generateClues(config, { keywords, targetCode: code, history }),
+      timeoutMs,
       fallbackClues,
-      { prompt: buildCluePrompt(clueParams), model: MODEL_MAP[clueGiver.aiProvider] }
+      config.model
     );
     
     await logAiCall(gameId, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut);
     
     if (timedOut) {
-      log(`AI clue generation timed out for ${aiName}`, "websocket");
+      log(`AI clue generation timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
       broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback clues" });
     } else if (callResult.error) {
-      log(`AI clue generation failed for ${aiName}`, "websocket");
+      log(`AI clue generation failed for ${aiName} (${config.model})`, "websocket");
       broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback clues" });
+    }
+    
+    if (callResult.reasoningTrace) {
+      log(`[Reasoning Trace] ${aiName} (${config.model}) clue generation:\n${callResult.reasoningTrace}`, "websocket");
     }
     
     game = games.get(gameId)!;
@@ -352,7 +372,10 @@ async function processAIGuesses(gameId: string) {
     }
     
     const aiName = getAIProviderName(aiGuesser.aiProvider!);
-    broadcast(gameId, { type: "ai_thinking", aiName });
+    const config = getPlayerConfig(aiGuesser);
+    const timeoutMs = getPlayerTimeout(aiGuesser);
+    
+    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
     
     const clues = game.currentClues[team]!;
     const keywords = game.teams[team].keywords;
@@ -361,22 +384,25 @@ async function processAIGuesses(gameId: string) {
       targetCode: h.targetCode,
     }));
     
-    const guessParams = { keywords, clues, history };
     const { result: callResult, timedOut } = await withTimeout(
-      generateGuess(aiGuesser.aiProvider!, guessParams),
-      AI_TIMEOUT_MS,
+      generateGuess(config, { keywords, clues, history }),
+      timeoutMs,
       fallbackGuess,
-      { prompt: buildGuessPrompt(guessParams), model: MODEL_MAP[aiGuesser.aiProvider!] }
+      config.model
     );
     
     await logAiCall(gameId, game.round, aiGuesser.aiProvider!, "generate_guess", callResult, timedOut);
     
     if (timedOut) {
-      log(`AI guess timed out for ${aiName}`, "websocket");
+      log(`AI guess timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
       broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
     } else if (callResult.error) {
-      log(`AI guess failed for ${aiName}`, "websocket");
+      log(`AI guess failed for ${aiName} (${config.model})`, "websocket");
       broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+    }
+    
+    if (callResult.reasoningTrace) {
+      log(`[Reasoning Trace] ${aiName} (${config.model}) guess:\n${callResult.reasoningTrace}`, "websocket");
     }
     
     game = games.get(gameId)!;
@@ -411,7 +437,10 @@ async function processAIInterceptions(gameId: string) {
     if (!aiInterceptor) continue;
     
     const aiName = getAIProviderName(aiInterceptor.aiProvider!);
-    broadcast(gameId, { type: "ai_thinking", aiName });
+    const config = getPlayerConfig(aiInterceptor);
+    const timeoutMs = getPlayerTimeout(aiInterceptor);
+    
+    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
     
     const clues = game.currentClues[opponentTeam]!;
     const history = game.teams[opponentTeam].history.map(h => ({
@@ -419,22 +448,25 @@ async function processAIInterceptions(gameId: string) {
       targetCode: h.targetCode,
     }));
     
-    const interceptParams = { clues, history };
     const { result: callResult, timedOut } = await withTimeout(
-      generateInterception(aiInterceptor.aiProvider!, interceptParams),
-      AI_TIMEOUT_MS,
+      generateInterception(config, { clues, history }),
+      timeoutMs,
       fallbackGuess,
-      { prompt: buildInterceptionPrompt(interceptParams), model: MODEL_MAP[aiInterceptor.aiProvider!] }
+      config.model
     );
     
     await logAiCall(gameId, game.round, aiInterceptor.aiProvider!, "generate_interception", callResult, timedOut);
     
     if (timedOut) {
-      log(`AI interception timed out for ${aiName}`, "websocket");
+      log(`AI interception timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
       broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
     } else if (callResult.error) {
-      log(`AI interception failed for ${aiName}`, "websocket");
+      log(`AI interception failed for ${aiName} (${config.model})`, "websocket");
       broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+    }
+    
+    if (callResult.reasoningTrace) {
+      log(`[Reasoning Trace] ${aiName} (${config.model}) interception:\n${callResult.reasoningTrace}`, "websocket");
     }
     
     game = games.get(gameId)!;
@@ -544,11 +576,23 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         return;
       }
       
+      const config = message.config || getDefaultConfig(message.provider);
+      
+      const validModels = MODEL_OPTIONS[config.provider].map(m => m.value);
+      if (!validModels.includes(config.model)) {
+        sendTo(ws, { type: "error", message: `Invalid model "${config.model}" for provider ${config.provider}` });
+        return;
+      }
+      
+      const modelLabel = config.model || message.provider;
+      const displayName = `${getAIProviderName(config.provider)} (${modelLabel})`;
+      
       const aiPlayer: Player = {
         id: generatePlayerId(),
-        name: `${getAIProviderName(message.provider)}`,
+        name: displayName,
         isAI: true,
-        aiProvider: message.provider,
+        aiProvider: config.provider,
+        aiConfig: config,
         team: null,
         isReady: true,
       };
@@ -557,7 +601,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         const updated = addPlayer(game, aiPlayer);
         games.set(client.gameId, updated);
         sendGameState(client.gameId);
-        log(`AI ${aiPlayer.name} added to game ${client.gameId}`, "websocket");
+        log(`AI ${aiPlayer.name} added to game ${client.gameId} (model: ${config.model}, timeout: ${config.timeoutMs}ms, strategy: ${config.promptStrategy})`, "websocket");
       } catch (error: any) {
         sendTo(ws, { type: "error", message: error.message });
       }
@@ -771,6 +815,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
           name: player.name,
           isAI: player.isAI,
           aiProvider: player.aiProvider,
+          aiConfig: player.aiConfig,
           team: null,
           isReady: player.isAI,
         });

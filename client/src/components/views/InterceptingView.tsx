@@ -10,7 +10,7 @@ import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
 import { Crosshair, Shield, History, Send } from "lucide-react";
 
 export function InterceptingView() {
-  const { gameState, playerId, myTeam, sendMessage, aiThinking } = useGame();
+  const { gameState, playerId, myTeam, sendMessage, aiThinking, aiThinkingStartTime } = useGame();
   const [activeTab, setActiveTab] = useState("clues");
 
   if (!gameState || !myTeam) return null;
@@ -86,7 +86,7 @@ export function InterceptingView() {
       <CardContent className="py-8">
         <div className="flex flex-col items-center gap-4 text-center">
           {aiThinking ? (
-            <AIThinkingIndicator aiName={aiThinking} context="intercept" />
+            <AIThinkingIndicator aiName={aiThinking} context="intercept" startTime={aiThinkingStartTime} />
           ) : (
             <>
               <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">

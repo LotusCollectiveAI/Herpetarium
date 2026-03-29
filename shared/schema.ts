@@ -2,22 +2,67 @@ import { z } from "zod";
 import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
-// AI Provider types
 export type AIProvider = "chatgpt" | "claude" | "gemini";
 
-// Player types
+export const aiPlayerConfigSchema = z.object({
+  provider: z.enum(["chatgpt", "claude", "gemini"]),
+  model: z.string(),
+  timeoutMs: z.number().min(10000).max(300000).default(120000),
+  temperature: z.number().min(0).max(2).optional(),
+  promptStrategy: z.enum(["default", "advanced"]).default("default"),
+});
+
+export type AIPlayerConfig = z.infer<typeof aiPlayerConfigSchema>;
+
+export const MODEL_OPTIONS: Record<AIProvider, Array<{ value: string; label: string; isReasoning?: boolean }>> = {
+  chatgpt: [
+    { value: "gpt-4o", label: "GPT-4o" },
+    { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+    { value: "o3", label: "o3 (Reasoning)", isReasoning: true },
+    { value: "o3-mini", label: "o3-mini (Reasoning)", isReasoning: true },
+    { value: "o1", label: "o1 (Reasoning)", isReasoning: true },
+  ],
+  claude: [
+    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
+    { value: "claude-haiku-4-20250414", label: "Claude Haiku 4" },
+    { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
+  ],
+  gemini: [
+    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Thinking)", isReasoning: true },
+    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Thinking)", isReasoning: true },
+  ],
+};
+
+export const PROMPT_STRATEGY_OPTIONS = ["default", "advanced"] as const;
+
+export function getDefaultConfig(provider: AIProvider): AIPlayerConfig {
+  const defaultModels: Record<AIProvider, string> = {
+    chatgpt: "gpt-4o",
+    claude: "claude-sonnet-4-20250514",
+    gemini: "gemini-2.0-flash",
+  };
+  return {
+    provider,
+    model: defaultModels[provider],
+    timeoutMs: 120000,
+    temperature: 0.7,
+    promptStrategy: "default",
+  };
+}
+
 export const playerSchema = z.object({
   id: z.string(),
   name: z.string(),
   isAI: z.boolean(),
   aiProvider: z.enum(["chatgpt", "claude", "gemini"]).optional(),
+  aiConfig: aiPlayerConfigSchema.optional(),
   team: z.enum(["amber", "blue"]).nullable(),
   isReady: z.boolean(),
 });
 
 export type Player = z.infer<typeof playerSchema>;
 
-// Game phase types
 export type GamePhase = 
   | "lobby"
   | "team_setup"
@@ -27,7 +72,6 @@ export type GamePhase =
   | "round_results"
   | "game_over";
 
-// Clue and guess types
 export const clueSchema = z.object({
   playerId: z.string(),
   clues: z.array(z.string()),
@@ -44,7 +88,6 @@ export const guessSchema = z.object({
 
 export type Guess = z.infer<typeof guessSchema>;
 
-// Round history
 export const roundHistorySchema = z.object({
   round: z.number(),
   clueGiverId: z.string(),
@@ -58,7 +101,6 @@ export const roundHistorySchema = z.object({
 
 export type RoundHistory = z.infer<typeof roundHistorySchema>;
 
-// Team state
 export const teamStateSchema = z.object({
   keywords: z.array(z.string()),
   whiteTokens: z.number(),
@@ -68,7 +110,6 @@ export const teamStateSchema = z.object({
 
 export type TeamState = z.infer<typeof teamStateSchema>;
 
-// Full game state
 export const gameStateSchema = z.object({
   id: z.string(),
   phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_guessing", "opponent_intercepting", "round_results", "game_over"]),
@@ -106,10 +147,13 @@ export const gameStateSchema = z.object({
 
 export type GameState = z.infer<typeof gameStateSchema>;
 
-// WebSocket message types
 export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("join"), gameId: z.string(), playerName: z.string(), playerId: z.string().optional() }),
-  z.object({ type: z.literal("add_ai"), provider: z.enum(["chatgpt", "claude", "gemini"]) }),
+  z.object({ 
+    type: z.literal("add_ai"), 
+    provider: z.enum(["chatgpt", "claude", "gemini"]),
+    config: aiPlayerConfigSchema.optional(),
+  }),
   z.object({ type: z.literal("remove_player"), playerId: z.string() }),
   z.object({ type: z.literal("join_team"), team: z.enum(["amber", "blue"]) }),
   z.object({ type: z.literal("start_game") }),
@@ -124,7 +168,6 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
 
 export type WSMessage = z.infer<typeof wsMessageSchema>;
 
-// Server responses
 export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("game_state"), state: gameStateSchema }),
   z.object({ type: z.literal("player_joined"), player: playerSchema }),
@@ -133,7 +176,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("clue_error"), message: z.string() }),
   z.object({ type: z.literal("your_code"), code: z.tuple([z.number(), z.number(), z.number()]) }),
   z.object({ type: z.literal("keywords"), keywords: z.array(z.string()) }),
-  z.object({ type: z.literal("ai_thinking"), aiName: z.string() }),
+  z.object({ type: z.literal("ai_thinking"), aiName: z.string(), startTime: z.number().optional() }),
   z.object({ type: z.literal("ai_done"), aiName: z.string() }),
   z.object({ type: z.literal("ai_fallback"), aiName: z.string(), reason: z.string() }),
   z.object({ type: z.literal("new_game_created"), gameId: z.string() }),
@@ -142,14 +185,12 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
 
-// Create game request
 export const createGameSchema = z.object({
   hostName: z.string().min(1).max(20),
 });
 
 export type CreateGame = z.infer<typeof createGameSchema>;
 
-// Join game request
 export const joinGameSchema = z.object({
   gameId: z.string(),
   playerName: z.string().min(1).max(20),

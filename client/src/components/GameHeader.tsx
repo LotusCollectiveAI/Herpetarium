@@ -13,7 +13,7 @@ interface GameHeaderProps {
 }
 
 export function GameHeader({ gameId }: GameHeaderProps) {
-  const { gameState, aiThinking } = useGame();
+  const { gameState, aiThinking, aiThinkingStartTime } = useGame();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
@@ -56,7 +56,7 @@ export function GameHeader({ gameId }: GameHeaderProps) {
 
         <div className="flex-1 flex items-center justify-center">
           {aiThinking && (
-            <AIThinkingIndicator aiName={aiThinking} context={thinkingContext as any} size="sm" />
+            <AIThinkingIndicator aiName={aiThinking} context={thinkingContext as any} size="sm" startTime={aiThinkingStartTime} />
           )}
         </div>
 

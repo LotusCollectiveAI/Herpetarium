@@ -1,7 +1,9 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
-import { AIProvider } from "@shared/schema";
+import type { AIPlayerConfig } from "@shared/schema";
+import { getPromptStrategy } from "./promptStrategies";
+import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
 
 let openaiClient: OpenAI | null = null;
 let anthropicClient: Anthropic | null = null;
@@ -36,30 +38,12 @@ function getGemini(): GoogleGenAI {
   return geminiClient;
 }
 
-export interface ClueGenerationParams {
-  keywords: string[];
-  targetCode: [number, number, number];
-  history: Array<{
-    clues: string[];
-    targetCode: [number, number, number];
-  }>;
+function isOpenAIReasoningModel(model: string): boolean {
+  return /^o[0-9]/.test(model) || model.startsWith("o1");
 }
 
-export interface GuessParams {
-  keywords: string[];
-  clues: string[];
-  history: Array<{
-    clues: string[];
-    targetCode: [number, number, number];
-  }>;
-}
-
-export interface InterceptionParams {
-  clues: string[];
-  history: Array<{
-    clues: string[];
-    targetCode: [number, number, number];
-  }>;
+function isGeminiThinkingModel(model: string): boolean {
+  return model.includes("2.5-pro") || model.includes("2.5-flash");
 }
 
 export interface AICallResult<T> {
@@ -69,191 +53,212 @@ export interface AICallResult<T> {
   model: string;
   latencyMs: number;
   error?: string;
+  reasoningTrace?: string;
 }
 
-export const MODEL_MAP: Record<AIProvider, string> = {
-  chatgpt: "gpt-4o",
-  claude: "claude-sonnet-4-20250514",
-  gemini: "gemini-2.0-flash",
-};
-
-export function buildCluePrompt(params: ClueGenerationParams): string {
-  const { keywords, targetCode, history } = params;
-  
-  let prompt = `You are playing Decrypto, a word association game. Your team has 4 secret keywords:
-1. ${keywords[0]}
-2. ${keywords[1]}
-3. ${keywords[2]}
-4. ${keywords[3]}
-
-Your secret code for this round is: ${targetCode.join(", ")}
-
-You must give 3 clues (one for each number in the code) that will help your teammates guess the correct keywords, but be subtle enough that the opponent team cannot figure out your keywords over time.
-
-Rules:
-- Each clue must be a SINGLE WORD (no phrases, numbers, or symbols)
-- Clues cannot be any of the keywords or their root words
-- Be creative but not too obscure for your team
-- Remember: opponents will see your clues and try to decode your keywords over rounds
-
-`;
-
-  if (history.length > 0) {
-    prompt += "\nPrevious rounds (clues and codes revealed):\n";
-    history.forEach((round, i) => {
-      prompt += `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]\n`;
-    });
-    prompt += "\nBe careful - opponents have seen these patterns!\n";
-  }
-
-  prompt += "\nRespond with exactly 3 words separated by commas, nothing else. Example: ocean,bright,ancient";
-  
-  return prompt;
+interface RawAIResponse {
+  text: string;
+  reasoningTrace?: string;
 }
 
-export function buildGuessPrompt(params: GuessParams): string {
-  const { keywords, clues, history } = params;
-  
-  let prompt = `You are playing Decrypto. Your team's keywords are:
-1. ${keywords[0]}
-2. ${keywords[1]}
-3. ${keywords[2]}
-4. ${keywords[3]}
+async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  const isReasoning = isOpenAIReasoningModel(config.model);
 
-Your teammate gave these clues: ${clues.join(", ")}
+  if (isReasoning) {
+    const response = await getOpenAI().chat.completions.create({
+      model: config.model,
+      messages: [
+        { role: "user", content: `${systemPrompt}\n\n${userPrompt}` },
+      ],
+      max_completion_tokens: 2048,
+    } as any);
 
-Each clue corresponds to one of your keywords (in order). Figure out which keyword each clue refers to.
+    const choice = response.choices[0];
+    const text = choice?.message?.content || "";
+    let reasoningTrace: string | undefined;
 
-`;
+    const msg = choice?.message as any;
+    if (msg?.reasoning_content) {
+      reasoningTrace = msg.reasoning_content;
+    }
 
-  if (history.length > 0) {
-    prompt += "Previous rounds for reference:\n";
-    history.forEach((round, i) => {
-      prompt += `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]\n`;
-    });
+    return { text, reasoningTrace };
   }
 
-  prompt += "\nRespond with exactly 3 numbers (1-4) separated by commas representing which keywords the clues refer to. Example: 3,1,4";
-  
-  return prompt;
+  const response = await getOpenAI().chat.completions.create({
+    model: config.model,
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ],
+    max_tokens: 200,
+    temperature: config.temperature ?? 0.7,
+  });
+
+  return { text: response.choices[0]?.message?.content || "" };
 }
 
-export function buildInterceptionPrompt(params: InterceptionParams): string {
-  const { clues, history } = params;
-  
-  let prompt = `You are playing Decrypto and trying to INTERCEPT the opponent's code.
+async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  const isExtendedThinking = config.model.includes("claude-3-7") || config.promptStrategy === "advanced";
 
-The opponent's clues this round: ${clues.join(", ")}
+  if (isExtendedThinking && config.promptStrategy === "advanced") {
+    try {
+      const response = await getAnthropic().messages.create({
+        model: config.model,
+        max_tokens: 16000,
+        thinking: {
+          type: "enabled",
+          budget_tokens: 10000,
+        },
+        messages: [{ role: "user", content: `${systemPrompt}\n\n${userPrompt}` }],
+      } as any);
 
-You DON'T know their keywords, but you can use their clue history to figure out patterns.
+      let text = "";
+      let reasoningTrace: string | undefined;
 
-`;
+      for (const block of response.content) {
+        if (block.type === "thinking") {
+          reasoningTrace = (block as any).thinking;
+        } else if (block.type === "text") {
+          text = block.text;
+        }
+      }
 
-  if (history.length > 0) {
-    prompt += "Opponent's previous rounds:\n";
-    history.forEach((round, i) => {
-      prompt += `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]\n`;
-    });
-    prompt += "\nAnalyze patterns: similar clues likely refer to the same keyword number.\n";
-  } else {
-    prompt += "This is round 1, so you have no history. Make your best guess.\n";
+      return { text, reasoningTrace };
+    } catch {
+    }
   }
 
-  prompt += "\nRespond with exactly 3 numbers (1-4) separated by commas as your guess of their code. Example: 2,4,1";
-  
-  return prompt;
+  const response = await getAnthropic().messages.create({
+    model: config.model,
+    max_tokens: 200,
+    system: systemPrompt,
+    messages: [{ role: "user", content: userPrompt }],
+  });
+
+  const content = response.content[0];
+  return { text: content.type === "text" ? content.text : "" };
+}
+
+async function callGemini(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  const isThinking = isGeminiThinkingModel(config.model);
+
+  if (isThinking) {
+    const response = await getGemini().models.generateContent({
+      model: config.model,
+      contents: `${systemPrompt}\n\n${userPrompt}`,
+      config: {
+        thinkingConfig: {
+          thinkingBudget: 8000,
+        },
+      },
+    } as any);
+
+    let text = "";
+    let reasoningTrace: string | undefined;
+
+    const candidates = (response as any).candidates;
+    if (candidates?.[0]?.content?.parts) {
+      for (const part of candidates[0].content.parts) {
+        if (part.thought) {
+          reasoningTrace = part.text;
+        } else if (part.text) {
+          text = part.text;
+        }
+      }
+    }
+
+    if (!text) {
+      text = response.text || "";
+    }
+
+    return { text, reasoningTrace };
+  }
+
+  const response = await getGemini().models.generateContent({
+    model: config.model,
+    contents: `${systemPrompt}\n\n${userPrompt}`,
+  });
+
+  return { text: response.text || "" };
+}
+
+async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  switch (config.provider) {
+    case "chatgpt":
+      return callOpenAI(config, systemPrompt, userPrompt);
+    case "claude":
+      return callAnthropic(config, systemPrompt, userPrompt);
+    case "gemini":
+      return callGemini(config, systemPrompt, userPrompt);
+  }
 }
 
 function parseCodeResponse(response: string): [number, number, number] {
   const cleaned = response.replace(/[^1-4,]/g, "");
   const numbers = cleaned.split(",").map(n => parseInt(n.trim())).filter(n => n >= 1 && n <= 4);
-  
+
   if (numbers.length >= 3) {
     return [numbers[0], numbers[1], numbers[2]] as [number, number, number];
   }
-  
+
   return [1, 2, 3] as [number, number, number];
 }
 
 function parseCluesResponse(response: string): string[] {
   const words = response.split(",").map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length > 0);
-  
+
   if (words.length >= 3) {
     return words.slice(0, 3);
   }
-  
+
   return ["hint", "clue", "guess"];
 }
 
-async function callProvider(provider: AIProvider, prompt: string, maxTokens: number, temperature: number): Promise<{ rawResponse: string; model: string }> {
-  const model = MODEL_MAP[provider];
-  switch (provider) {
-    case "chatgpt": {
-      const response = await getOpenAI().chat.completions.create({
-        model,
-        messages: [{ role: "user", content: prompt }],
-        max_tokens: maxTokens,
-        temperature,
-      });
-      return { rawResponse: response.choices[0]?.message?.content || "", model };
-    }
-    case "claude": {
-      const response = await getAnthropic().messages.create({
-        model,
-        max_tokens: maxTokens,
-        messages: [{ role: "user", content: prompt }],
-      });
-      const content = response.content[0];
-      return { rawResponse: content.type === "text" ? content.text : "", model };
-    }
-    case "gemini": {
-      const response = await getGemini().models.generateContent({
-        model,
-        contents: prompt,
-      });
-      return { rawResponse: response.text || "", model };
-    }
+export async function generateClues(config: AIPlayerConfig, params: ClueTemplateParams): Promise<AICallResult<string[]>> {
+  const strategy = getPromptStrategy(config.promptStrategy);
+  const prompt = strategy.clueTemplate(params);
+  const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
+  const startTime = Date.now();
+  try {
+    const raw = await callAI(config, strategy.systemPrompt, prompt);
+    const latencyMs = Date.now() - startTime;
+    const result = parseCluesResponse(raw.text);
+    return { result, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    return { result: ["hint", "clue", "guess"], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
   }
 }
 
-export async function generateClues(provider: AIProvider, params: ClueGenerationParams): Promise<AICallResult<string[]>> {
-  const prompt = buildCluePrompt(params);
+export async function generateGuess(config: AIPlayerConfig, params: GuessTemplateParams): Promise<AICallResult<[number, number, number]>> {
+  const strategy = getPromptStrategy(config.promptStrategy);
+  const prompt = strategy.guessTemplate(params);
+  const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const { rawResponse, model } = await callProvider(provider, prompt, 50, 0.7);
+    const raw = await callAI(config, strategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
-    const result = parseCluesResponse(rawResponse);
-    return { result, prompt, rawResponse, model, latencyMs };
+    const result = parseCodeResponse(raw.text);
+    return { result, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: ["hint", "clue", "guess"], prompt, rawResponse: "", model: MODEL_MAP[provider], latencyMs, error: String(err) };
+    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
   }
 }
 
-export async function generateGuess(provider: AIProvider, params: GuessParams): Promise<AICallResult<[number, number, number]>> {
-  const prompt = buildGuessPrompt(params);
+export async function generateInterception(config: AIPlayerConfig, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
+  const strategy = getPromptStrategy(config.promptStrategy);
+  const prompt = strategy.interceptionTemplate(params);
+  const fullPrompt = `${strategy.systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const { rawResponse, model } = await callProvider(provider, prompt, 20, 0.3);
+    const raw = await callAI(config, strategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
-    const result = parseCodeResponse(rawResponse);
-    return { result, prompt, rawResponse, model, latencyMs };
+    const result = parseCodeResponse(raw.text);
+    return { result, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: [1, 2, 3], prompt, rawResponse: "", model: MODEL_MAP[provider], latencyMs, error: String(err) };
-  }
-}
-
-export async function generateInterception(provider: AIProvider, params: InterceptionParams): Promise<AICallResult<[number, number, number]>> {
-  const prompt = buildInterceptionPrompt(params);
-  const startTime = Date.now();
-  try {
-    const { rawResponse, model } = await callProvider(provider, prompt, 20, 0.5);
-    const latencyMs = Date.now() - startTime;
-    const result = parseCodeResponse(rawResponse);
-    return { result, prompt, rawResponse, model, latencyMs };
-  } catch (err: unknown) {
-    const latencyMs = Date.now() - startTime;
-    return { result: [1, 2, 3], prompt, rawResponse: "", model: MODEL_MAP[provider], latencyMs, error: String(err) };
+    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
   }
 }

@@ -40,9 +40,13 @@ Preferred communication style: Simple, everyday language.
 
 ### AI Integration
 - Multiple AI providers supported: OpenAI (ChatGPT), Anthropic (Claude), Google (Gemini)
-- AI players can generate clues, make guesses, and attempt interceptions
+- AI players carry a full `AIPlayerConfig`: provider, model, timeout_ms, temperature, prompt_strategy
+- **Model Selection**: Per-player model choice (e.g. gpt-4o, o3, claude-sonnet-4-20250514, gemini-2.5-pro)
+- **Reasoning Model Support**: OpenAI o-series (reasoning_effort, no temperature), Claude extended thinking (budget_tokens), Gemini thinking models (thinkingConfig)
+- **Prompt Strategies**: Named presets ("default", "advanced") stored in `server/promptStrategies.ts`. Advanced uses chain-of-thought, theory-of-mind, full history analysis
+- **Configurable Timeouts**: Per-player timeout (default 120s, max 300s). UI shows real-time elapsed time while AI thinks
+- **Reasoning Traces**: When models return chain-of-thought/thinking tokens, these are captured in server logs
 - Lazy initialization of AI clients to avoid startup crashes
-- 30-second timeout on all AI calls with automatic fallback values
 - AI failures broadcast "ai_fallback" messages to all clients for UI feedback
 - Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status
 
@@ -87,9 +91,10 @@ server/           # Express backend
   routes.ts       # API route registration (games, match history)
   websocket.ts    # WebSocket handler for game logic + match persistence
   game.ts         # Game state management functions
-  ai.ts           # AI provider integrations with call logging
+  ai.ts           # AI provider integrations (configurable models, reasoning support, trace capture) with call logging
   db.ts           # Database connection setup
   storage.ts      # Storage interface with match/round/AI log CRUD
+  promptStrategies.ts # Named prompt strategy presets (default, advanced)
 shared/           # Shared code between client and server
   schema.ts       # Zod schemas and TypeScript types
   models/         # Drizzle database models

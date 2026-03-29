@@ -8,7 +8,7 @@ import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
 import { Target } from "lucide-react";
 
 export function GuessingView() {
-  const { gameState, playerId, myTeam, myKeywords, sendMessage, aiThinking } = useGame();
+  const { gameState, playerId, myTeam, myKeywords, sendMessage, aiThinking, aiThinkingStartTime } = useGame();
 
   if (!gameState || !myTeam) return null;
 
@@ -103,7 +103,7 @@ export function GuessingView() {
           <CardContent className="py-8">
             <div className="flex flex-col items-center gap-4 text-center">
               {aiThinking ? (
-                <AIThinkingIndicator aiName={aiThinking} context="guess" />
+                <AIThinkingIndicator aiName={aiThinking} context="guess" startTime={aiThinkingStartTime} />
               ) : (
                 <>
                   <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">

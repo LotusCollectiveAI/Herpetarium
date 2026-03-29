@@ -10,6 +10,7 @@ interface GameContextType {
   isHost: boolean;
   isConnected: boolean;
   aiThinking: string | null;
+  aiThinkingStartTime: number | null;
   aiFallback: string | null;
   clueError: string | null;
   myKeywords: string[] | null;
@@ -31,6 +32,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [playerName, setPlayerName] = useState<string | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [aiThinking, setAiThinking] = useState<string | null>(null);
+  const [aiThinkingStartTime, setAiThinkingStartTime] = useState<number | null>(null);
   const [aiFallback, setAiFallback] = useState<string | null>(null);
   const [clueError, setClueError] = useState<string | null>(null);
   const [myKeywords, setMyKeywords] = useState<string[] | null>(null);
@@ -133,9 +135,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
             break;
           case "ai_thinking":
             setAiThinking(message.aiName);
+            setAiThinkingStartTime(message.startTime ?? Date.now());
             break;
           case "ai_done":
             setAiThinking(null);
+            setAiThinkingStartTime(null);
             break;
           case "ai_fallback":
             setAiFallback(`${message.aiName}: ${message.reason}`);
@@ -232,6 +236,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       isHost,
       isConnected,
       aiThinking,
+      aiThinkingStartTime,
       aiFallback,
       clueError,
       myKeywords,

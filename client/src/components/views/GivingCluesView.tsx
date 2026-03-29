@@ -7,7 +7,7 @@ import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
 import { MessageSquare } from "lucide-react";
 
 export function GivingCluesView() {
-  const { gameState, playerId, myTeam, myKeywords, myCode, sendMessage, aiThinking } = useGame();
+  const { gameState, playerId, myTeam, myKeywords, myCode, sendMessage, aiThinking, aiThinkingStartTime } = useGame();
 
   if (!gameState || !myTeam) return null;
 
@@ -76,7 +76,7 @@ export function GivingCluesView() {
           <CardContent className="py-8">
             <div className="flex flex-col items-center gap-4 text-center">
               {aiThinking ? (
-                <AIThinkingIndicator aiName={aiThinking} context="clues" />
+                <AIThinkingIndicator aiName={aiThinking} context="clues" startTime={aiThinkingStartTime} />
               ) : clueGiver ? (
                 <>
                   <PlayerAvatar player={clueGiver} size="lg" showName={false} />
