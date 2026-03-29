@@ -10,6 +10,11 @@ import {
   submitInterception,
   generatePlayerId,
   getAIProviderName,
+  generateSeed,
+  createSeededRng,
+  getRandomKeywords,
+  generateSecretCode,
+  validateGameState,
 } from "./game";
 import {
   generateClues,
@@ -40,12 +45,12 @@ function withTimeout<T>(
   const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
   const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
     setTimeout(() => resolve({
-      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout" },
+      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
       timedOut: true,
     }), timeoutMs)
   );
   return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error" },
+    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error", parseQuality: "error" as const },
     timedOut: false,
   }));
 }
@@ -71,6 +76,10 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
       latencyMs: callResult.latencyMs,
       timedOut,
       error: callResult.error || null,
+      parseQuality: callResult.parseQuality || null,
+      promptTokens: callResult.promptTokens || null,
+      completionTokens: callResult.completionTokens || null,
+      totalTokens: callResult.totalTokens || null,
     });
   } catch (err) {
     log(`[headless] Failed to log AI call: ${err}`, "headless");
@@ -242,8 +251,19 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     game = addPlayer(game, player);
   }
 
+  const seed = config.seed || generateSeed();
+  const rng = createSeededRng(seed);
+
   game = startGame(game);
   game = autoAssignRemainingPlayers(game);
+
+  game = {
+    ...game,
+    teams: {
+      amber: { ...game.teams.amber, keywords: getRandomKeywords(4, rng) },
+      blue: { ...game.teams.blue, keywords: getRandomKeywords(4, rng) },
+    },
+  };
 
   const playerConfigs = game.players.map(p => ({
     id: p.id,
@@ -263,13 +283,14 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     amberBlackTokens: 0,
     blueWhiteTokens: 0,
     blueBlackTokens: 0,
+    gameSeed: seed,
   });
 
   const matchId = match.id;
   log(`[headless] Match ${matchId} started (game ${game.id})`, "headless");
 
   while (game.phase !== "game_over" && game.round < MAX_ROUNDS) {
-    game = startNewRound(game);
+    game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 
     game = await processClues(game, matchId, scratchNotesMap);
@@ -290,6 +311,11 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
 
     if (game.phase === "round_results" || game.phase === "game_over") {
       await persistRoundResults(matchId, game);
+    }
+
+    const validationErrors = validateGameState(game);
+    if (validationErrors.length > 0) {
+      log(`[headless] Match ${matchId} validation issues: ${JSON.stringify(validationErrors)}`, "headless");
     }
 
     if (game.phase === "game_over") {

@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
-import type { AIPlayerConfig } from "@shared/schema";
+import type { AIPlayerConfig, ParseQuality } from "@shared/schema";
 import { getPromptStrategy } from "./promptStrategies";
 import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
 
@@ -54,11 +54,18 @@ export interface AICallResult<T> {
   latencyMs: number;
   error?: string;
   reasoningTrace?: string;
+  parseQuality?: ParseQuality;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 interface RawAIResponse {
   text: string;
   reasoningTrace?: string;
+  promptTokens?: number;
+  completionTokens?: number;
+  totalTokens?: number;
 }
 
 async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
@@ -82,7 +89,14 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
       reasoningTrace = msg.reasoning_content;
     }
 
-    return { text, reasoningTrace };
+    const usage = response.usage;
+    return {
+      text,
+      reasoningTrace,
+      promptTokens: usage?.prompt_tokens,
+      completionTokens: usage?.completion_tokens,
+      totalTokens: usage?.total_tokens,
+    };
   }
 
   const response = await getOpenAI().chat.completions.create({
@@ -95,7 +109,13 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
     temperature: config.temperature ?? 0.7,
   });
 
-  return { text: response.choices[0]?.message?.content || "" };
+  const usage = response.usage;
+  return {
+    text: response.choices[0]?.message?.content || "",
+    promptTokens: usage?.prompt_tokens,
+    completionTokens: usage?.completion_tokens,
+    totalTokens: usage?.total_tokens,
+  };
 }
 
 async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
@@ -124,7 +144,13 @@ async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userP
         }
       }
 
-      return { text, reasoningTrace };
+      return {
+        text,
+        reasoningTrace,
+        promptTokens: response.usage?.input_tokens,
+        completionTokens: response.usage?.output_tokens,
+        totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0) || undefined,
+      };
     } catch {
     }
   }
@@ -137,7 +163,12 @@ async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userP
   });
 
   const content = response.content[0];
-  return { text: content.type === "text" ? content.text : "" };
+  return {
+    text: content.type === "text" ? content.text : "",
+    promptTokens: response.usage?.input_tokens,
+    completionTokens: response.usage?.output_tokens,
+    totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0) || undefined,
+  };
 }
 
 async function callGemini(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
@@ -172,7 +203,14 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
       text = response.text || "";
     }
 
-    return { text, reasoningTrace };
+    const usageMeta = (response as any).usageMetadata;
+    return {
+      text,
+      reasoningTrace,
+      promptTokens: usageMeta?.promptTokenCount,
+      completionTokens: usageMeta?.candidatesTokenCount,
+      totalTokens: usageMeta?.totalTokenCount,
+    };
   }
 
   const response = await getGemini().models.generateContent({
@@ -180,7 +218,13 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
     contents: `${systemPrompt}\n\n${userPrompt}`,
   });
 
-  return { text: response.text || "" };
+  const usageMeta = (response as any).usageMetadata;
+  return {
+    text: response.text || "",
+    promptTokens: usageMeta?.promptTokenCount,
+    completionTokens: usageMeta?.candidatesTokenCount,
+    totalTokens: usageMeta?.totalTokenCount,
+  };
 }
 
 async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
@@ -194,25 +238,51 @@ async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: 
   }
 }
 
-function parseCodeResponse(response: string): [number, number, number] {
-  const cleaned = response.replace(/[^1-4,]/g, "");
-  const numbers = cleaned.split(",").map(n => parseInt(n.trim())).filter(n => n >= 1 && n <= 4);
-
-  if (numbers.length >= 3) {
-    return [numbers[0], numbers[1], numbers[2]] as [number, number, number];
-  }
-
-  return [1, 2, 3] as [number, number, number];
+interface ParseResult<T> {
+  value: T;
+  quality: ParseQuality;
 }
 
-function parseCluesResponse(response: string): string[] {
-  const words = response.split(",").map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length > 0);
+function parseCodeResponse(response: string): ParseResult<[number, number, number]> {
+  const cleaned = response.replace(/[^1-4,\s]/g, "");
+  const numbers = cleaned.split(/[,\s]+/).map(n => parseInt(n.trim())).filter(n => n >= 1 && n <= 4);
 
-  if (words.length >= 3) {
-    return words.slice(0, 3);
+  if (numbers.length >= 3) {
+    const code = [numbers[0], numbers[1], numbers[2]] as [number, number, number];
+    const unique = new Set(code);
+    const quality: ParseQuality = unique.size === 3 ? "valid" : "partial";
+    return { value: code, quality };
   }
 
-  return ["hint", "clue", "guess"];
+  console.warn(`[PARSE_FALLBACK] parseCodeResponse got unusable response: "${response.slice(0, 200)}"`);
+  return { value: [1, 2, 3] as [number, number, number], quality: "fallback" };
+}
+
+function parseCluesResponse(response: string): ParseResult<string[]> {
+  const lines = response.split("\n").map(l => l.trim()).filter(l => l.length > 0);
+  let words: string[] = [];
+
+  for (const line of lines) {
+    const lineWords = line.split(",").map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length > 0);
+    words.push(...lineWords);
+  }
+
+  if (words.length === 0) {
+    words = response.split(/[\s,]+/).map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length > 0);
+  }
+
+  if (words.length >= 3) {
+    return { value: words.slice(0, 3), quality: "valid" };
+  }
+
+  if (words.length > 0 && words.length < 3) {
+    while (words.length < 3) words.push("hint");
+    console.warn(`[PARSE_PARTIAL] parseCluesResponse padded incomplete response: "${response.slice(0, 200)}"`);
+    return { value: words, quality: "partial" };
+  }
+
+  console.warn(`[PARSE_FALLBACK] parseCluesResponse got unusable response: "${response.slice(0, 200)}"`);
+  return { value: ["hint", "clue", "guess"], quality: "fallback" };
 }
 
 export const MODEL_MAP: Record<string, string> = {
@@ -259,11 +329,15 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
   try {
     const raw = await callAI(config, strategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
-    const result = parseCluesResponse(raw.text);
-    return { result, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
+    const parsed = parseCluesResponse(raw.text);
+    return {
+      result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
+      reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
+      promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+    };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: ["hint", "clue", "guess"], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
+    return { result: ["hint", "clue", "guess"], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
   }
 }
 
@@ -276,11 +350,15 @@ export async function generateGuess(configOrProvider: AIPlayerConfig | string, p
   try {
     const raw = await callAI(config, strategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
-    const result = parseCodeResponse(raw.text);
-    return { result, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
+    const parsed = parseCodeResponse(raw.text);
+    return {
+      result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
+      reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
+      promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+    };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
+    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
   }
 }
 
@@ -351,10 +429,14 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
     if (approxTokens > params.tokenBudget * 1.5) {
       notes = notes.slice(0, params.tokenBudget * 6);
     }
-    return { result: notes, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
+    return {
+      result: notes, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
+      reasoningTrace: raw.reasoningTrace, parseQuality: "valid",
+      promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+    };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: params.currentNotes || "", prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
+    return { result: params.currentNotes || "", prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
   }
 }
 
@@ -367,10 +449,14 @@ export async function generateInterception(configOrProvider: AIPlayerConfig | st
   try {
     const raw = await callAI(config, strategy.systemPrompt, prompt);
     const latencyMs = Date.now() - startTime;
-    const result = parseCodeResponse(raw.text);
-    return { result, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
+    const parsed = parseCodeResponse(raw.text);
+    return {
+      result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
+      reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
+      promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
+    };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
+    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
   }
 }

@@ -52,13 +52,13 @@ function withTimeout<T>(
 
   const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
     setTimeout(() => resolve({
-      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout" },
+      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
       timedOut: true,
     }), timeoutMs)
   );
 
   return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error" },
+    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error", parseQuality: "error" as const },
     timedOut: false,
   }));
 }
@@ -170,6 +170,10 @@ async function logAiCall(gameId: string, roundNumber: number, provider: string, 
       latencyMs: callResult.latencyMs,
       timedOut,
       error: callResult.error || null,
+      parseQuality: callResult.parseQuality || null,
+      promptTokens: callResult.promptTokens || null,
+      completionTokens: callResult.completionTokens || null,
+      totalTokens: callResult.totalTokens || null,
     });
   } catch (err) {
     log(`Failed to log AI call: ${err}`, "websocket");

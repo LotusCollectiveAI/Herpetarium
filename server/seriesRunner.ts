@@ -55,6 +55,10 @@ async function logReflectionCall(matchId: number, gameId: string, provider: stri
       latencyMs: callResult.latencyMs,
       timedOut: false,
       error: callResult.error || null,
+      parseQuality: callResult.parseQuality || null,
+      promptTokens: callResult.promptTokens || null,
+      completionTokens: callResult.completionTokens || null,
+      totalTokens: callResult.totalTokens || null,
     });
   } catch (err) {
     log(`[series] Failed to log reflection AI call: ${err}`, "series");

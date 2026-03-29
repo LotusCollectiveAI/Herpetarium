@@ -214,6 +214,7 @@ export const matches = pgTable("matches", {
   amberBlackTokens: integer("amber_black_tokens").notNull().default(0),
   blueWhiteTokens: integer("blue_white_tokens").notNull().default(0),
   blueBlackTokens: integer("blue_black_tokens").notNull().default(0),
+  gameSeed: varchar("game_seed", { length: 50 }),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
@@ -238,6 +239,8 @@ export const insertMatchRoundSchema = createInsertSchema(matchRounds).omit({ id:
 export type InsertMatchRound = z.infer<typeof insertMatchRoundSchema>;
 export type MatchRound = typeof matchRounds.$inferSelect;
 
+export type ParseQuality = "valid" | "partial" | "fallback" | "error";
+
 export const aiCallLogs = pgTable("ai_call_logs", {
   id: serial("id").primaryKey(),
   matchId: integer("match_id"),
@@ -252,6 +255,10 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   latencyMs: integer("latency_ms"),
   timedOut: boolean("timed_out").notNull().default(false),
   error: text("error"),
+  parseQuality: varchar("parse_quality", { length: 20 }),
+  promptTokens: integer("prompt_tokens"),
+  completionTokens: integer("completion_tokens"),
+  totalTokens: integer("total_tokens"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -321,6 +328,7 @@ export interface HeadlessMatchConfig {
     team: "amber" | "blue";
   }>;
   fastMode?: boolean;
+  seed?: string;
 }
 
 export interface TournamentConfig {

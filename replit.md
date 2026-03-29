@@ -48,7 +48,7 @@ Preferred communication style: Simple, everyday language.
 - **Reasoning Traces**: When models return chain-of-thought/thinking tokens, these are captured in server logs
 - Lazy initialization of AI clients to avoid startup crashes
 - AI failures broadcast "ai_fallback" messages to all clients for UI feedback
-- Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status
+- Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status, parse quality (valid/partial/fallback/error), prompt/completion/total token counts
 
 ### Persistent Scratch Notes & Series
 - **Series System**: Agents play multiple games in sequence, carrying strategic notes forward between games
@@ -59,8 +59,14 @@ Preferred communication style: Simple, everyday language.
 - **API Endpoints**: POST `/api/series` (create and run), GET `/api/series` (list), GET `/api/series/:id` (detail with note evolution)
 - **UI**: `/series` page with series creation form, list view, detail view with notes evolution timeline and token growth visualization
 
+### Data Foundation (Phase A)
+- **Parse Quality Tracking**: Every AI response is tagged as `valid`, `partial`, `fallback`, or `error` — no more silent data corruption
+- **Token/Cost Logging**: `promptTokens`, `completionTokens`, `totalTokens` extracted from all providers (OpenAI usage, Anthropic input/output tokens, Gemini usageMetadata)
+- **Seed-based Reproducibility**: Headless matches use deterministic PRNG (xorshift32) seeded per match. Seed stored in `matches.gameSeed` column. Replay identical keyword/code sequences by reusing a seed
+- **Game State Validation**: `validateGameState()` checks invariants (token counts, team membership, winner/phase consistency, duplicate IDs) and logs warnings during headless matches
+
 ### Match Persistence
-- **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`, `experiments`, `tournaments`, `tournament_matches`
+- **Database Tables**: `matches` (incl. `gameSeed`), `match_rounds`, `ai_call_logs` (incl. `parseQuality`, `promptTokens`, `completionTokens`, `totalTokens`), `experiments`, `tournaments`, `tournament_matches`
 - Match record created when teams are confirmed (before first round)
 - Round results persisted after each round completes (with dedup guard)
 - Game completion updates match with winner and final token counts

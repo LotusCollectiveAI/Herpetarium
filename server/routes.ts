@@ -351,16 +351,21 @@ export async function registerRoutes(
       const allRounds = await storage.getMatchRoundsForMatches(matchIds);
 
       if (format === "csv") {
-        const csvRows = ["id,gameId,createdAt,completedAt,winner,totalRounds,amberWhiteTokens,amberBlackTokens,blueWhiteTokens,blueBlackTokens"];
+        const csvRows = ["id,gameId,gameSeed,createdAt,completedAt,winner,totalRounds,amberWhiteTokens,amberBlackTokens,blueWhiteTokens,blueBlackTokens,amberKeywords,blueKeywords,playerConfigs"];
         allMatches.forEach(m => {
+          const esc = (v: any) => typeof v === 'string' && v.includes(',') ? `"${v.replace(/"/g, '""')}"` : (v ?? "");
           csvRows.push([
             m.id, m.gameId,
+            m.gameSeed || "",
             m.createdAt ? new Date(m.createdAt).toISOString() : "",
             m.completedAt ? new Date(m.completedAt).toISOString() : "",
             m.winner || "",
             m.totalRounds,
             m.amberWhiteTokens, m.amberBlackTokens,
             m.blueWhiteTokens, m.blueBlackTokens,
+            esc(JSON.stringify(m.amberKeywords)),
+            esc(JSON.stringify(m.blueKeywords)),
+            esc(JSON.stringify(m.playerConfigs)),
           ].join(","));
         });
         res.setHeader("Content-Type", "text/csv");
@@ -382,7 +387,7 @@ export async function registerRoutes(
       const allLogs = await storage.getAllAiCallLogs();
 
       if (format === "csv") {
-        const csvRows = ["id,matchId,gameId,roundNumber,provider,model,actionType,latencyMs,timedOut,error,createdAt"];
+        const csvRows = ["id,matchId,gameId,roundNumber,provider,model,actionType,latencyMs,timedOut,parseQuality,promptTokens,completionTokens,totalTokens,error,createdAt"];
         allLogs.forEach(l => {
           csvRows.push([
             l.id, l.matchId || "", l.gameId || "",
@@ -390,6 +395,10 @@ export async function registerRoutes(
             l.provider, l.model, l.actionType,
             l.latencyMs || "",
             l.timedOut,
+            l.parseQuality || "",
+            l.promptTokens || "",
+            l.completionTokens || "",
+            l.totalTokens || "",
             l.error ? `"${l.error.replace(/"/g, '""')}"` : "",
             l.createdAt ? new Date(l.createdAt).toISOString() : "",
           ].join(","));

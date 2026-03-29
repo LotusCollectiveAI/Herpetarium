@@ -1,5 +1,32 @@
 import { GameState, Player, RoundHistory, AIProvider } from "@shared/schema";
 
+export function createSeededRng(seed: string): () => number {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) {
+    h = Math.imul(31, h) + seed.charCodeAt(i) | 0;
+  }
+  let s = h >>> 0;
+  return () => {
+    s ^= s << 13;
+    s ^= s >> 17;
+    s ^= s << 5;
+    return (s >>> 0) / 4294967296;
+  };
+}
+
+export function generateSeed(): string {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function seededShuffleArray<T>(array: T[], rng: () => number): T[] {
+  const shuffled = [...array];
+  for (let i = shuffled.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  }
+  return shuffled;
+}
+
 // Word list for generating keywords
 const WORD_LIST = [
   "beach", "castle", "dragon", "eagle", "forest", "garden", "harbor", "island",
@@ -34,14 +61,14 @@ export function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-export function getRandomKeywords(count: number = 4): string[] {
-  const shuffled = shuffleArray(WORD_LIST);
+export function getRandomKeywords(count: number = 4, rng?: () => number): string[] {
+  const shuffled = rng ? seededShuffleArray(WORD_LIST, rng) : shuffleArray(WORD_LIST);
   return shuffled.slice(0, count);
 }
 
-export function generateSecretCode(): [number, number, number] {
+export function generateSecretCode(rng?: () => number): [number, number, number] {
   const numbers = [1, 2, 3, 4];
-  const shuffled = shuffleArray(numbers);
+  const shuffled = rng ? seededShuffleArray(numbers, rng) : shuffleArray(numbers);
   return [shuffled[0], shuffled[1], shuffled[2]] as [number, number, number];
 }
 
@@ -153,19 +180,17 @@ export function autoAssignRemainingPlayers(game: GameState): GameState {
   };
 }
 
-export function startNewRound(game: GameState): GameState {
+export function startNewRound(game: GameState, rng?: () => number): GameState {
   const newRound = game.round + 1;
   
-  // Select clue givers (rotate through team members)
   const amberPlayers = game.players.filter(p => p.team === "amber");
   const bluePlayers = game.players.filter(p => p.team === "blue");
   
   const amberClueGiver = amberPlayers[(newRound - 1) % amberPlayers.length]?.id || null;
   const blueClueGiver = bluePlayers[(newRound - 1) % bluePlayers.length]?.id || null;
   
-  // Generate secret codes
-  const amberCode = generateSecretCode();
-  const blueCode = generateSecretCode();
+  const amberCode = generateSecretCode(rng);
+  const blueCode = generateSecretCode(rng);
   
   return {
     ...game,
@@ -320,4 +345,63 @@ export function getAIProviderName(provider: AIProvider): string {
     case "claude": return "Claude";
     case "gemini": return "Gemini";
   }
+}
+
+export interface ValidationError {
+  field: string;
+  message: string;
+  severity: "error" | "warning";
+}
+
+export function validateGameState(game: GameState): ValidationError[] {
+  const errors: ValidationError[] = [];
+
+  if (game.round < 0) {
+    errors.push({ field: "round", message: `Invalid round number: ${game.round}`, severity: "error" });
+  }
+
+  for (const team of ["amber", "blue"] as const) {
+    const ts = game.teams[team];
+    if (ts.whiteTokens < 0) {
+      errors.push({ field: `teams.${team}.whiteTokens`, message: `Negative white tokens: ${ts.whiteTokens}`, severity: "error" });
+    }
+    if (ts.blackTokens < 0) {
+      errors.push({ field: `teams.${team}.blackTokens`, message: `Negative black tokens: ${ts.blackTokens}`, severity: "error" });
+    }
+    if (game.phase !== "lobby" && game.phase !== "team_setup" && ts.keywords.length !== 4) {
+      errors.push({ field: `teams.${team}.keywords`, message: `Expected 4 keywords, got ${ts.keywords.length}`, severity: "error" });
+    }
+    const completedRounds = (game.phase === "round_results" || game.phase === "game_over") ? game.round : Math.max(0, game.round - 1);
+    if (game.round > 0 && ts.history.length !== completedRounds) {
+      errors.push({ field: `teams.${team}.history`, message: `Expected ${completedRounds} history entries, got ${ts.history.length}`, severity: "warning" });
+    }
+  }
+
+  const amberPlayers = game.players.filter(p => p.team === "amber");
+  const bluePlayers = game.players.filter(p => p.team === "blue");
+
+  if (game.phase !== "lobby" && game.phase !== "team_setup") {
+    if (amberPlayers.length === 0) {
+      errors.push({ field: "players", message: "Amber team has no players", severity: "error" });
+    }
+    if (bluePlayers.length === 0) {
+      errors.push({ field: "players", message: "Blue team has no players", severity: "error" });
+    }
+  }
+
+  if (game.phase === "game_over" && game.winner === null) {
+    errors.push({ field: "winner", message: "Game is over but no winner set", severity: "warning" });
+  }
+
+  if (game.phase !== "game_over" && game.winner !== null) {
+    errors.push({ field: "winner", message: "Winner set but game not over", severity: "error" });
+  }
+
+  const playerIds = game.players.map(p => p.id);
+  const uniqueIds = new Set(playerIds);
+  if (uniqueIds.size !== playerIds.length) {
+    errors.push({ field: "players", message: "Duplicate player IDs detected", severity: "error" });
+  }
+
+  return errors;
 }
