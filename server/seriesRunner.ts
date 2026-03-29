@@ -78,6 +78,7 @@ export async function createSeries(config: SeriesConfig) {
     status: "pending",
     noteTokenBudget: tokenBudget,
     budgetCapUsd: config.budgetCapUsd || null,
+    estimatedCostUsd: config.estimatedCostUsd || null,
   });
 
   return s;

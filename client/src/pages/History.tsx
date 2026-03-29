@@ -136,23 +136,39 @@ function ReasoningTraceViewer({ log }: { log: AiCallLog }) {
   );
 }
 
-function getCallOutcome(aiLog: AiCallLog, rounds: MatchRound[]): { label: string; variant: "default" | "destructive" | "outline" | "secondary" } | null {
+function inferTeamFromAiLog(aiLog: AiCallLog, players: PlayerConfig[]): string | null {
+  const aiPlayersOnTeam = (team: string) => players.filter(p => p.isAI && p.team === team && p.aiProvider === aiLog.provider);
+  const amberMatches = aiPlayersOnTeam("amber");
+  const blueMatches = aiPlayersOnTeam("blue");
+  if (amberMatches.length > 0 && blueMatches.length === 0) return "amber";
+  if (blueMatches.length > 0 && amberMatches.length === 0) return "blue";
+  return null;
+}
+
+function getCallOutcome(aiLog: AiCallLog, rounds: MatchRound[], players: PlayerConfig[]): { label: string; variant: "default" | "destructive" | "outline" | "secondary" } | null {
   if (!aiLog.actionType || !aiLog.roundNumber) return null;
-  const round = rounds.find(r => r.roundNumber === aiLog.roundNumber);
-  if (!round) return null;
 
   const action = aiLog.actionType.toLowerCase();
+  const team = inferTeamFromAiLog(aiLog, players);
+
   if (action === "clue" || action === "generate_clues") {
+    const round = team ? rounds.find(r => r.roundNumber === aiLog.roundNumber && r.team === team) : rounds.find(r => r.roundNumber === aiLog.roundNumber);
+    if (!round) return null;
     if (round.intercepted) return { label: "Intercepted", variant: "destructive" };
     if (round.ownCorrect) return { label: "Safe", variant: "default" };
     return { label: "Misread", variant: "destructive" };
   }
   if (action === "guess" || action === "generate_guess") {
+    const round = team ? rounds.find(r => r.roundNumber === aiLog.roundNumber && r.team === team) : rounds.find(r => r.roundNumber === aiLog.roundNumber);
+    if (!round) return null;
     return round.ownCorrect
       ? { label: "Correct", variant: "default" }
       : { label: "Wrong", variant: "destructive" };
   }
   if (action === "intercept" || action === "generate_interception") {
+    const opponentTeam = team === "amber" ? "blue" : team === "blue" ? "amber" : null;
+    const round = opponentTeam ? rounds.find(r => r.roundNumber === aiLog.roundNumber && r.team === opponentTeam) : rounds.find(r => r.roundNumber === aiLog.roundNumber);
+    if (!round) return null;
     return round.intercepted
       ? { label: "Intercepted!", variant: "default" }
       : { label: "Missed", variant: "secondary" };
@@ -322,7 +338,7 @@ function MatchRow({ match, hasTraces }: { match: Match; hasTraces: boolean }) {
 
                     <div className="space-y-2 max-h-[500px] overflow-y-auto">
                       {detail.aiLogs.map(aiLog => {
-                        const outcome = getCallOutcome(aiLog, detail.rounds);
+                        const outcome = getCallOutcome(aiLog, detail.rounds, match.playerConfigs as PlayerConfig[]);
                         return (
                           <div key={aiLog.id} className="text-xs border rounded p-2 bg-background" data-testid={`ai-log-${aiLog.id}`}>
                             <div className="flex items-center gap-2 mb-1 flex-wrap">

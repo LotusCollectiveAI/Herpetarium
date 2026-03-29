@@ -11,6 +11,38 @@ import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, ana
 import { MODEL_COST_PER_1K } from "./ai";
 import { getDefaultConfig } from "@shared/schema";
 
+function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: any }>, totalGames: number, includeReflection = false): number {
+  const AVG_ROUNDS_PER_GAME = 6;
+  const CALL_TYPE_TOKENS: Record<string, { input: number; output: number; callsPerRound: number }> = {
+    clue:        { input: 900, output: 150, callsPerRound: 1 },
+    guess:       { input: 650, output: 80,  callsPerRound: 1 },
+    intercept:   { input: 750, output: 80,  callsPerRound: 0.5 },
+    reflection:  { input: 1200, output: 300, callsPerRound: 0 },
+  };
+  let total = 0;
+  const uniqueModels = new Map<string, { provider: string; count: number }>();
+  for (const p of players) {
+    if (!p.aiProvider) continue;
+    const config = p.aiConfig || getDefaultConfig(p.aiProvider);
+    const model = config.model || getDefaultConfig(p.aiProvider).model;
+    const key = `${p.aiProvider}:${model}`;
+    const existing = uniqueModels.get(key);
+    if (existing) existing.count++; else uniqueModels.set(key, { provider: p.aiProvider, count: 1 });
+  }
+  for (const [key, info] of uniqueModels) {
+    const model = key.split(":")[1];
+    const costs = MODEL_COST_PER_1K[model];
+    if (!costs) continue;
+    for (const [callType, spec] of Object.entries(CALL_TYPE_TOKENS)) {
+      if (callType === "reflection" && !includeReflection) continue;
+      const callsPerGame = callType === "reflection" ? 1 : spec.callsPerRound * AVG_ROUNDS_PER_GAME;
+      const costPerCall = (spec.input / 1000) * costs.input + (spec.output / 1000) * costs.output;
+      total += costPerCall * callsPerGame * info.count * totalGames;
+    }
+  }
+  return +total.toFixed(4);
+}
+
 const headlessMatchConfigSchema = z.object({
   players: z.array(z.object({
     name: z.string(),
@@ -158,7 +190,12 @@ export async function registerRoutes(
         }
       }
 
-      const tournament = await createTournament(config);
+      const allPlayers = config.matchConfigs.flatMap(mc => mc.players);
+      const gamesPerMatchup = config.gamesPerMatchup || 1;
+      const totalGames = config.matchConfigs.length * gamesPerMatchup;
+      const estimatedCost = computeEstimatedCost(allPlayers, totalGames);
+
+      const tournament = await createTournament(config, estimatedCost > 0 ? estimatedCost.toFixed(4) : null);
 
       runTournament(tournament.id).catch(err => {
         console.error("Tournament execution failed:", err);
@@ -502,11 +539,14 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Each team must have at least 1 player" });
       }
 
+      const estimatedCost = computeEstimatedCost(matchConfig.players, config.totalGames, true);
+
       const s = await createSeries({
         matchConfig,
         totalGames: config.totalGames,
         noteTokenBudget: config.noteTokenBudget,
         budgetCapUsd: config.budgetCapUsd,
+        estimatedCostUsd: estimatedCost > 0 ? estimatedCost.toFixed(4) : undefined,
       });
 
       runSeries(s.id).catch(err => {
@@ -565,14 +605,19 @@ export async function registerRoutes(
 
       const matchIds = [...new Set(notes.filter(n => n.matchId).map(n => n.matchId as number))];
       const unsortedDetails = await storage.getMatchesByIds(matchIds);
-      const matchDetails = unsortedDetails.sort((a: any, b: any) => a.id - b.id);
+      const matchDetailsWithRounds = await Promise.all(
+        unsortedDetails.sort((a: any, b: any) => a.id - b.id).map(async (m) => {
+          const rounds = await storage.getMatchRounds(m.id);
+          return { ...m, rounds };
+        })
+      );
 
       res.json({
         series: s,
         notes,
         notesByPlayer,
         playerHashes,
-        matchDetails,
+        matchDetails: matchDetailsWithRounds,
         running,
       });
     } catch (error: any) {

@@ -9,7 +9,7 @@ export function isTournamentRunning(id: number): boolean {
   return activeTournaments.get(id) === true;
 }
 
-export async function createTournament(config: TournamentConfig) {
+export async function createTournament(config: TournamentConfig, estimatedCostUsd?: string | null) {
   const gamesPerMatchup = config.gamesPerMatchup || 1;
   const allMatchConfigs: HeadlessMatchConfig[] = [];
 
@@ -26,6 +26,7 @@ export async function createTournament(config: TournamentConfig) {
     totalMatches: allMatchConfigs.length,
     completedMatches: 0,
     budgetCapUsd: config.budgetCapUsd || null,
+    estimatedCostUsd: estimatedCostUsd || null,
   });
 
   for (let i = 0; i < allMatchConfigs.length; i++) {

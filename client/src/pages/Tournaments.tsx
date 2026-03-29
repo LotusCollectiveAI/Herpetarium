@@ -36,6 +36,7 @@ interface Tournament {
   completedMatches: number;
   budgetCapUsd: string | null;
   actualCostUsd: string | null;
+  estimatedCostUsd: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -145,12 +146,19 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
             </div>
 
             <div className="flex items-center gap-3 flex-shrink-0">
-              {tournament.actualCostUsd && (
-                <Badge variant="outline" className="text-xs gap-1" data-testid={`tournament-actual-cost-${tournament.id}`}>
+              {(tournament.actualCostUsd || tournament.estimatedCostUsd) && (
+                <Badge variant="outline" className="text-xs gap-1" data-testid={`tournament-cost-${tournament.id}`}>
                   <DollarSign className="h-3 w-3" />
-                  ${parseFloat(tournament.actualCostUsd).toFixed(4)}
+                  {tournament.actualCostUsd
+                    ? <>${parseFloat(tournament.actualCostUsd).toFixed(4)}</>
+                    : null}
+                  {tournament.estimatedCostUsd && (
+                    <span className="text-muted-foreground">
+                      {tournament.actualCostUsd ? " / " : ""}est. ${parseFloat(tournament.estimatedCostUsd).toFixed(4)}
+                    </span>
+                  )}
                   {tournament.budgetCapUsd && (
-                    <span className="text-muted-foreground">/ ${parseFloat(tournament.budgetCapUsd).toFixed(2)}</span>
+                    <span className="text-muted-foreground"> (cap ${parseFloat(tournament.budgetCapUsd).toFixed(2)})</span>
                   )}
                 </Badge>
               )}

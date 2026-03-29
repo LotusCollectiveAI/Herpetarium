@@ -279,6 +279,7 @@ export const tournaments = pgTable("tournaments", {
   completedMatches: integer("completed_matches").notNull().default(0),
   budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
   actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
+  estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
@@ -354,6 +355,7 @@ export const series = pgTable("series", {
   noteTokenBudget: integer("note_token_budget").notNull().default(500),
   budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
   actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
+  estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   startedAt: timestamp("started_at"),
   completedAt: timestamp("completed_at"),
@@ -383,6 +385,7 @@ export interface SeriesConfig {
   totalGames: number;
   noteTokenBudget?: number;
   budgetCapUsd?: string;
+  estimatedCostUsd?: string;
 }
 
 // Legacy exports for compatibility

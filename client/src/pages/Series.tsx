@@ -23,6 +23,7 @@ interface SeriesEntry {
   noteTokenBudget: number;
   budgetCapUsd: string | null;
   actualCostUsd: string | null;
+  estimatedCostUsd: string | null;
   createdAt: string;
   startedAt: string | null;
   completedAt: string | null;
@@ -332,6 +333,17 @@ function detectKeyMoments(notes: ScratchNote[], matchDetails: any[]): Array<{ ga
     }
   }
 
+  for (let i = 1; i < notes.length; i++) {
+    const prev = notes[i - 1];
+    const curr = notes[i];
+    const prevWords = new Set(prev.notesText.toLowerCase().split(/\s+/).filter(w => w.length > 4));
+    const currWords = curr.notesText.toLowerCase().split(/\s+/).filter(w => w.length > 4);
+    const newWords = currWords.filter(w => !prevWords.has(w));
+    if (newWords.length > 5) {
+      moments.push({ gameIndex: curr.gameIndex, type: "new_concept", description: `New concepts emerged (${newWords.length} new terms)` });
+    }
+  }
+
   for (const match of matchDetails) {
     const idx = matchDetails.indexOf(match);
     if (idx > 0 && match.winner && matchDetails[idx - 1].winner) {
@@ -395,6 +407,18 @@ function StrategyTimeline({ notes, matchDetails, team, playerName }: { notes: Sc
                     <Trophy className={`h-3 w-3 ${won ? "text-green-500" : "text-red-400"}`} />
                   )}
                   <span className="text-[9px] text-muted-foreground">{note.tokenCount}t</span>
+                  {matchResult?.rounds && (() => {
+                    const teamRounds = matchResult.rounds.filter((r: any) => r.team === team);
+                    const intercepted = teamRounds.filter((r: any) => r.intercepted).length;
+                    const total = teamRounds.length;
+                    if (total === 0) return null;
+                    const rate = Math.round((intercepted / total) * 100);
+                    return (
+                      <span className={`text-[9px] ${rate > 0 ? "text-red-500 font-medium" : "text-muted-foreground"}`} data-testid={`timeline-intercept-rate-${note.gameIndex}`}>
+                        {rate}% int
+                      </span>
+                    );
+                  })()}
                 </button>
                 {idx < notes.length - 1 && <div className={`h-0.5 w-3 ${teamColor} opacity-30`} />}
               </div>
@@ -584,7 +608,7 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
             <div className="text-2xl font-bold text-blue-500" data-testid="text-blue-wins">{blueWins}</div>
           </CardContent>
         </Card>
-        {(series.actualCostUsd || series.budgetCapUsd) && (
+        {(series.actualCostUsd || series.estimatedCostUsd || series.budgetCapUsd) && (
           <Card>
             <CardContent className="pt-4">
               <div className="text-sm text-muted-foreground flex items-center gap-1">
@@ -593,6 +617,11 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
               <div className="text-2xl font-bold" data-testid="text-series-actual-cost">
                 ${series.actualCostUsd ? parseFloat(series.actualCostUsd).toFixed(4) : "0.00"}
               </div>
+              {series.estimatedCostUsd && (
+                <div className="text-xs text-muted-foreground mt-1" data-testid="text-series-estimated-cost">
+                  Estimated: ${parseFloat(series.estimatedCostUsd).toFixed(4)}
+                </div>
+              )}
               {series.budgetCapUsd && (
                 <div className="text-xs text-muted-foreground mt-1" data-testid="text-series-budget-cap">
                   Cap: ${parseFloat(series.budgetCapUsd).toFixed(2)}
@@ -765,11 +794,18 @@ export default function Series() {
                       <div className="text-sm text-muted-foreground">{formatDate(s.createdAt)}</div>
                     </div>
                     <div className="flex items-center gap-3">
-                      {s.actualCostUsd && (
+                      {(s.actualCostUsd || s.estimatedCostUsd) && (
                         <Badge variant="outline" className="text-xs gap-1" data-testid={`badge-series-cost-${s.id}`}>
                           <DollarSign className="h-3 w-3" />
-                          ${parseFloat(s.actualCostUsd).toFixed(4)}
-                          {s.budgetCapUsd && <span className="text-muted-foreground">/ ${parseFloat(s.budgetCapUsd).toFixed(2)}</span>}
+                          {s.actualCostUsd
+                            ? <>${parseFloat(s.actualCostUsd).toFixed(4)}</>
+                            : null}
+                          {s.estimatedCostUsd && (
+                            <span className="text-muted-foreground">
+                              {s.actualCostUsd ? " / " : ""}est. ${parseFloat(s.estimatedCostUsd).toFixed(4)}
+                            </span>
+                          )}
+                          {s.budgetCapUsd && <span className="text-muted-foreground"> (cap ${parseFloat(s.budgetCapUsd).toFixed(2)})</span>}
                         </Badge>
                       )}
                       <span className="text-sm text-muted-foreground" data-testid={`text-series-progress-${s.id}`}>
