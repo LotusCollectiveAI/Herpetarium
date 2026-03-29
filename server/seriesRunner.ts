@@ -60,6 +60,7 @@ async function logReflectionCall(matchId: number, gameId: string, provider: stri
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
       estimatedCostUsd: callResult.estimatedCostUsd || null,
+      reasoningTrace: callResult.reasoningTrace || null,
     });
   } catch (err) {
     log(`[series] Failed to log reflection AI call: ${err}`, "series");

@@ -61,7 +61,7 @@ export interface AICallResult<T> {
   estimatedCostUsd?: string;
 }
 
-const MODEL_COST_PER_1K: Record<string, { input: number; output: number }> = {
+export const MODEL_COST_PER_1K: Record<string, { input: number; output: number }> = {
   "gpt-4o": { input: 0.0025, output: 0.01 },
   "gpt-4o-mini": { input: 0.00015, output: 0.0006 },
   "o3": { input: 0.01, output: 0.04 },

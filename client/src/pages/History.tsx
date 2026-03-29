@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ChevronDown, ChevronRight, ArrowLeft, Trophy, Clock, Users, Bot, Brain, FileDown } from "lucide-react";
+import { Lock, ChevronDown, ChevronRight, ArrowLeft, Trophy, Clock, Users, Bot, Brain, FileDown, Lightbulb, DollarSign } from "lucide-react";
 
 interface PlayerConfig {
   id: string;
@@ -63,6 +63,12 @@ interface AiCallLog {
   latencyMs: number;
   timedOut: boolean;
   error: string | null;
+  reasoningTrace: string | null;
+  parseQuality: string | null;
+  promptTokens: number | null;
+  completionTokens: number | null;
+  totalTokens: number | null;
+  estimatedCostUsd: string | null;
   createdAt: string;
 }
 
@@ -90,6 +96,45 @@ function formatDate(dateStr: string): string {
   });
 }
 
+function getProviderColor(provider: string): string {
+  switch (provider) {
+    case "chatgpt": return "text-green-600 dark:text-green-400";
+    case "claude": return "text-orange-600 dark:text-orange-400";
+    case "gemini": return "text-blue-600 dark:text-blue-400";
+    default: return "text-foreground";
+  }
+}
+
+function getProviderBgColor(provider: string): string {
+  switch (provider) {
+    case "chatgpt": return "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800";
+    case "claude": return "bg-orange-50 dark:bg-orange-950/30 border-orange-200 dark:border-orange-800";
+    case "gemini": return "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800";
+    default: return "bg-muted border-border";
+  }
+}
+
+function ReasoningTraceViewer({ log }: { log: AiCallLog }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!log.reasoningTrace) return null;
+
+  return (
+    <Collapsible open={expanded} onOpenChange={setExpanded}>
+      <CollapsibleTrigger className={`flex items-center gap-1 text-xs mt-1 px-2 py-1 rounded cursor-pointer transition-colors ${getProviderBgColor(log.provider)} border`} data-testid={`reasoning-trace-toggle-${log.id}`}>
+        <Lightbulb className={`h-3 w-3 ${getProviderColor(log.provider)}`} />
+        <span className={`font-medium ${getProviderColor(log.provider)}`}>Reasoning Trace</span>
+        {expanded ? <ChevronDown className="h-3 w-3 ml-1" /> : <ChevronRight className="h-3 w-3 ml-1" />}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className={`mt-1 p-3 rounded border text-xs font-mono whitespace-pre-wrap max-h-64 overflow-y-auto ${getProviderBgColor(log.provider)}`} data-testid={`reasoning-trace-content-${log.id}`}>
+          {log.reasoningTrace}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
 function MatchRow({ match }: { match: Match }) {
   const [expanded, setExpanded] = useState(false);
 
@@ -100,12 +145,14 @@ function MatchRow({ match }: { match: Match }) {
 
   const aiPlayers = (match.playerConfigs as PlayerConfig[]).filter(p => p.isAI);
   const humanPlayers = (match.playerConfigs as PlayerConfig[]).filter(p => !p.isAI);
-  const models = aiPlayers.map(p => p.aiProvider).filter(Boolean);
 
   const findPlayerName = (playerId: string) => {
     const p = (match.playerConfigs as PlayerConfig[]).find(pc => pc.id === playerId);
     return p ? p.name : playerId;
   };
+
+  const hasReasoningTraces = detail?.aiLogs.some(l => l.reasoningTrace);
+  const totalCost = detail?.aiLogs.reduce((sum, l) => sum + (l.estimatedCostUsd ? parseFloat(l.estimatedCostUsd) : 0), 0);
 
   return (
     <Collapsible open={expanded} onOpenChange={setExpanded}>
@@ -222,35 +269,66 @@ function MatchRow({ match }: { match: Match }) {
                 )}
 
                 {detail.aiLogs.length > 0 && (
-                  <Collapsible>
-                    <CollapsibleTrigger className="flex items-center gap-1 text-sm font-semibold text-muted-foreground hover:text-foreground" data-testid={`ai-logs-toggle-${match.id}`}>
-                      <Brain className="h-4 w-4" />
-                      AI Call Logs ({detail.aiLogs.length})
-                      <ChevronDown className="h-3 w-3" />
-                    </CollapsibleTrigger>
-                    <CollapsibleContent>
-                      <div className="mt-2 space-y-2 max-h-96 overflow-y-auto">
-                        {detail.aiLogs.map(aiLog => (
-                          <div key={aiLog.id} className="text-xs border rounded p-2 bg-background" data-testid={`ai-log-${aiLog.id}`}>
-                            <div className="flex items-center gap-2 mb-1">
-                              <Badge variant="outline" className="text-xs px-1 py-0">{aiLog.provider}</Badge>
-                              <Badge variant="secondary" className="text-xs px-1 py-0">{aiLog.actionType}</Badge>
-                              <span className="text-muted-foreground">R{aiLog.roundNumber}</span>
-                              <span className="text-muted-foreground flex items-center gap-1">
-                                <Clock className="h-3 w-3" />{aiLog.latencyMs}ms
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Brain className="h-4 w-4" />
+                        <span className="text-sm font-semibold">AI Call Logs ({detail.aiLogs.length})</span>
+                        {hasReasoningTraces && (
+                          <Badge variant="outline" className="text-xs gap-1" data-testid="badge-has-traces">
+                            <Lightbulb className="h-3 w-3" />
+                            Has Reasoning
+                          </Badge>
+                        )}
+                      </div>
+                      {totalCost !== undefined && totalCost > 0 && (
+                        <Badge variant="outline" className="text-xs gap-1" data-testid={`badge-match-cost-${match.id}`}>
+                          <DollarSign className="h-3 w-3" />
+                          ${totalCost.toFixed(4)}
+                        </Badge>
+                      )}
+                    </div>
+
+                    <div className="space-y-2 max-h-[500px] overflow-y-auto">
+                      {detail.aiLogs.map(aiLog => (
+                        <div key={aiLog.id} className="text-xs border rounded p-2 bg-background" data-testid={`ai-log-${aiLog.id}`}>
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <Badge variant="outline" className={`text-xs px-1 py-0 ${getProviderColor(aiLog.provider)}`}>{aiLog.provider}</Badge>
+                            <Badge variant="secondary" className="text-xs px-1 py-0">{aiLog.actionType}</Badge>
+                            <span className="text-muted-foreground">R{aiLog.roundNumber}</span>
+                            <span className="text-muted-foreground flex items-center gap-1">
+                              <Clock className="h-3 w-3" />{aiLog.latencyMs}ms
+                            </span>
+                            {aiLog.parseQuality && aiLog.parseQuality !== "clean" && (
+                              <Badge variant={aiLog.parseQuality === "error" ? "destructive" : "outline"} className="text-xs px-1 py-0">
+                                {aiLog.parseQuality}
+                              </Badge>
+                            )}
+                            {aiLog.totalTokens && (
+                              <span className="text-muted-foreground">{aiLog.totalTokens} tok</span>
+                            )}
+                            {aiLog.estimatedCostUsd && (
+                              <span className="text-muted-foreground flex items-center gap-0.5">
+                                <DollarSign className="h-3 w-3" />{parseFloat(aiLog.estimatedCostUsd).toFixed(4)}
                               </span>
-                              {aiLog.timedOut && <Badge variant="destructive" className="text-xs px-1 py-0">Timeout</Badge>}
-                              {aiLog.error && <Badge variant="destructive" className="text-xs px-1 py-0">Error</Badge>}
-                            </div>
-                            <div className="text-muted-foreground truncate">Model: {aiLog.model}</div>
-                            {aiLog.rawResponse && (
-                              <div className="text-muted-foreground truncate">Response: {aiLog.rawResponse}</div>
+                            )}
+                            {aiLog.timedOut && <Badge variant="destructive" className="text-xs px-1 py-0">Timeout</Badge>}
+                            {aiLog.error && <Badge variant="destructive" className="text-xs px-1 py-0">Error</Badge>}
+                            {aiLog.reasoningTrace && (
+                              <Badge variant="outline" className="text-xs px-1 py-0 gap-0.5">
+                                <Lightbulb className="h-3 w-3" /> Trace
+                              </Badge>
                             )}
                           </div>
-                        ))}
-                      </div>
-                    </CollapsibleContent>
-                  </Collapsible>
+                          <div className="text-muted-foreground truncate">Model: {aiLog.model}</div>
+                          {aiLog.rawResponse && (
+                            <div className="text-muted-foreground truncate">Response: {aiLog.rawResponse}</div>
+                          )}
+                          <ReasoningTraceViewer log={aiLog} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 )}
               </>
             ) : null}

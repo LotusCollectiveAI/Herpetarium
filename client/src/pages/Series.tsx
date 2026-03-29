@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -56,6 +56,14 @@ interface SeriesDetail {
   running: boolean;
 }
 
+interface CostEstimate {
+  estimatedTotalCost: number;
+  perGameCost: number;
+  totalGames: number;
+  avgRoundsPerGame: number;
+  breakdown: Array<{ model: string; provider: string; costPerGame: number; totalCost: number }>;
+}
+
 function formatDate(dateStr: string): string {
   return new Date(dateStr).toLocaleDateString("en-US", {
     month: "short",
@@ -94,12 +102,62 @@ function getTeamColor(team: string) {
   return team === "amber" ? "text-amber-500" : "text-blue-500";
 }
 
+function CostEstimateDisplay({ estimate }: { estimate: CostEstimate }) {
+  return (
+    <div className="rounded-lg border p-3 bg-muted/30 space-y-2" data-testid="cost-estimate-display">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <DollarSign className="h-4 w-4 text-green-600 dark:text-green-400" />
+        Estimated Cost
+      </div>
+      <div className="grid grid-cols-3 gap-3 text-xs">
+        <div>
+          <div className="text-muted-foreground">Total</div>
+          <div className="font-bold text-base" data-testid="text-estimated-total">${estimate.estimatedTotalCost.toFixed(4)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Per Game</div>
+          <div className="font-bold" data-testid="text-estimated-per-game">${estimate.perGameCost.toFixed(4)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Avg Rounds</div>
+          <div className="font-bold">{estimate.avgRoundsPerGame}</div>
+        </div>
+      </div>
+      {estimate.breakdown.length > 0 && (
+        <div className="text-xs space-y-1 border-t pt-2 mt-2">
+          {estimate.breakdown.map((b, i) => (
+            <div key={i} className="flex justify-between text-muted-foreground">
+              <span>{b.model} ({getProviderLabel(b.provider)})</span>
+              <span>${b.totalCost.toFixed(4)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
   const [totalGames, setTotalGames] = useState("5");
   const [tokenBudget, setTokenBudget] = useState("500");
   const [amberProvider, setAmberProvider] = useState("chatgpt");
   const [blueProvider, setBlueProvider] = useState("claude");
+  const [costEstimate, setCostEstimate] = useState<CostEstimate | null>(null);
   const { toast } = useToast();
+
+  useEffect(() => {
+    const players = [
+      { name: `${getProviderLabel(amberProvider)} A1`, aiProvider: amberProvider, team: "amber" },
+      { name: `${getProviderLabel(amberProvider)} A2`, aiProvider: amberProvider, team: "amber" },
+      { name: `${getProviderLabel(blueProvider)} B1`, aiProvider: blueProvider, team: "blue" },
+      { name: `${getProviderLabel(blueProvider)} B2`, aiProvider: blueProvider, team: "blue" },
+    ];
+    const numGames = parseInt(totalGames) || 5;
+    apiRequest("POST", "/api/cost-estimate", { players, totalGames: numGames })
+      .then(r => r.json())
+      .then(setCostEstimate)
+      .catch(() => setCostEstimate(null));
+  }, [amberProvider, blueProvider, totalGames]);
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -190,6 +248,8 @@ function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
           </div>
         </div>
 
+        {costEstimate && <CostEstimateDisplay estimate={costEstimate} />}
+
         <Button
           onClick={() => createMutation.mutate()}
           disabled={createMutation.isPending}
@@ -204,6 +264,157 @@ function CreateSeriesForm({ onCreated }: { onCreated: () => void }) {
         </Button>
       </CardContent>
     </Card>
+  );
+}
+
+function computeNoteDiff(prevText: string, currText: string): { added: string[]; removed: string[] } {
+  const prevLines = prevText.split("\n").filter(l => l.trim());
+  const currLines = currText.split("\n").filter(l => l.trim());
+  const prevSet = new Set(prevLines);
+  const currSet = new Set(currLines);
+  const added = currLines.filter(l => !prevSet.has(l));
+  const removed = prevLines.filter(l => !currSet.has(l));
+  return { added, removed };
+}
+
+function detectKeyMoments(notes: ScratchNote[], matchDetails: any[]): Array<{ gameIndex: number; type: string; description: string }> {
+  const moments: Array<{ gameIndex: number; type: string; description: string }> = [];
+
+  for (let i = 1; i < notes.length; i++) {
+    const prev = notes[i - 1];
+    const curr = notes[i];
+    const diff = computeNoteDiff(prev.notesText, curr.notesText);
+    const changeRatio = (diff.added.length + diff.removed.length) / Math.max(curr.notesText.split("\n").length, 1);
+
+    if (changeRatio > 0.5) {
+      moments.push({ gameIndex: curr.gameIndex, type: "major_revision", description: "Major strategy revision" });
+    }
+
+    const tokenDelta = curr.tokenCount - prev.tokenCount;
+    if (tokenDelta < -prev.tokenCount * 0.3) {
+      moments.push({ gameIndex: curr.gameIndex, type: "compression", description: "Strategy compressed" });
+    }
+  }
+
+  for (const match of matchDetails) {
+    const idx = matchDetails.indexOf(match);
+    if (idx > 0 && match.winner && matchDetails[idx - 1].winner) {
+      const prevWinner = matchDetails[idx - 1].winner;
+      if (match.winner !== prevWinner) {
+        moments.push({ gameIndex: idx, type: "reversal", description: "Winner changed" });
+      }
+    }
+  }
+
+  return moments;
+}
+
+function StrategyTimeline({ notes, matchDetails, team, playerName }: { notes: ScratchNote[]; matchDetails: any[]; team: string; playerName: string }) {
+  const [selectedGame, setSelectedGame] = useState<number | null>(null);
+
+  if (notes.length === 0) return null;
+
+  const keyMoments = detectKeyMoments(notes, matchDetails);
+  const momentMap = new Map<number, Array<{ type: string; description: string }>>();
+  for (const m of keyMoments) {
+    if (!momentMap.has(m.gameIndex)) momentMap.set(m.gameIndex, []);
+    momentMap.get(m.gameIndex)!.push(m);
+  }
+
+  const selectedNote = selectedGame !== null ? notes.find(n => n.gameIndex === selectedGame) : null;
+  const prevNote = selectedGame !== null && selectedGame > 0 ? notes.find(n => n.gameIndex === selectedGame - 1) : null;
+  const diff = selectedNote && prevNote ? computeNoteDiff(prevNote.notesText, selectedNote.notesText) : null;
+
+  const teamColor = team === "amber" ? "bg-amber-500" : "bg-blue-500";
+  const teamBorderColor = team === "amber" ? "border-amber-500" : "border-blue-500";
+
+  return (
+    <div className="space-y-3" data-testid={`strategy-timeline-${playerName}`}>
+      <h4 className={`font-medium flex items-center gap-2 ${getTeamColor(team)}`}>
+        <Bot className="h-4 w-4" />
+        {playerName} ({team})
+      </h4>
+
+      <div className="relative">
+        <div className="flex items-center gap-0 overflow-x-auto pb-2">
+          <div className={`h-0.5 w-4 ${teamColor} opacity-30`} />
+          {notes.map((note, idx) => {
+            const isSelected = selectedGame === note.gameIndex;
+            const hasMoment = momentMap.has(note.gameIndex);
+            const matchResult = matchDetails[note.gameIndex];
+            const won = matchResult?.winner === team;
+
+            return (
+              <div key={note.id} className="flex items-center" data-testid={`timeline-node-${note.gameIndex}`}>
+                <button
+                  onClick={() => setSelectedGame(isSelected ? null : note.gameIndex)}
+                  className={`relative flex flex-col items-center gap-1 px-2 py-1 rounded transition-all min-w-[48px] ${isSelected ? `border-2 ${teamBorderColor} bg-muted` : "hover:bg-muted/50"}`}
+                  data-testid={`timeline-btn-${note.gameIndex}`}
+                >
+                  <div className={`w-4 h-4 rounded-full border-2 flex items-center justify-center ${isSelected ? teamColor : "bg-background"} ${teamBorderColor}`}>
+                    {hasMoment && <AlertTriangle className="h-2.5 w-2.5 text-yellow-500" />}
+                  </div>
+                  <span className="text-[10px] text-muted-foreground">G{note.gameIndex + 1}</span>
+                  {matchResult?.winner && (
+                    <Trophy className={`h-3 w-3 ${won ? "text-green-500" : "text-red-400"}`} />
+                  )}
+                  <span className="text-[9px] text-muted-foreground">{note.tokenCount}t</span>
+                </button>
+                {idx < notes.length - 1 && <div className={`h-0.5 w-3 ${teamColor} opacity-30`} />}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {selectedNote && (
+        <div className="border rounded-lg p-3 space-y-2 bg-muted/20">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-medium">Game {selectedNote.gameIndex + 1} Notes</span>
+            <Badge variant="outline" className="text-xs">{selectedNote.tokenCount} tokens</Badge>
+          </div>
+
+          {diff && (diff.added.length > 0 || diff.removed.length > 0) && (
+            <div className="space-y-1 text-xs">
+              {diff.added.length > 0 && (
+                <div>
+                  <span className="font-medium text-green-600 dark:text-green-400">+ Added ({diff.added.length} lines)</span>
+                  <div className="mt-1 p-2 rounded bg-green-50 dark:bg-green-950/30 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
+                    {diff.added.join("\n")}
+                  </div>
+                </div>
+              )}
+              {diff.removed.length > 0 && (
+                <div>
+                  <span className="font-medium text-red-600 dark:text-red-400">- Removed ({diff.removed.length} lines)</span>
+                  <div className="mt-1 p-2 rounded bg-red-50 dark:bg-red-950/30 font-mono whitespace-pre-wrap max-h-32 overflow-y-auto">
+                    {diff.removed.join("\n")}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="text-xs">
+            <div className="font-medium text-muted-foreground mb-1">Full Notes</div>
+            <div className="p-2 bg-muted/50 rounded font-mono whitespace-pre-wrap max-h-48 overflow-y-auto" data-testid={`timeline-full-notes-${selectedNote.gameIndex}`}>
+              {selectedNote.notesText}
+            </div>
+          </div>
+
+          {momentMap.has(selectedNote.gameIndex) && (
+            <div className="flex flex-wrap gap-1">
+              {momentMap.get(selectedNote.gameIndex)!.map((m, i) => (
+                <Badge key={i} variant="outline" className="text-xs gap-1">
+                  <AlertTriangle className="h-3 w-3 text-yellow-500" />
+                  {m.description}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -270,6 +481,7 @@ function NoteEvolutionView({ notes, playerName, team }: { notes: ScratchNote[]; 
 
 function SeriesDetailView({ seriesId }: { seriesId: number }) {
   const [, setLocation] = useLocation();
+  const [viewMode, setViewMode] = useState<"timeline" | "list">("timeline");
 
   const { data, isLoading } = useQuery<SeriesDetail>({
     queryKey: ["/api/series", seriesId],
@@ -289,6 +501,9 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
 
   const { series, notesByPlayer, playerHashes, matchDetails } = data;
 
+  const amberWins = matchDetails.filter(m => m.winner === "amber").length;
+  const blueWins = matchDetails.filter(m => m.winner === "blue").length;
+
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-4">
@@ -300,7 +515,7 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
         {getStatusBadge(series.status)}
       </div>
 
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <Card>
           <CardContent className="pt-4">
             <div className="text-sm text-muted-foreground">Progress</div>
@@ -323,8 +538,14 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
         </Card>
         <Card>
           <CardContent className="pt-4">
-            <div className="text-sm text-muted-foreground">Games with Results</div>
-            <div className="text-2xl font-bold" data-testid="text-match-count">{matchDetails.length}</div>
+            <div className="text-sm text-muted-foreground">Amber Wins</div>
+            <div className="text-2xl font-bold text-amber-500" data-testid="text-amber-wins">{amberWins}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-4">
+            <div className="text-sm text-muted-foreground">Blue Wins</div>
+            <div className="text-2xl font-bold text-blue-500" data-testid="text-blue-wins">{blueWins}</div>
           </CardContent>
         </Card>
       </div>
@@ -361,20 +582,52 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-base">
-            <BookOpen className="h-4 w-4" />
-            Notes Evolution
-          </CardTitle>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <BookOpen className="h-4 w-4" />
+              Strategy Evolution
+            </CardTitle>
+            <div className="flex gap-1">
+              <Button
+                variant={viewMode === "timeline" ? "default" : "outline"}
+                size="sm"
+                className="text-xs h-7"
+                onClick={() => setViewMode("timeline")}
+                data-testid="button-view-timeline"
+              >
+                Timeline
+              </Button>
+              <Button
+                variant={viewMode === "list" ? "default" : "outline"}
+                size="sm"
+                className="text-xs h-7"
+                onClick={() => setViewMode("list")}
+                data-testid="button-view-list"
+              >
+                List
+              </Button>
+            </div>
+          </div>
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
             {playerHashes.map((ph) => (
-              <NoteEvolutionView
-                key={ph.hash}
-                notes={notesByPlayer[ph.hash] || []}
-                playerName={ph.name}
-                team={ph.team}
-              />
+              viewMode === "timeline" ? (
+                <StrategyTimeline
+                  key={ph.hash}
+                  notes={notesByPlayer[ph.hash] || []}
+                  matchDetails={matchDetails}
+                  playerName={ph.name}
+                  team={ph.team}
+                />
+              ) : (
+                <NoteEvolutionView
+                  key={ph.hash}
+                  notes={notesByPlayer[ph.hash] || []}
+                  playerName={ph.name}
+                  team={ph.team}
+                />
+              )
             ))}
           </div>
         </CardContent>

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Decrypto is a real-time multiplayer word deduction game where teams compete to decode secret messages while intercepting opponents' communications. Players can compete with friends or AI opponents powered by ChatGPT, Claude, and Gemini. The game follows the classic Decrypto board game rules with digital enhancements for online play.
+Decrypto is a real-time multiplayer word deduction game inspired by the classic board game. It allows players to compete against friends or advanced AI opponents (ChatGPT, Claude, Gemini). The project's vision is to create a dynamic online platform for strategic wordplay, enhancing the original game with digital features and sophisticated AI interactions. It aims to offer engaging gameplay, advanced AI opponent capabilities, and robust analytical tools for understanding AI performance and game dynamics.
 
 ## User Preferences
 
@@ -10,159 +10,63 @@ Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 
-### Frontend Architecture
+### Frontend
 - **Framework**: React 18 with TypeScript
-- **Routing**: Wouter (lightweight React router)
+- **Routing**: Wouter
 - **State Management**: React Context for game state, TanStack Query for server state
-- **UI Components**: shadcn/ui component library built on Radix UI primitives
-- **Styling**: Tailwind CSS with CSS variables for theming (light/dark mode support)
-- **Build Tool**: Vite with HMR support
+- **UI Components**: shadcn/ui built on Radix UI, styled with Tailwind CSS (light/dark mode)
+- **Build Tool**: Vite
 
-### Backend Architecture
-- **Runtime**: Node.js with Express
-- **Language**: TypeScript (ESM modules)
-- **Real-time Communication**: WebSocket (ws library) for game state synchronization
-- **API Style**: REST endpoints for game creation, WebSocket for gameplay
+### Backend
+- **Runtime**: Node.js with Express and TypeScript (ESM)
+- **Real-time Communication**: WebSockets (`ws` library) for game state synchronization
+- **API Style**: REST for game creation and management, WebSockets for live gameplay
 
-### Data Storage
-- **Database**: PostgreSQL with Drizzle ORM (via @neondatabase/serverless driver)
-- **Schema Location**: `shared/schema.ts` for shared types and database tables, `shared/models/` for legacy user model
-- **DB Connection**: `server/db.ts` - Drizzle connection setup
-- **Migrations**: Drizzle Kit (`drizzle-kit push` for schema sync)
-- **In-Memory State**: Game sessions stored in memory Map for real-time gameplay
-- **Match Persistence**: Completed games persisted to PostgreSQL with round-by-round detail and AI call logs
-
-### Game State Management
-- Games are created via REST API and stored in memory
-- WebSocket connections manage real-time game state updates
-- Players connect to games using 4-character game codes
-- State broadcasts to all connected clients on changes
+### Data Management
+- **Database**: PostgreSQL with Drizzle ORM (via `@neondatabase/serverless`)
+- **Schema & Migrations**: Defined in `shared/schema.ts`, managed with Drizzle Kit
+- **In-Memory State**: Active game sessions stored in memory
+- **Persistence**: Completed matches, round details, and AI call logs are persisted to PostgreSQL
+- **Series System**: Allows AI agents to play multiple games, carrying strategic notes between them, stored in `series` and `scratch_notes` tables.
 
 ### AI Integration
-- Multiple AI providers supported: OpenAI (ChatGPT), Anthropic (Claude), Google (Gemini)
-- AI players carry a full `AIPlayerConfig`: provider, model, timeout_ms, temperature, prompt_strategy
-- **Model Selection**: Per-player model choice (e.g. gpt-4o, o3, claude-sonnet-4-20250514, gemini-2.5-pro)
-- **Reasoning Model Support**: OpenAI o-series (reasoning_effort, no temperature), Claude extended thinking (budget_tokens), Gemini thinking models (thinkingConfig)
-- **Prompt Strategies**: Named presets ("default", "advanced") stored in `server/promptStrategies.ts`. Advanced uses chain-of-thought, theory-of-mind, full history analysis
-- **Configurable Timeouts**: Per-player timeout (default 120s, max 300s). UI shows real-time elapsed time while AI thinks
-- **Reasoning Traces**: When models return chain-of-thought/thinking tokens, these are captured in server logs
-- Lazy initialization of AI clients to avoid startup crashes
-- AI failures broadcast "ai_fallback" messages to all clients for UI feedback
-- Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status, parse quality (clean/partial_recovery/fallback_used/error), prompt/completion/total token counts, estimated cost USD
+- **Providers**: Supports OpenAI (ChatGPT), Anthropic (Claude), and Google (Gemini) with configurable models.
+- **AI Player Configuration**: Each AI player has a `AIPlayerConfig` defining provider, model, timeout, temperature, and prompt strategy.
+- **Reasoning Models**: Support for models with explicit reasoning capabilities (e.g., OpenAI o-series, Claude extended thinking, Gemini thinking models), with reasoning traces captured and stored.
+- **Prompt Strategies**: Named presets (`"default"`, `"advanced"`) for varying AI complexity, including chain-of-thought.
+- **Call Logging**: Every AI call is logged to `ai_call_logs`, capturing prompt, response, latency, token counts, estimated cost, and parse quality.
+- **Series Integration**: AI generates and refines strategic notes between games in a series, injecting them into subsequent prompts.
 
-### Persistent Scratch Notes & Series
-- **Series System**: Agents play multiple games in sequence, carrying strategic notes forward between games
-- **Database Tables**: `series` (id, name, config, total_games, completed_games, status, note_token_budget), `scratch_notes` (id, series_id, player_config_hash, game_index, notes_text, token_count, match_id)
-- **Post-Game Reflection**: After each game in a series, an AI call generates updated strategic notes based on game results and prior notes
-- **Notes Injection**: Scratch notes are injected into clue, guess, and interception prompts as additional strategic context
-- **Series Runner** (`server/seriesRunner.ts`): Executes N games sequentially with note propagation between games
-- **API Endpoints**: POST `/api/series` (create and run), GET `/api/series` (list), GET `/api/series/:id` (detail with note evolution)
-- **UI**: `/series` page with series creation form, list view, detail view with notes evolution timeline and token growth visualization
+### Game Mechanics
+- **Game State Management**: REST API creates games, WebSockets manage real-time updates and player connections via 4-character codes.
+- **Headless Mode**: A `headlessRunner` allows AI-vs-AI games without UI, used for tournaments and evaluations.
+- **Input Validation**: Frontend and server-side validation for clues, including single-word, no blanks, and keyword exclusion.
 
-### Data Foundation (Phase A)
-- **Parse Quality Tracking**: Every AI response is tagged as `clean`, `partial_recovery`, `fallback_used`, or `error` — no more silent data corruption
-- **Token/Cost Logging**: `promptTokens`, `completionTokens`, `totalTokens` extracted from all providers (OpenAI usage, Anthropic input/output tokens, Gemini usageMetadata). `estimatedCostUsd` computed per call using model cost lookup table in `server/ai.ts`
-- **Cost Lookup Table**: `MODEL_COST_PER_1K` in `server/ai.ts` maps model names to per-1K-token input/output costs for automatic cost estimation
-- **Parse Quality Metrics**: `computeParseQualityMetrics()` in `server/metrics.ts` computes per-model parse failure rates, token totals, and cost totals. Exposed via `/api/eval/metrics` endpoint
-- **Data Quality Dashboard**: "Data Quality" tab in Eval Dashboard (`/eval`) shows per-model parse quality breakdown, clean/failure rates, token usage, and estimated costs
-- **Seed-based Reproducibility**: Headless matches use deterministic PRNG (xorshift32) seeded per match. Seed stored in `matches.gameSeed` column. Replay identical keyword/code sequences by reusing a seed
-- **Game State Validation**: `validateGameState()` checks invariants (token counts, team membership, winner/phase consistency, duplicate IDs, keyword uniqueness, code position validity, clue/guess array lengths, history count) and logs warnings during headless matches
+### Evaluation & Analytics
+- **Metrics**: `server/metrics.ts` computes various performance metrics (per-model, per-strategy, win rates, cost, parse quality).
+- **Eval Dashboard**: A dedicated dashboard (`/eval`) displays metrics, team composition analysis, A/B test results, and clue analysis.
+- **Reproducibility**: Headless matches use a deterministic PRNG seeded per match for reproducibility.
+- **Cost Estimation**: API endpoint and UI display pre-launch cost estimates for series and tournaments based on AI model usage.
 
-### Match Persistence
-- **Database Tables**: `matches` (incl. `gameSeed`), `match_rounds`, `ai_call_logs` (incl. `parseQuality`, `promptTokens`, `completionTokens`, `totalTokens`, `estimatedCostUsd`), `experiments`, `tournaments`, `tournament_matches`
-- Match record created when teams are confirmed (before first round)
-- Round results persisted after each round completes (with dedup guard)
-- Game completion updates match with winner and final token counts
-- **API Endpoints**: GET `/api/matches` (paginated, filterable), GET `/api/matches/:id` (full detail with rounds and AI logs)
-- **UI**: `/history` page shows past games with expandable round details and AI call logs
-
-### Headless Game Runner & Tournament Mode
-- **Headless Runner** (`server/headlessRunner.ts`): Runs complete AI-vs-AI games without WebSocket or browser. Takes a match config (player names, AI providers, team assignments) and executes all phases automatically.
-- **Tournament System** (`server/tournament.ts`): Creates and runs tournaments with multiple match configurations. Matches run sequentially to manage API rate limits.
-- **Auto-advance**: When all players in a WebSocket game are AI, the server automatically advances from round_results to the next round (1s delay).
-- **API Endpoints**: POST `/api/matches/run` (queue headless match), POST `/api/matches/run/sync` (run and wait for result), POST `/api/tournaments` (create and start tournament), GET `/api/tournaments` (list all), GET `/api/tournaments/:id` (detail with stats)
-- **UI**: `/tournaments` page with tournament creation form, leaderboard with model win rates, per-match results, and live refresh for running tournaments
-
-### Eval Harness & A/B Testing
-- **Metrics Module**: `server/metrics.ts` computes per-model, per-strategy, per-matchup, team composition, and self-play metrics
-- **Eval Dashboard**: `/eval` page with tabs for Overview (charts, tables, filters), Team Composition (mixed vs homogeneous win rates, synergy scores, self-play variance), A/B Tests (experiments), Clue Analysis (with cross-model communication flags), and Data Export
-- **Team Composition Analytics**: Mixed vs homogeneous team win rates, per-pair synergy scores, interception vulnerability by composition type
-- **Self-Play Analytics**: Outcome variance, game length distribution, amber vs blue win balance for same-model matchups
-- **Cross-Model Communication Analysis**: Clue analysis view flags cross-architecture clues, shows whether cross-model interpretation succeeded or failed
-- **Tournament Presets**: Quick preset buttons on tournament creation: Cross-Model Round Robin, Self-Play Series, Provider Showdown, Full Matrix — each auto-fills matchups for one-click launch
-- **A/B Testing**: Experiments system to compare prompt strategies. POST `/api/experiments`, GET `/api/experiments`, GET `/api/experiments/:id`
-- **Clue Analysis**: GET `/api/matches/:id/analysis` maps each clue to its target keyword, highlights "too obvious" (intercepted) vs "too obscure" (miscommunicated) clues, includes cross-model analysis data
-- **Data Export**: GET `/api/export/matches` and `/api/export/ai-logs` endpoints supporting JSON and CSV formats. Export buttons on both History and Eval Dashboard pages
-
-### Input Validation
-- Frontend clue validation: single-word only, no blanks, no keywords or root words
-- Server-side clue validation mirrors frontend rules; rejects invalid clues with "clue_error" message
-- Stem-matching prevents submitting word variants of keywords
-
-### UX Polish
-- Phase transition announcements: `PhaseAnnouncement` overlay component shows briefly when game phase changes
-- Round results: animated token awards with delayed reveal, summary text per team
-- AI thinking indicators: `AIThinkingIndicator` component with provider-specific styling (ChatGPT green, Claude orange, Gemini blue) and animated dots
-- Mobile interception layout: tabbed interface (Clues/History/Guess) on screens < 640px
-- Play again: host can create new game with same players from game over screen via `new_game_same_players` WebSocket message
-- Toast notifications for phase transitions and key game events
-
-### WebSocket Resilience
-- Client auto-reconnects on unexpected close with exponential backoff (1s, 2s, 4s, max 3 attempts)
-- Re-sends join message with stored playerId on reconnect
-- Ghost player cleanup: server closes old WebSocket connections when a player reconnects with the same playerId
-
-### Vision & Research Documents
-- `docs/PRODUCT_VISION.md` - Mission statement, abstraction ladder concept, core principles
-- `docs/MODES_OF_PLAY_ROADMAP.md` - Future capabilities roadmap (5 phases: cross-model teams → evolutionary tournaments)
-- `docs/FUTURE_VIGNETTES.md` - Four narrative vignettes from advanced versions of the product
-- `docs/ARCHITECTURE_PROGRESSION.md` - Visual progression diagrams, capability matrix, Karpathy Auto Research parallels
-
-### Project Structure
-```
-client/           # React frontend
-  src/
-    components/   # UI components (game-specific and shadcn/ui)
-                  # DeductionNotes.tsx - Collapsible notes panel for tracking opponent keywords (localStorage)
-                  # RoundHistory.tsx - Supports both list and columnar view (columnar=true for interception)
-    pages/        # Route pages (Home, Game, History, Tournaments, EvalDashboard, Series)
-    lib/          # Utilities, context providers, query client
-    hooks/        # Custom React hooks
-server/           # Express backend
-  index.ts        # Server entry point
-  routes.ts       # API route registration (games, matches, tournaments, eval metrics, experiments, export, series)
-  metrics.ts      # Metrics computation module (model, strategy, matchup, clue analysis)
-  websocket.ts    # WebSocket handler for game logic + match persistence + auto-advance
-  game.ts         # Game state management functions
-  ai.ts           # AI provider integrations (configurable models, reasoning support, trace capture) with call logging
-  headlessRunner.ts # Headless game runner for all-AI games
-  tournament.ts   # Tournament creation and execution
-  seriesRunner.ts # Series execution with scratch note propagation between games
-  db.ts           # Database connection setup
-  storage.ts      # Storage interface with match/round/AI log CRUD
-  promptStrategies.ts # Named prompt strategy presets (default, advanced)
-shared/           # Shared code between client and server
-  schema.ts       # Zod schemas and TypeScript types
-  models/         # Drizzle database models
-```
+### UX Enhancements
+- **Visual Feedback**: Phase announcements, animated token awards, AI thinking indicators with provider-specific styling.
+- **Mobile Support**: Tabbed interface for interception on smaller screens.
+- **Resilience**: Client auto-reconnects with exponential backoff; server cleans up ghost players.
 
 ## External Dependencies
 
 ### AI Services
-- **OpenAI API**: ChatGPT for AI players (via `@anthropic-ai/sdk` proxy or direct)
-- **Anthropic API**: Claude for AI players
-- **Google Generative AI**: Gemini for AI players
-- Environment variables: `AI_INTEGRATIONS_OPENAI_API_KEY`, `AI_INTEGRATIONS_ANTHROPIC_API_KEY`, `AI_INTEGRATIONS_GEMINI_API_KEY`
+- **OpenAI API**: For ChatGPT models.
+- **Anthropic API**: For Claude models.
+- **Google Generative AI**: For Gemini models.
 
 ### Database
-- **PostgreSQL**: Primary database
-- Environment variable: `DATABASE_URL`
-- Session storage: `connect-pg-simple` for Express sessions
+- **PostgreSQL**: Primary data store.
 
 ### Key NPM Packages
-- `drizzle-orm` / `drizzle-kit`: Database ORM and migrations
-- `ws`: WebSocket server
-- `zod`: Runtime type validation
-- `wouter`: Client-side routing
-- `@tanstack/react-query`: Server state management
-- Full shadcn/ui component suite via Radix UI primitives
+- `drizzle-orm`, `drizzle-kit`: ORM and migrations.
+- `ws`: WebSocket server.
+- `zod`: Runtime type validation.
+- `wouter`: Client-side routing.
+- `@tanstack/react-query`: Server state management.
+- `shadcn/ui`, `Radix UI`: UI component libraries.

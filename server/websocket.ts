@@ -175,6 +175,7 @@ async function logAiCall(gameId: string, roundNumber: number, provider: string, 
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
       estimatedCostUsd: callResult.estimatedCostUsd || null,
+      reasoningTrace: callResult.reasoningTrace || null,
     });
   } catch (err) {
     log(`Failed to log AI call: ${err}`, "websocket");

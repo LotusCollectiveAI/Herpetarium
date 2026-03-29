@@ -8,6 +8,8 @@ import { createTournament, runTournament, isTournamentRunning } from "./tourname
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { z } from "zod";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
+import { MODEL_COST_PER_1K } from "./ai";
+import { getDefaultConfig } from "@shared/schema";
 
 const headlessMatchConfigSchema = z.object({
   players: z.array(z.object({
@@ -556,7 +558,8 @@ export async function registerRoutes(
       }
 
       const matchIds = [...new Set(notes.filter(n => n.matchId).map(n => n.matchId as number))];
-      const matchDetails = await storage.getMatchesByIds(matchIds);
+      const unsortedDetails = await storage.getMatchesByIds(matchIds);
+      const matchDetails = unsortedDetails.sort((a: any, b: any) => a.id - b.id);
 
       res.json({
         series: s,
@@ -568,6 +571,63 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch series" });
+    }
+  });
+
+  app.post("/api/cost-estimate", (req, res) => {
+    try {
+      const { players, totalGames } = req.body;
+      if (!players || !totalGames) {
+        return res.status(400).json({ error: "Missing players or totalGames" });
+      }
+
+      const AVG_ROUNDS_PER_GAME = 5;
+      const AVG_TOKENS_PER_CLUE = { input: 800, output: 150 };
+      const AVG_TOKENS_PER_GUESS = { input: 600, output: 80 };
+      const AVG_TOKENS_PER_INTERCEPT = { input: 700, output: 80 };
+
+      let totalEstimate = 0;
+      const breakdown: Array<{ model: string; provider: string; costPerGame: number; totalCost: number }> = [];
+
+      const uniqueModels = new Map<string, { provider: string; count: number }>();
+      for (const p of players) {
+        const config = p.aiConfig || getDefaultConfig(p.aiProvider);
+        const model = config.model || getDefaultConfig(p.aiProvider).model;
+        const key = `${p.aiProvider}:${model}`;
+        const existing = uniqueModels.get(key);
+        if (existing) {
+          existing.count++;
+        } else {
+          uniqueModels.set(key, { provider: p.aiProvider, count: 1 });
+        }
+      }
+
+      for (const [key, info] of uniqueModels) {
+        const model = key.split(":")[1];
+        const costs = MODEL_COST_PER_1K[model];
+        if (!costs) continue;
+
+        const callsPerPlayerPerRound = 1.5;
+        const avgInput = (AVG_TOKENS_PER_CLUE.input + AVG_TOKENS_PER_GUESS.input + AVG_TOKENS_PER_INTERCEPT.input) / 3;
+        const avgOutput = (AVG_TOKENS_PER_CLUE.output + AVG_TOKENS_PER_GUESS.output + AVG_TOKENS_PER_INTERCEPT.output) / 3;
+
+        const costPerCall = (avgInput / 1000) * costs.input + (avgOutput / 1000) * costs.output;
+        const costPerGame = costPerCall * callsPerPlayerPerRound * AVG_ROUNDS_PER_GAME * info.count;
+        const totalCost = costPerGame * totalGames;
+
+        totalEstimate += totalCost;
+        breakdown.push({ model, provider: info.provider, costPerGame: +costPerGame.toFixed(6), totalCost: +totalCost.toFixed(6) });
+      }
+
+      res.json({
+        estimatedTotalCost: +totalEstimate.toFixed(4),
+        perGameCost: +(totalEstimate / totalGames).toFixed(6),
+        totalGames,
+        avgRoundsPerGame: AVG_ROUNDS_PER_GAME,
+        breakdown,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to estimate cost" });
     }
   });
 

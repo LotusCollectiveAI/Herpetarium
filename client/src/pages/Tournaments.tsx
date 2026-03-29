@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,9 +9,17 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3 } from "lucide-react";
+import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+
+interface CostEstimate {
+  estimatedTotalCost: number;
+  perGameCost: number;
+  totalGames: number;
+  avgRoundsPerGame: number;
+  breakdown: Array<{ model: string; provider: string; costPerGame: number; totalCost: number }>;
+}
 
 interface Tournament {
   id: number;
@@ -348,6 +356,82 @@ const TOURNAMENT_PRESETS: PresetConfig[] = [
   },
 ];
 
+function TournamentCostEstimate({ matchups, gamesPerMatchup }: { matchups: MatchupConfig[]; gamesPerMatchup: number }) {
+  const [estimate, setEstimate] = useState<CostEstimate | null>(null);
+
+  useEffect(() => {
+    const estimates = matchups.map(m => {
+      const players = [
+        { name: "A1", aiProvider: m.amberProvider1, team: "amber" },
+        { name: "A2", aiProvider: m.amberProvider2, team: "amber" },
+        { name: "B1", aiProvider: m.blueProvider1, team: "blue" },
+        { name: "B2", aiProvider: m.blueProvider2, team: "blue" },
+      ];
+      return apiRequest("POST", "/api/cost-estimate", { players, totalGames: gamesPerMatchup })
+        .then(r => r.json());
+    });
+
+    Promise.all(estimates).then(results => {
+      const totalGames = matchups.length * gamesPerMatchup;
+      const totalCost = results.reduce((s: number, r: CostEstimate) => s + r.estimatedTotalCost, 0);
+      const breakdownMap = new Map<string, { model: string; provider: string; totalCost: number; costPerGame: number }>();
+      for (const r of results) {
+        for (const b of r.breakdown) {
+          const key = `${b.provider}:${b.model}`;
+          const ex = breakdownMap.get(key);
+          if (ex) {
+            ex.totalCost += b.totalCost;
+          } else {
+            breakdownMap.set(key, { ...b });
+          }
+        }
+      }
+      setEstimate({
+        estimatedTotalCost: +totalCost.toFixed(4),
+        perGameCost: +(totalCost / totalGames).toFixed(6),
+        totalGames,
+        avgRoundsPerGame: results[0]?.avgRoundsPerGame || 5,
+        breakdown: Array.from(breakdownMap.values()),
+      });
+    }).catch(() => setEstimate(null));
+  }, [matchups, gamesPerMatchup]);
+
+  if (!estimate) return null;
+
+  return (
+    <div className="rounded-lg border p-3 bg-muted/30 space-y-2" data-testid="tournament-cost-estimate">
+      <div className="flex items-center gap-2 text-sm font-medium">
+        <DollarSign className="h-4 w-4 text-green-600 dark:text-green-400" />
+        Estimated Cost
+      </div>
+      <div className="grid grid-cols-3 gap-3 text-xs">
+        <div>
+          <div className="text-muted-foreground">Total</div>
+          <div className="font-bold text-base" data-testid="text-tournament-cost-total">${estimate.estimatedTotalCost.toFixed(4)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Per Game</div>
+          <div className="font-bold">${estimate.perGameCost.toFixed(4)}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Total Games</div>
+          <div className="font-bold">{matchups.length * gamesPerMatchup}</div>
+        </div>
+      </div>
+      {estimate.breakdown.length > 0 && (
+        <div className="text-xs space-y-1 border-t pt-2 mt-2">
+          {estimate.breakdown.map((b, i) => (
+            <div key={i} className="flex justify-between text-muted-foreground">
+              <span>{b.model} ({getProviderLabel(b.provider)})</span>
+              <span>${b.totalCost.toFixed(4)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = useState("");
   const [gamesPerMatchup, setGamesPerMatchup] = useState("3");
@@ -573,6 +657,8 @@ function CreateTournamentForm({ onCreated }: { onCreated: () => void }) {
             ))}
           </div>
         </div>
+
+        <TournamentCostEstimate matchups={matchups} gamesPerMatchup={parseInt(gamesPerMatchup) || 3} />
 
         <Button
           className="w-full"

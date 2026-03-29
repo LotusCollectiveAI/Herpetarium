@@ -260,6 +260,7 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   completionTokens: integer("completion_tokens"),
   totalTokens: integer("total_tokens"),
   estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
+  reasoningTrace: text("reasoning_trace"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
