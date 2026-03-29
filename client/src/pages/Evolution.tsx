@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, Dna, Play, Bot, BarChart3, Loader2, ChevronDown, ChevronRight, Zap, TrendingUp, GitBranch, Shield, Brain, Crosshair, BookOpen, AlertTriangle, Square, DollarSign } from "lucide-react";
+import { ArrowLeft, ArrowDown, Dna, Play, Bot, BarChart3, Loader2, ChevronDown, ChevronRight, Zap, TrendingUp, GitBranch, Shield, Brain, Crosshair, BookOpen, AlertTriangle, Square, DollarSign } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
@@ -298,6 +298,103 @@ function FitnessChart({ generations, phaseTransitions }: { generations: Generati
   );
 }
 
+function LineageTree({ runId, currentGeneration }: { runId: number; currentGeneration: number }) {
+  const { data: allGenomes } = useQuery<StrategyGenome[]>({
+    queryKey: ['/api/evolution', runId, 'genomes', 'all'],
+    queryFn: async () => {
+      const res = await fetch(`/api/evolution/${runId}/genomes`);
+      return res.json();
+    },
+    refetchInterval: 5000,
+  });
+
+  if (!allGenomes || allGenomes.length === 0) {
+    return (
+      <Card className="border-border/50">
+        <CardHeader className="pb-2"><CardTitle className="text-sm">Lineage Tree</CardTitle></CardHeader>
+        <CardContent><div className="text-muted-foreground text-center py-4">No lineage data available</div></CardContent>
+      </Card>
+    );
+  }
+
+  const byGen = new Map<number, StrategyGenome[]>();
+  for (const g of allGenomes) {
+    const list = byGen.get(g.generationNumber) || [];
+    list.push(g);
+    byGen.set(g.generationNumber, list);
+  }
+
+  const genNumbers = Array.from(byGen.keys()).sort((a, b) => a - b);
+  const genomeMap = new Map<number, StrategyGenome>();
+  for (const g of allGenomes) genomeMap.set(g.id, g);
+
+  const topByGen = new Map<number, Set<number>>();
+  for (const genNum of genNumbers) {
+    const genomes = byGen.get(genNum) || [];
+    const sorted = [...genomes].sort((a, b) => (parseFloat(b.fitnessScore || "0")) - (parseFloat(a.fitnessScore || "0")));
+    topByGen.set(genNum, new Set(sorted.slice(0, 3).map(g => g.id)));
+  }
+
+  return (
+    <Card className="border-border/50">
+      <CardHeader className="pb-2"><CardTitle className="text-sm">Lineage Tree</CardTitle></CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <div className="min-w-[600px]">
+            {genNumbers.map((genNum) => {
+              const genomes = byGen.get(genNum) || [];
+              const sorted = [...genomes].sort((a, b) => (parseFloat(b.fitnessScore || "0")) - (parseFloat(a.fitnessScore || "0")));
+              return (
+                <div key={genNum} className="mb-4" data-testid={`lineage-gen-${genNum}`}>
+                  <div className="text-xs text-muted-foreground mb-1 font-medium">Generation {genNum}</div>
+                  <div className="flex flex-wrap gap-2">
+                    {sorted.map((g) => {
+                      const isTop = topByGen.get(genNum)?.has(g.id);
+                      const isSeed = !g.parentIds || (g.parentIds as number[]).length === 0;
+                      const parentNames = (g.parentIds as number[])?.map(pid => {
+                        const parent = genomeMap.get(pid);
+                        return parent ? (parent.lineageTag || `#${pid}`) : `#${pid}`;
+                      });
+
+                      return (
+                        <div
+                          key={g.id}
+                          className={`rounded p-2 text-xs border transition-colors ${isTop ? 'border-amber-400/50 bg-amber-400/10' : 'border-border/30 bg-muted/20'}`}
+                          data-testid={`lineage-node-${g.id}`}
+                          title={g.mutationLog || undefined}
+                        >
+                          <div className="flex items-center gap-1 mb-0.5">
+                            {isSeed ? (
+                              <Dna className="w-3 h-3 text-green-400" />
+                            ) : (
+                              <GitBranch className="w-3 h-3 text-amber-400" />
+                            )}
+                            <span className="font-medium truncate max-w-[120px]">{g.lineageTag || `G${g.id}`}</span>
+                          </div>
+                          <div className="text-muted-foreground space-y-0.5">
+                            <div>Elo {g.eloRating} | W{g.wins}/L{g.losses}</div>
+                            {g.fitnessScore && <div>Fit: {parseFloat(g.fitnessScore).toFixed(3)}</div>}
+                            {parentNames && parentNames.length > 0 && (
+                              <div className="flex items-center gap-0.5">
+                                <ArrowDown className="w-2.5 h-2.5" />
+                                <span className="truncate max-w-[100px]">{parentNames.join(" × ")}</span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function GenomeCard({ genome, rank }: { genome: StrategyGenome; rank: number }) {
   const [expanded, setExpanded] = useState(false);
   const modules = genome.modules;
@@ -519,38 +616,7 @@ function RunDetail({ runId }: { runId: number }) {
         </TabsContent>
 
         <TabsContent value="lineage">
-          <Card className="border-border/50">
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">Lineage Browser</CardTitle>
-            </CardHeader>
-            <CardContent>
-              {displayGenomes.length === 0 ? (
-                <div className="text-muted-foreground text-center py-4">No lineage data available</div>
-              ) : (
-                <div className="space-y-3">
-                  {displayGenomes.slice(0, 5).map(g => (
-                    <div key={g.id} className="bg-muted/30 rounded p-3">
-                      <div className="flex items-center gap-2 mb-1">
-                        <GitBranch className="w-4 h-4 text-amber-400" />
-                        <span className="font-medium text-sm">{g.lineageTag || `Genome ${g.id}`}</span>
-                        <Badge variant="outline" className="text-xs">Elo {g.eloRating}</Badge>
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {g.parentIds && (g.parentIds as number[]).length > 0 ? (
-                          <span>Descended from genomes: {(g.parentIds as number[]).join(", ")}</span>
-                        ) : (
-                          <span>Seed genome (no parents)</span>
-                        )}
-                      </div>
-                      {g.mutationLog && (
-                        <div className="text-xs text-muted-foreground mt-1 italic">{g.mutationLog}</div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          <LineageTree runId={run.id} currentGeneration={run.currentGeneration} />
         </TabsContent>
       </Tabs>
 

@@ -377,7 +377,7 @@ function callAIRaw(config: AIPlayerConfig, systemPrompt: string, userPrompt: str
   }
 }
 
-async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+export async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
   return callAIWithBackoff(config, systemPrompt, userPrompt);
 }
 

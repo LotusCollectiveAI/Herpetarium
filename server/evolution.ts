@@ -1,6 +1,7 @@
 import type { GenomeModules, StrategyGenome, EvolutionConfig, PhaseTransition, AIPlayerConfig } from "@shared/schema";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
+import { callAI } from "./ai";
 import { log } from "./index";
 
 const activeRuns = new Map<number, boolean>();
@@ -151,52 +152,90 @@ function computePopulationDiversity(genomes: StrategyGenome[]): number {
   return totalPairs > 0 ? totalDiff / totalPairs : 0;
 }
 
+interface GenStats {
+  gen: number;
+  avgFitness: number;
+  maxFitness: number;
+  diversity: number;
+  fitnessStdDev: number;
+  avgIntRate: number;
+  intRateVariance: number;
+  fitnessSkewness: number;
+}
+
+function computeExtendedStats(genomes: StrategyGenome[]): { avgIntRate: number; intRateVariance: number; fitnessSkewness: number } {
+  const intRates = genomes.map(g => g.interceptionRate ? parseFloat(g.interceptionRate) : 0);
+  const avgIntRate = intRates.length > 0 ? intRates.reduce((a, b) => a + b, 0) / intRates.length : 0;
+  const intRateVariance = intRates.length > 1
+    ? intRates.reduce((sum, r) => sum + (r - avgIntRate) ** 2, 0) / (intRates.length - 1)
+    : 0;
+
+  const fitnesses = genomes.map(g => computeFitness(g));
+  const avgF = fitnesses.length > 0 ? fitnesses.reduce((a, b) => a + b, 0) / fitnesses.length : 0;
+  const stdF = fitnesses.length > 1
+    ? Math.sqrt(fitnesses.reduce((sum, f) => sum + (f - avgF) ** 2, 0) / (fitnesses.length - 1))
+    : 0;
+  const fitnessSkewness = stdF > 0 && fitnesses.length > 2
+    ? fitnesses.reduce((sum, f) => sum + ((f - avgF) / stdF) ** 3, 0) / fitnesses.length
+    : 0;
+
+  return { avgIntRate, intRateVariance, fitnessSkewness };
+}
+
 function detectPhaseTransitions(
   currentGen: number,
-  generationStats: Array<{ gen: number; avgFitness: number; maxFitness: number; diversity: number; fitnessStdDev: number }>
+  generationStats: GenStats[]
 ): PhaseTransition | null {
   if (generationStats.length < 3) return null;
 
   const recent = generationStats.slice(-3);
   const prev = recent[recent.length - 2];
   const curr = recent[recent.length - 1];
+  const evidenceParts: string[] = [];
 
-  if (curr.diversity < 0.2 && prev.diversity >= 0.2) {
-    return {
-      fromGeneration: currentGen - 1,
-      toGeneration: currentGen,
-      type: "convergence",
-      evidence: `Diversity dropped from ${prev.diversity.toFixed(3)} to ${curr.diversity.toFixed(3)}`,
-      detectedAt: new Date().toISOString(),
-    };
-  }
-
-  if (curr.diversity < 0.1 && curr.fitnessStdDev < 0.05) {
+  if (curr.diversity < 0.1 && curr.fitnessStdDev < 0.05 && curr.intRateVariance < 0.01) {
+    evidenceParts.push(`Low diversity (${curr.diversity.toFixed(3)}), fitness stddev (${curr.fitnessStdDev.toFixed(3)}), intercept variance (${curr.intRateVariance.toFixed(4)})`);
     return {
       fromGeneration: currentGen - 1,
       toGeneration: currentGen,
       type: "collapse",
-      evidence: `Very low diversity (${curr.diversity.toFixed(3)}) and fitness std dev (${curr.fitnessStdDev.toFixed(3)})`,
+      evidence: evidenceParts.join("; "),
+      detectedAt: new Date().toISOString(),
+    };
+  }
+
+  if (curr.diversity < 0.2 && prev.diversity >= 0.2) {
+    evidenceParts.push(`Diversity: ${prev.diversity.toFixed(3)} → ${curr.diversity.toFixed(3)}`);
+    if (curr.fitnessSkewness > 1) evidenceParts.push(`Positive fitness skew (${curr.fitnessSkewness.toFixed(2)}) — few dominant strategies`);
+    return {
+      fromGeneration: currentGen - 1,
+      toGeneration: currentGen,
+      type: "convergence",
+      evidence: evidenceParts.join("; "),
       detectedAt: new Date().toISOString(),
     };
   }
 
   if (curr.fitnessStdDev > prev.fitnessStdDev * 1.5 && curr.diversity > prev.diversity) {
+    evidenceParts.push(`Fitness variance ${(curr.fitnessStdDev / prev.fitnessStdDev).toFixed(2)}x with rising diversity`);
+    if (curr.intRateVariance > prev.intRateVariance * 1.3) evidenceParts.push(`Interception variance rising (${curr.intRateVariance.toFixed(4)})`);
     return {
       fromGeneration: currentGen - 1,
       toGeneration: currentGen,
       type: "exploration",
-      evidence: `Fitness variance increased ${(curr.fitnessStdDev / prev.fitnessStdDev).toFixed(2)}x with rising diversity`,
+      evidence: evidenceParts.join("; "),
       detectedAt: new Date().toISOString(),
     };
   }
 
   if (curr.maxFitness > prev.maxFitness && curr.diversity < prev.diversity) {
+    evidenceParts.push(`Max fitness: ${prev.maxFitness.toFixed(3)} → ${curr.maxFitness.toFixed(3)}, diversity declining`);
+    if (curr.fitnessSkewness < -0.5) evidenceParts.push(`Negative skew (${curr.fitnessSkewness.toFixed(2)}) — fitness clustering at top`);
     return {
       fromGeneration: currentGen - 1,
       toGeneration: currentGen,
       type: "exploitation",
-      evidence: `Max fitness rising (${prev.maxFitness.toFixed(3)} → ${curr.maxFitness.toFixed(3)}) while diversity decreasing`,
+      evidence: evidenceParts.join("; "),
       detectedAt: new Date().toISOString(),
     };
   }
@@ -258,7 +297,7 @@ export async function runEvolution(runId: number) {
 
     log(`[evolution] Starting run ${runId}: ${config.totalGenerations} generations, pop ${config.populationSize}`, "evolution");
 
-    const generationStats: Array<{ gen: number; avgFitness: number; maxFitness: number; diversity: number; fitnessStdDev: number }> = [];
+    const generationStats: GenStats[] = [];
     const allMatchIds: number[] = [];
     const transitions: PhaseTransition[] = [];
 
@@ -391,7 +430,8 @@ export async function runEvolution(runId: number) {
       const stdDev = Math.sqrt(variance);
       const diversity = computePopulationDiversity(updatedPop);
 
-      generationStats.push({ gen, avgFitness, maxFitness, diversity, fitnessStdDev: stdDev });
+      const extStats = computeExtendedStats(updatedPop);
+      generationStats.push({ gen, avgFitness, maxFitness, diversity, fitnessStdDev: stdDev, ...extStats });
 
       await storage.updateGeneration(genRecord.id, {
         status: "completed",
@@ -485,7 +525,8 @@ async function produceNextGeneration(
       let mutationLog = `Crossover of genome ${parentA.id} and ${parentB.id}`;
 
       if (Math.random() < config.mutationRate) {
-        const { mutated, log: mLog } = mutateModules(childModules);
+        const parentFitness = (computeFitness(parentA) + computeFitness(parentB)) / 2;
+        const { mutated, log: mLog } = await mutateModulesWithAI(childModules, config, parentFitness, currentGen);
         childModules = mutated;
         mutationLog += `. Mutation: ${mLog}`;
       }
@@ -505,7 +546,8 @@ async function produceNextGeneration(
       newGenomes.push(created);
     } else {
       const parent = tournamentSelect(population);
-      const { mutated, log: mLog } = mutateModules(parent.modules as GenomeModules);
+      const parentFitness = computeFitness(parent);
+      const { mutated, log: mLog } = await mutateModulesWithAI(parent.modules as GenomeModules, config, parentFitness, currentGen);
 
       const created = await storage.createStrategyGenome({
         evolutionRunId: runId,
@@ -553,7 +595,7 @@ const MUTATION_VARIANTS: Record<keyof GenomeModules, string[]> = {
   ],
 };
 
-function mutateModules(modules: GenomeModules): { mutated: GenomeModules; log: string } {
+function mutateModulesFallback(modules: GenomeModules): { mutated: GenomeModules; log: string } {
   const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
   const targetKey = keys[Math.floor(Math.random() * keys.length)];
   const variants = MUTATION_VARIANTS[targetKey];
@@ -561,6 +603,51 @@ function mutateModules(modules: GenomeModules): { mutated: GenomeModules; log: s
 
   return {
     mutated: { ...modules, [targetKey]: newValue },
-    log: `${targetKey} mutated`,
+    log: `${targetKey} mutated (fallback)`,
   };
+}
+
+async function mutateModulesWithAI(
+  modules: GenomeModules,
+  config: EvolutionConfig,
+  fitnessScore: number,
+  genNumber: number
+): Promise<{ mutated: GenomeModules; log: string }> {
+  const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
+  const targetKey = keys[Math.floor(Math.random() * keys.length)];
+
+  const aiConfig: AIPlayerConfig = {
+    provider: config.baseProvider,
+    model: config.baseModel,
+    timeoutMs: 30000,
+    temperature: 0.9,
+    promptStrategy: "default" as const,
+  };
+
+  const systemPrompt = `You are a strategy evolution engine for a word deduction game called Decrypto. Your job is to mutate one module of a strategy genome to create a meaningfully different variant. Keep mutations targeted — change the approach while preserving coherence. Respond with ONLY the new module text (1-3 sentences), no explanation.`;
+
+  const userPrompt = `Generation ${genNumber}, fitness score: ${fitnessScore.toFixed(3)}
+
+Current genome modules:
+- cluePhilosophy: ${modules.cluePhilosophy}
+- opponentModeling: ${modules.opponentModeling}
+- riskTolerance: ${modules.riskTolerance}
+- memoryPolicy: ${modules.memoryPolicy}
+
+Mutate the "${targetKey}" module. Create a meaningfully different variant that could improve performance. ${fitnessScore < 0.3 ? "This genome is underperforming — try a bold, creative change." : fitnessScore > 0.6 ? "This genome is performing well — try a subtle refinement." : "Try a moderate adjustment."}`;
+
+  try {
+    const result = await callAI(aiConfig, systemPrompt, userPrompt);
+    const newValue = result.content.trim();
+    if (newValue.length < 10 || newValue.length > 500) {
+      return mutateModulesFallback(modules);
+    }
+    return {
+      mutated: { ...modules, [targetKey]: newValue },
+      log: `${targetKey} mutated (AI-assisted)`,
+    };
+  } catch (err) {
+    log(`[evolution] AI mutation failed, using fallback: ${err}`, "evolution");
+    return mutateModulesFallback(modules);
+  }
 }
