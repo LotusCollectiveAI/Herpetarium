@@ -83,6 +83,12 @@ Preferred communication style: Simple, everyday language.
 - Re-sends join message with stored playerId on reconnect
 - Ghost player cleanup: server closes old WebSocket connections when a player reconnects with the same playerId
 
+### Vision & Research Documents
+- `docs/PRODUCT_VISION.md` - Mission statement, abstraction ladder concept, core principles
+- `docs/MODES_OF_PLAY_ROADMAP.md` - Future capabilities roadmap (5 phases: cross-model teams → evolutionary tournaments)
+- `docs/FUTURE_VIGNETTES.md` - Four narrative vignettes from advanced versions of the product
+- `docs/ARCHITECTURE_PROGRESSION.md` - Visual progression diagrams, capability matrix, Karpathy Auto Research parallels
+
 ### Project Structure
 ```
 client/           # React frontend
