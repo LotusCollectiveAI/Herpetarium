@@ -9,12 +9,12 @@ import { GuessingView } from "@/components/views/GuessingView";
 import { InterceptingView } from "@/components/views/InterceptingView";
 import { RoundResultsView } from "@/components/views/RoundResultsView";
 import { GameOverView } from "@/components/views/GameOverView";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 
 export default function Game() {
   const params = useParams<{ id: string }>();
   const gameId = params.id || "";
-  const { gameState, isConnected, connect } = useGame();
+  const { gameState, isConnected, connect, aiFallback, clueError } = useGame();
 
   useEffect(() => {
     const playerName = sessionStorage.getItem("playerName") || `Player${Math.random().toString(36).slice(2, 6)}`;
@@ -58,6 +58,22 @@ export default function Game() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <GameHeader gameId={gameId} />
+      {(aiFallback || clueError) && (
+        <div className="px-4 pt-2" data-testid="notification-banner">
+          {aiFallback && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 dark:text-yellow-400 text-sm" data-testid="text-ai-fallback">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {aiFallback}
+            </div>
+          )}
+          {clueError && (
+            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-400 text-sm mt-2" data-testid="text-clue-error">
+              <AlertTriangle className="h-4 w-4 shrink-0" />
+              {clueError}
+            </div>
+          )}
+        </div>
+      )}
       <main className="flex-1 flex flex-col overflow-hidden">
         {renderPhaseView()}
       </main>

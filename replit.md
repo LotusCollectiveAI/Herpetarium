@@ -40,6 +40,18 @@ Preferred communication style: Simple, everyday language.
 - Multiple AI providers supported: OpenAI (ChatGPT), Anthropic (Claude), Google (Gemini)
 - AI players can generate clues, make guesses, and attempt interceptions
 - Lazy initialization of AI clients to avoid startup crashes
+- 30-second timeout on all AI calls with automatic fallback values
+- AI failures broadcast "ai_fallback" messages to all clients for UI feedback
+
+### Input Validation
+- Frontend clue validation: single-word only, no blanks, no keywords or root words
+- Server-side clue validation mirrors frontend rules; rejects invalid clues with "clue_error" message
+- Stem-matching prevents submitting word variants of keywords
+
+### WebSocket Resilience
+- Client auto-reconnects on unexpected close with exponential backoff (1s, 2s, 4s, max 3 attempts)
+- Re-sends join message with stored playerId on reconnect
+- Ghost player cleanup: server closes old WebSocket connections when a player reconnects with the same playerId
 
 ### Project Structure
 ```

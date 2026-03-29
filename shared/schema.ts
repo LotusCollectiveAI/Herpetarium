@@ -127,10 +127,12 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("player_joined"), player: playerSchema }),
   z.object({ type: z.literal("player_left"), playerId: z.string() }),
   z.object({ type: z.literal("error"), message: z.string() }),
+  z.object({ type: z.literal("clue_error"), message: z.string() }),
   z.object({ type: z.literal("your_code"), code: z.tuple([z.number(), z.number(), z.number()]) }),
   z.object({ type: z.literal("keywords"), keywords: z.array(z.string()) }),
   z.object({ type: z.literal("ai_thinking"), aiName: z.string() }),
   z.object({ type: z.literal("ai_done"), aiName: z.string() }),
+  z.object({ type: z.literal("ai_fallback"), aiName: z.string(), reason: z.string() }),
 ]);
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;

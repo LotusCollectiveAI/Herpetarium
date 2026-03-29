@@ -176,118 +176,101 @@ function parseCluesResponse(response: string): string[] {
 export async function generateClues(provider: AIProvider, params: ClueGenerationParams): Promise<string[]> {
   const prompt = buildCluePrompt(params);
   
-  try {
-    switch (provider) {
-      case "chatgpt": {
-        const response = await getOpenAI().chat.completions.create({
-          model: "gpt-4o",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 50,
-          temperature: 0.7,
-        });
-        return parseCluesResponse(response.choices[0]?.message?.content || "");
-      }
-      
-      case "claude": {
-        const response = await getAnthropic().messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 50,
-          messages: [{ role: "user", content: prompt }],
-        });
-        const content = response.content[0];
-        return parseCluesResponse(content.type === "text" ? content.text : "");
-      }
-      
-      case "gemini": {
-        const response = await getGemini().models.generateContent({
-          model: "gemini-2.0-flash",
-          contents: prompt,
-        });
-        return parseCluesResponse(response.text || "");
-      }
+  switch (provider) {
+    case "chatgpt": {
+      const response = await getOpenAI().chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 50,
+        temperature: 0.7,
+      });
+      return parseCluesResponse(response.choices[0]?.message?.content || "");
     }
-  } catch (error) {
-    console.error(`AI clue generation error (${provider}):`, error);
-    // Return fallback clues based on keywords
-    const idx = params.targetCode.map(n => n - 1);
-    return idx.map(i => params.keywords[i].slice(0, 3));
+    
+    case "claude": {
+      const response = await getAnthropic().messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 50,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const content = response.content[0];
+      return parseCluesResponse(content.type === "text" ? content.text : "");
+    }
+    
+    case "gemini": {
+      const response = await getGemini().models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt,
+      });
+      return parseCluesResponse(response.text || "");
+    }
   }
 }
 
 export async function generateGuess(provider: AIProvider, params: GuessParams): Promise<[number, number, number]> {
   const prompt = buildGuessPrompt(params);
   
-  try {
-    switch (provider) {
-      case "chatgpt": {
-        const response = await getOpenAI().chat.completions.create({
-          model: "gpt-4o",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 20,
-          temperature: 0.3,
-        });
-        return parseCodeResponse(response.choices[0]?.message?.content || "");
-      }
-      
-      case "claude": {
-        const response = await getAnthropic().messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 20,
-          messages: [{ role: "user", content: prompt }],
-        });
-        const content = response.content[0];
-        return parseCodeResponse(content.type === "text" ? content.text : "");
-      }
-      
-      case "gemini": {
-        const response = await getGemini().models.generateContent({
-          model: "gemini-2.0-flash",
-          contents: prompt,
-        });
-        return parseCodeResponse(response.text || "");
-      }
+  switch (provider) {
+    case "chatgpt": {
+      const response = await getOpenAI().chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 20,
+        temperature: 0.3,
+      });
+      return parseCodeResponse(response.choices[0]?.message?.content || "");
     }
-  } catch (error) {
-    console.error(`AI guess error (${provider}):`, error);
-    return [1, 2, 3];
+    
+    case "claude": {
+      const response = await getAnthropic().messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 20,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const content = response.content[0];
+      return parseCodeResponse(content.type === "text" ? content.text : "");
+    }
+    
+    case "gemini": {
+      const response = await getGemini().models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt,
+      });
+      return parseCodeResponse(response.text || "");
+    }
   }
 }
 
 export async function generateInterception(provider: AIProvider, params: InterceptionParams): Promise<[number, number, number]> {
   const prompt = buildInterceptionPrompt(params);
   
-  try {
-    switch (provider) {
-      case "chatgpt": {
-        const response = await getOpenAI().chat.completions.create({
-          model: "gpt-4o",
-          messages: [{ role: "user", content: prompt }],
-          max_tokens: 20,
-          temperature: 0.5,
-        });
-        return parseCodeResponse(response.choices[0]?.message?.content || "");
-      }
-      
-      case "claude": {
-        const response = await getAnthropic().messages.create({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 20,
-          messages: [{ role: "user", content: prompt }],
-        });
-        const content = response.content[0];
-        return parseCodeResponse(content.type === "text" ? content.text : "");
-      }
-      
-      case "gemini": {
-        const response = await getGemini().models.generateContent({
-          model: "gemini-2.0-flash",
-          contents: prompt,
-        });
-        return parseCodeResponse(response.text || "");
-      }
+  switch (provider) {
+    case "chatgpt": {
+      const response = await getOpenAI().chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: 20,
+        temperature: 0.5,
+      });
+      return parseCodeResponse(response.choices[0]?.message?.content || "");
     }
-  } catch (error) {
-    console.error(`AI interception error (${provider}):`, error);
-    return [1, 2, 3];
+    
+    case "claude": {
+      const response = await getAnthropic().messages.create({
+        model: "claude-sonnet-4-20250514",
+        max_tokens: 20,
+        messages: [{ role: "user", content: prompt }],
+      });
+      const content = response.content[0];
+      return parseCodeResponse(content.type === "text" ? content.text : "");
+    }
+    
+    case "gemini": {
+      const response = await getGemini().models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt,
+      });
+      return parseCodeResponse(response.text || "");
+    }
   }
 }
