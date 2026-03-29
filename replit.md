@@ -48,6 +48,14 @@ Preferred communication style: Simple, everyday language.
 - Server-side clue validation mirrors frontend rules; rejects invalid clues with "clue_error" message
 - Stem-matching prevents submitting word variants of keywords
 
+### UX Polish
+- Phase transition announcements: `PhaseAnnouncement` overlay component shows briefly when game phase changes
+- Round results: animated token awards with delayed reveal, summary text per team
+- AI thinking indicators: `AIThinkingIndicator` component with provider-specific styling (ChatGPT green, Claude orange, Gemini blue) and animated dots
+- Mobile interception layout: tabbed interface (Clues/History/Guess) on screens < 640px
+- Play again: host can create new game with same players from game over screen via `new_game_same_players` WebSocket message
+- Toast notifications for phase transitions and key game events
+
 ### WebSocket Resilience
 - Client auto-reconnects on unexpected close with exponential backoff (1s, 2s, 4s, max 3 attempts)
 - Re-sends join message with stored playerId on reconnect

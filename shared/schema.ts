@@ -117,6 +117,7 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("submit_interception"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
   z.object({ type: z.literal("next_round") }),
   z.object({ type: z.literal("request_state") }),
+  z.object({ type: z.literal("new_game_same_players") }),
 ]);
 
 export type WSMessage = z.infer<typeof wsMessageSchema>;
@@ -133,6 +134,8 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ai_thinking"), aiName: z.string() }),
   z.object({ type: z.literal("ai_done"), aiName: z.string() }),
   z.object({ type: z.literal("ai_fallback"), aiName: z.string(), reason: z.string() }),
+  z.object({ type: z.literal("new_game_created"), gameId: z.string() }),
+  z.object({ type: z.literal("phase_changed"), phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_guessing", "opponent_intercepting", "round_results", "game_over"]), round: z.number() }),
 ]);
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;

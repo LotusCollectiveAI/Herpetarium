@@ -85,9 +85,17 @@ function sendTo(ws: WebSocket, message: ServerMessage) {
   }
 }
 
+const lastPhase = new Map<string, string>();
+
 function sendGameState(gameId: string) {
   const game = games.get(gameId);
   if (!game) return;
+  
+  const prevPhase = lastPhase.get(gameId);
+  if (prevPhase && prevPhase !== game.phase) {
+    broadcast(gameId, { type: "phase_changed", phase: game.phase, round: game.round });
+  }
+  lastPhase.set(gameId, game.phase);
   
   broadcast(gameId, { type: "game_state", state: game });
   
@@ -598,6 +606,69 @@ function handleMessage(ws: WebSocket, message: WSMessage) {
     case "request_state": {
       if (!client) return;
       sendGameState(client.gameId);
+      break;
+    }
+    
+    case "new_game_same_players": {
+      if (!client) return;
+      
+      const game = games.get(client.gameId);
+      if (!game || game.phase !== "game_over") {
+        sendTo(ws, { type: "error", message: "Game is not over" });
+        return;
+      }
+      
+      if (game.hostId !== client.playerId) {
+        sendTo(ws, { type: "error", message: "Only the host can start a new game" });
+        return;
+      }
+      
+      const newHostId = generatePlayerId();
+      const newGame = createNewGame(newHostId, "host");
+      
+      const playerMapping = new Map<string, string>();
+      const newPlayers: Player[] = [];
+      
+      for (const player of game.players) {
+        const newId = player.id === client.playerId ? newHostId : generatePlayerId();
+        playerMapping.set(player.id, newId);
+        newPlayers.push({
+          id: newId,
+          name: player.name,
+          isAI: player.isAI,
+          aiProvider: player.aiProvider,
+          team: null,
+          isReady: player.isAI,
+        });
+      }
+      
+      const freshGame: GameState = {
+        ...newGame,
+        players: newPlayers,
+        hostId: newHostId,
+      };
+      
+      const newGameId = freshGame.id;
+      games.set(newGameId, freshGame);
+      
+      const sockets = gameClients.get(client.gameId);
+      if (sockets) {
+        sockets.forEach(existingWs => {
+          const existingClient = clients.get(existingWs);
+          if (existingClient) {
+            const newPid = playerMapping.get(existingClient.playerId) || existingClient.playerId;
+            clients.set(existingWs, { ws: existingWs, playerId: newPid, gameId: newGameId });
+          }
+        });
+        gameClients.set(newGameId, new Set(sockets));
+        gameClients.delete(client.gameId);
+      }
+      
+      games.delete(client.gameId);
+      
+      broadcast(newGameId, { type: "new_game_created", gameId: newGameId });
+      sendGameState(newGameId);
+      log(`New game ${newGameId} created from ${client.gameId} with same players`, "websocket");
       break;
     }
   }

@@ -1,11 +1,18 @@
+import { useEffect, useState } from "react";
 import { useGame } from "@/lib/gameContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Check, X, Target, ArrowRight } from "lucide-react";
+import { Check, X, Target, ArrowRight, Trophy, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export function RoundResultsView() {
   const { gameState, myTeam, isHost, sendMessage } = useGame();
+  const [showTokens, setShowTokens] = useState(false);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setShowTokens(true), 600);
+    return () => clearTimeout(timer);
+  }, []);
 
   if (!gameState || !myTeam) return null;
 
@@ -18,26 +25,52 @@ export function RoundResultsView() {
   const latestAmber = amberHistory[amberHistory.length - 1];
   const latestBlue = blueHistory[blueHistory.length - 1];
 
+  const getTeamSummary = (team: "amber" | "blue", latest: typeof latestAmber | undefined) => {
+    if (!latest) return null;
+    const teamName = team === "amber" ? "Amber" : "Blue";
+    const parts: string[] = [];
+    if (latest.ownTeamCorrect) {
+      parts.push(`Team ${teamName} decoded correctly!`);
+    } else {
+      parts.push(`Team ${teamName} failed to decode!`);
+    }
+    if (latest.intercepted) {
+      parts.push(`Their code was intercepted!`);
+    }
+    return parts.join(" ");
+  };
+
   const renderTeamResult = (
     team: "amber" | "blue",
     latestRound: typeof latestAmber | undefined
   ) => {
     if (!latestRound) return null;
 
+    const isGoodOutcome = latestRound.ownTeamCorrect && !latestRound.intercepted;
+
     return (
       <Card className={cn(
-        "border-2",
+        "border-2 transition-all duration-500",
         team === "amber" ? "border-amber-500/30" : "border-blue-500/30"
       )}>
         <CardHeader className={cn(
           "pb-2",
           team === "amber" ? "team-amber" : "team-blue"
         )}>
-          <CardTitle className="text-white text-sm">
+          <CardTitle className="text-white text-sm flex items-center gap-2">
+            {isGoodOutcome && <Trophy className="h-4 w-4" />}
+            {!latestRound.ownTeamCorrect && <AlertTriangle className="h-4 w-4" />}
             Team {team === "amber" ? "Amber" : "Blue"}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-4 pt-4">
+          <p className={cn(
+            "text-sm font-medium text-center px-2 py-1.5 rounded",
+            isGoodOutcome ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-red-500/10 text-red-600 dark:text-red-400"
+          )} data-testid={`text-summary-${team}`}>
+            {getTeamSummary(team, latestRound)}
+          </p>
+
           <div className="flex items-center gap-2 text-sm">
             <span className="text-muted-foreground">Code:</span>
             {latestRound.targetCode.map((num, i) => (
@@ -66,7 +99,7 @@ export function RoundResultsView() {
 
           <div className="space-y-2">
             <div className={cn(
-              "flex items-center justify-between p-2 rounded",
+              "flex items-center justify-between p-2 rounded transition-all duration-300",
               latestRound.ownTeamCorrect ? "bg-emerald-500/10" : "bg-red-500/10"
             )}>
               <span className="text-sm">Own Team Guess</span>
@@ -88,7 +121,7 @@ export function RoundResultsView() {
             </div>
 
             <div className={cn(
-              "flex items-center justify-between p-2 rounded",
+              "flex items-center justify-between p-2 rounded transition-all duration-300",
               latestRound.intercepted ? "bg-red-500/10" : "bg-muted"
             )}>
               <span className="text-sm">Opponent Interception</span>
@@ -110,21 +143,35 @@ export function RoundResultsView() {
             </div>
           </div>
 
-          <div className="flex items-center gap-4 pt-2 border-t">
+          <div className={cn(
+            "flex items-center gap-4 pt-2 border-t transition-all duration-500",
+            showTokens ? "opacity-100 translate-y-0" : "opacity-0 translate-y-2"
+          )}>
             {!latestRound.ownTeamCorrect && (
-              <div className="flex items-center gap-1 text-xs">
-                <div className="w-4 h-4 rounded-full bg-white border-2 border-gray-300" />
-                <span className="text-muted-foreground">+1 White Token (fail)</span>
+              <div className="flex items-center gap-1 text-xs" data-testid={`token-white-${team}`}>
+                <div className={cn(
+                  "w-5 h-5 rounded-full bg-white border-2 border-gray-300 transition-transform duration-500",
+                  showTokens ? "scale-100" : "scale-0"
+                )} />
+                <span className="text-red-500 font-medium">+1 White Token</span>
               </div>
             )}
             {latestRound.intercepted && (
-              <div className="flex items-center gap-1 text-xs">
-                <div className="w-4 h-4 rounded-full bg-gray-900 border-2 border-gray-700" />
-                <span className="text-muted-foreground">+1 Black Token (intercepted)</span>
+              <div className="flex items-center gap-1 text-xs" data-testid={`token-black-${team}`}>
+                <div className={cn(
+                  "w-5 h-5 rounded-full bg-gray-900 border-2 border-gray-700 transition-transform duration-500 delay-200",
+                  showTokens ? "scale-100" : "scale-0"
+                )} />
+                <span className="text-red-500 font-medium">+1 Black Token</span>
               </div>
             )}
             {latestRound.ownTeamCorrect && !latestRound.intercepted && (
-              <span className="text-xs text-emerald-500">Perfect round!</span>
+              <span className={cn(
+                "text-sm text-emerald-500 font-medium transition-all duration-500",
+                showTokens ? "opacity-100" : "opacity-0"
+              )}>
+                Perfect round!
+              </span>
             )}
           </div>
         </CardContent>
@@ -135,7 +182,7 @@ export function RoundResultsView() {
   return (
     <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto">
       <div className="text-center">
-        <h2 className="text-xl font-bold">Round {gameState.round} Results</h2>
+        <h2 className="text-xl font-bold" data-testid="text-round-results-title">Round {gameState.round} Results</h2>
       </div>
 
       <div className="space-y-4">

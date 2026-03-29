@@ -4,7 +4,8 @@ import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { KeywordCard } from "@/components/KeywordCard";
 import { DeductionNotes } from "@/components/DeductionNotes";
-import { Loader2, Target } from "lucide-react";
+import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
+import { Target } from "lucide-react";
 
 export function GuessingView() {
   const { gameState, playerId, myTeam, myKeywords, sendMessage, aiThinking } = useGame();
@@ -102,13 +103,12 @@ export function GuessingView() {
           <CardContent className="py-8">
             <div className="flex flex-col items-center gap-4 text-center">
               {aiThinking ? (
-                <>
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <p className="text-muted-foreground">{aiThinking} is guessing...</p>
-                </>
+                <AIThinkingIndicator aiName={aiThinking} context="guess" />
               ) : (
                 <>
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                  <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
+                    <Target className="h-6 w-6 text-muted-foreground" />
+                  </div>
                   <p className="text-muted-foreground">
                     Your team is decoding your clues...
                   </p>

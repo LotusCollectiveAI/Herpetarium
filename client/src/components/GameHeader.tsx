@@ -1,8 +1,9 @@
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 import { ScoreBoard } from "./ScoreBoard";
+import { AIThinkingIndicator } from "./AIThinkingIndicator";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, Share2, Loader2 } from "lucide-react";
+import { ArrowLeft, Share2 } from "lucide-react";
 import { useGame } from "@/lib/gameContext";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -36,6 +37,11 @@ export function GameHeader({ gameId }: GameHeaderProps) {
     setLocation("/");
   };
 
+  const thinkingContext = gameState?.phase === "giving_clues" ? "clues" 
+    : gameState?.phase === "own_team_guessing" ? "guess" 
+    : gameState?.phase === "opponent_intercepting" ? "intercept" 
+    : "generic";
+
   return (
     <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b">
       <div className="flex items-center justify-between p-2 gap-2">
@@ -50,10 +56,7 @@ export function GameHeader({ gameId }: GameHeaderProps) {
 
         <div className="flex-1 flex items-center justify-center">
           {aiThinking && (
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              <span>{aiThinking} is thinking...</span>
-            </div>
+            <AIThinkingIndicator aiName={aiThinking} context={thinkingContext as any} size="sm" />
           )}
         </div>
 

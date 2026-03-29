@@ -3,7 +3,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ClueInput } from "@/components/ClueInput";
 import { KeywordCard } from "@/components/KeywordCard";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
-import { Loader2, MessageSquare } from "lucide-react";
+import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
+import { MessageSquare } from "lucide-react";
 
 export function GivingCluesView() {
   const { gameState, playerId, myTeam, myKeywords, myCode, sendMessage, aiThinking } = useGame();
@@ -75,10 +76,7 @@ export function GivingCluesView() {
           <CardContent className="py-8">
             <div className="flex flex-col items-center gap-4 text-center">
               {aiThinking ? (
-                <>
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <p className="text-muted-foreground">{aiThinking} is thinking...</p>
-                </>
+                <AIThinkingIndicator aiName={aiThinking} context="clues" />
               ) : clueGiver ? (
                 <>
                   <PlayerAvatar player={clueGiver} size="lg" showName={false} />

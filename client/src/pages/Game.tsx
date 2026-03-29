@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useParams } from "wouter";
 import { useGame } from "@/lib/gameContext";
 import { GameHeader } from "@/components/GameHeader";
+import { PhaseAnnouncement } from "@/components/PhaseAnnouncement";
 import { LobbyView } from "@/components/views/LobbyView";
 import { TeamSetupView } from "@/components/views/TeamSetupView";
 import { GivingCluesView } from "@/components/views/GivingCluesView";
@@ -14,7 +15,7 @@ import { Loader2, AlertTriangle } from "lucide-react";
 export default function Game() {
   const params = useParams<{ id: string }>();
   const gameId = params.id || "";
-  const { gameState, isConnected, connect, aiFallback, clueError } = useGame();
+  const { gameState, isConnected, connect, aiFallback, clueError, phaseAnnouncement, myTeam } = useGame();
 
   useEffect(() => {
     const playerName = sessionStorage.getItem("playerName") || `Player${Math.random().toString(36).slice(2, 6)}`;
@@ -58,6 +59,13 @@ export default function Game() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <GameHeader gameId={gameId} />
+      {phaseAnnouncement && (
+        <PhaseAnnouncement
+          phase={phaseAnnouncement.phase}
+          round={phaseAnnouncement.round}
+          myTeam={myTeam}
+        />
+      )}
       {(aiFallback || clueError) && (
         <div className="px-4 pt-2" data-testid="notification-banner">
           {aiFallback && (

@@ -1,13 +1,15 @@
+import { useState } from "react";
 import { useGame } from "@/lib/gameContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Trophy, Home, RotateCcw } from "lucide-react";
+import { Trophy, Home, RotateCcw, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 
 export function GameOverView() {
-  const { gameState, myTeam, disconnect } = useGame();
+  const { gameState, myTeam, isHost, sendMessage, disconnect } = useGame();
   const [, setLocation] = useLocation();
+  const [isCreating, setIsCreating] = useState(false);
 
   if (!gameState) return null;
 
@@ -15,6 +17,11 @@ export function GameOverView() {
   const isWinner = winner === myTeam;
 
   const handlePlayAgain = () => {
+    setIsCreating(true);
+    sendMessage({ type: "new_game_same_players" });
+  };
+
+  const handleBackToHome = () => {
     disconnect();
     setLocation("/");
   };
@@ -35,10 +42,10 @@ export function GameOverView() {
         <h1 className={cn(
           "text-3xl font-bold mb-2",
           winner === "amber" ? "text-amber-500" : "text-blue-500"
-        )}>
+        )} data-testid="text-winner">
           Team {winner === "amber" ? "Amber" : "Blue"} Wins!
         </h1>
-        <p className="text-muted-foreground">
+        <p className="text-muted-foreground" data-testid="text-winner-message">
           {isWinner 
             ? "Congratulations! Your team successfully cracked the code!" 
             : "Better luck next time!"}
@@ -139,15 +146,38 @@ export function GameOverView() {
         </Card>
       </div>
 
-      <Button
-        size="lg"
-        onClick={handlePlayAgain}
-        className="w-full max-w-md"
-        data-testid="button-play-again"
-      >
-        <Home className="h-5 w-5 mr-2" />
-        Back to Home
-      </Button>
+      <div className="flex flex-col gap-3 w-full max-w-md">
+        {isHost ? (
+          <Button
+            size="lg"
+            onClick={handlePlayAgain}
+            className="w-full"
+            disabled={isCreating}
+            data-testid="button-play-again"
+          >
+            {isCreating ? (
+              <Loader2 className="h-5 w-5 mr-2 animate-spin" />
+            ) : (
+              <RotateCcw className="h-5 w-5 mr-2" />
+            )}
+            {isCreating ? "Creating new game..." : "Play Again (Same Players)"}
+          </Button>
+        ) : (
+          <div className="text-center text-sm text-muted-foreground" data-testid="text-waiting-host">
+            Waiting for host to start a new game...
+          </div>
+        )}
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={handleBackToHome}
+          className="w-full"
+          data-testid="button-back-home"
+        >
+          <Home className="h-5 w-5 mr-2" />
+          Back to Home
+        </Button>
+      </div>
     </div>
   );
 }

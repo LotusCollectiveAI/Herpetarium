@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
-import type { GameState, Player, ServerMessage, WSMessage } from "@shared/schema";
+import type { GameState, GamePhase, Player, ServerMessage, WSMessage } from "@shared/schema";
+import { useToast } from "@/hooks/use-toast";
 
 interface GameContextType {
   gameState: GameState | null;
@@ -13,6 +14,7 @@ interface GameContextType {
   clueError: string | null;
   myKeywords: string[] | null;
   myCode: [number, number, number] | null;
+  phaseAnnouncement: { phase: GamePhase; round: number } | null;
   sendMessage: (message: WSMessage) => void;
   connect: (gameId: string, playerName: string) => void;
   disconnect: () => void;
@@ -33,11 +35,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const [clueError, setClueError] = useState<string | null>(null);
   const [myKeywords, setMyKeywords] = useState<string[] | null>(null);
   const [myCode, setMyCode] = useState<[number, number, number] | null>(null);
+  const [phaseAnnouncement, setPhaseAnnouncement] = useState<{ phase: GamePhase; round: number } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttemptRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gameIdRef = useRef<string | null>(null);
   const intentionalCloseRef = useRef(false);
+  const { toast } = useToast();
 
   const myTeam = gameState?.players.find(p => p.id === playerId)?.team ?? null;
   const isHost = gameState?.hostId === playerId;
@@ -74,25 +78,47 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
         const message = JSON.parse(event.data) as ServerMessage;
         
         switch (message.type) {
-          case "game_state":
-            setGameState(message.state);
+          case "game_state": {
+            const newState = message.state;
+            const currentGameId = gameIdRef.current || gameId;
+            setGameState(prev => {
+              if (prev && prev.phase !== newState.phase) {
+                const phaseToasts: Partial<Record<GamePhase, string>> = {
+                  own_team_guessing: "Clues submitted! Time to decode.",
+                  opponent_intercepting: "All guesses in — interception phase!",
+                  round_results: "Results are in!",
+                };
+                const toastMsg = phaseToasts[newState.phase];
+                if (toastMsg) {
+                  toast({ title: toastMsg });
+                }
+              }
+              return newState;
+            });
             if (!isReconnect) {
-              const storedId = sessionStorage.getItem(`player_${gameId}`);
-              const player = message.state.players.find(p => p.id === storedId || p.name === name);
+              const storedId = sessionStorage.getItem(`player_${currentGameId}`);
+              const player = newState.players.find(p => p.id === storedId || p.name === name);
               if (player) {
                 setPlayerId(player.id);
-                sessionStorage.setItem(`player_${gameId}`, player.id);
+                sessionStorage.setItem(`player_${currentGameId}`, player.id);
               }
             } else {
-              const storedId = sessionStorage.getItem(`player_${gameId}`);
+              const storedId = sessionStorage.getItem(`player_${currentGameId}`);
               if (storedId) {
-                const player = message.state.players.find(p => p.id === storedId);
+                const player = newState.players.find(p => p.id === storedId);
                 if (player) {
                   setPlayerId(player.id);
+                }
+              } else {
+                const player = newState.players.find(p => p.name === name && !p.isAI);
+                if (player) {
+                  setPlayerId(player.id);
+                  sessionStorage.setItem(`player_${currentGameId}`, player.id);
                 }
               }
             }
             break;
+          }
           case "player_joined":
             if (message.player.name === name) {
               setPlayerId(message.player.id);
@@ -119,6 +145,20 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
             setClueError(message.message);
             setTimeout(() => setClueError(null), 5000);
             break;
+          case "phase_changed":
+            setPhaseAnnouncement({ phase: message.phase, round: message.round });
+            setTimeout(() => setPhaseAnnouncement(null), 2000);
+            break;
+          case "new_game_created": {
+            const oldGameKey = `player_${gameIdRef.current || gameId}`;
+            sessionStorage.removeItem(oldGameKey);
+            gameIdRef.current = message.gameId;
+            setMyKeywords(null);
+            setMyCode(null);
+            window.history.replaceState(null, "", `/game/${message.gameId}`);
+            toast({ title: "New game started!", description: "Same players, fresh game." });
+            break;
+          }
           case "error":
             console.error("Game error:", message.message);
             break;
@@ -149,7 +189,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     ws.onerror = (error) => {
       console.error("WebSocket error:", error);
     };
-  }, []);
+  }, [toast]);
 
   const connect = useCallback((gameId: string, name: string) => {
     intentionalCloseRef.current = false;
@@ -196,6 +236,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       clueError,
       myKeywords,
       myCode,
+      phaseAnnouncement,
       sendMessage,
       connect,
       disconnect,
