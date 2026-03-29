@@ -1,4 +1,4 @@
-import { GameState, Player, HeadlessMatchConfig, AIProvider } from "@shared/schema";
+import { GameState, Player, HeadlessMatchConfig, AIProvider, AIPlayerConfig, getDefaultConfig } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -16,10 +16,6 @@ import {
   generateGuess,
   generateInterception,
   AICallResult,
-  MODEL_MAP,
-  buildCluePrompt,
-  buildGuessPrompt,
-  buildInterceptionPrompt,
 } from "./ai";
 import { storage } from "./storage";
 import { log } from "./index";
@@ -39,19 +35,25 @@ function withTimeout<T>(
   promise: Promise<AICallResult<T>>,
   timeoutMs: number,
   fallback: T,
-  meta: { prompt: string; model: string }
+  model: string
 ): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
   const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
   const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
     setTimeout(() => resolve({
-      result: { result: fallback, prompt: meta.prompt, rawResponse: "", model: meta.model, latencyMs: timeoutMs, error: "timeout" },
+      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout" },
       timedOut: true,
     }), timeoutMs)
   );
   return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: meta.prompt, rawResponse: "", model: meta.model, latencyMs: 0, error: "unknown error" },
+    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error" },
     timedOut: false,
   }));
+}
+
+function getConfigForPlayer(player: Player): AIPlayerConfig {
+  if (player.aiConfig) return player.aiConfig;
+  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
+  return getDefaultConfig("chatgpt");
 }
 
 async function logAiCall(matchId: number, gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean) {
@@ -83,6 +85,7 @@ async function processClues(game: GameState, matchId: number): Promise<GameState
     const clueGiver = game.players.find(p => p.id === clueGiverId);
     if (!clueGiver?.isAI || !clueGiver.aiProvider) continue;
 
+    const config = getConfigForPlayer(clueGiver);
     const code = game.currentCode[team]!;
     const keywords = game.teams[team].keywords;
     const history = game.teams[team].history.map(h => ({
@@ -94,10 +97,10 @@ async function processClues(game: GameState, matchId: number): Promise<GameState
     const clueParams = { keywords, targetCode: code, history };
 
     const { result: callResult, timedOut } = await withTimeout(
-      generateClues(clueGiver.aiProvider, clueParams),
+      generateClues(config, clueParams),
       AI_TIMEOUT_MS,
       fallbackClues,
-      { prompt: buildCluePrompt(clueParams), model: MODEL_MAP[clueGiver.aiProvider] }
+      config.model
     );
 
     await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut);
@@ -122,6 +125,7 @@ async function processGuesses(game: GameState, matchId: number): Promise<GameSta
 
     if (!aiGuesser?.aiProvider) continue;
 
+    const config = getConfigForPlayer(aiGuesser);
     const clues = game.currentClues[team]!;
     const keywords = game.teams[team].keywords;
     const history = game.teams[team].history.map(h => ({
@@ -131,10 +135,10 @@ async function processGuesses(game: GameState, matchId: number): Promise<GameSta
 
     const guessParams = { keywords, clues, history };
     const { result: callResult, timedOut } = await withTimeout(
-      generateGuess(aiGuesser.aiProvider, guessParams),
+      generateGuess(config, guessParams),
       AI_TIMEOUT_MS,
       fallbackGuess,
-      { prompt: buildGuessPrompt(guessParams), model: MODEL_MAP[aiGuesser.aiProvider] }
+      config.model
     );
 
     await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, "generate_guess", callResult, timedOut);
@@ -155,6 +159,7 @@ async function processInterceptions(game: GameState, matchId: number): Promise<G
 
     if (!aiInterceptor?.aiProvider) continue;
 
+    const config = getConfigForPlayer(aiInterceptor);
     const clues = game.currentClues[opponentTeam]!;
     const history = game.teams[opponentTeam].history.map(h => ({
       clues: h.clues,
@@ -163,10 +168,10 @@ async function processInterceptions(game: GameState, matchId: number): Promise<G
 
     const interceptParams = { clues, history };
     const { result: callResult, timedOut } = await withTimeout(
-      generateInterception(aiInterceptor.aiProvider, interceptParams),
+      generateInterception(config, interceptParams),
       AI_TIMEOUT_MS,
       fallbackGuess,
-      { prompt: buildInterceptionPrompt(interceptParams), model: MODEL_MAP[aiInterceptor.aiProvider] }
+      config.model
     );
 
     await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, "generate_interception", callResult, timedOut);
