@@ -386,24 +386,18 @@ export function validateGameState(game: GameState): ValidationError[] {
       if (entry.clues && entry.clues.length !== 3) {
         errors.push({ field: `teams.${team}.history[${h}].clues`, message: `Expected 3 clues, got ${entry.clues.length}`, severity: "warning" });
       }
-      if (entry.secretCode) {
-        const code = entry.secretCode;
+      if (entry.targetCode) {
+        const code = entry.targetCode;
         if (code.length !== 3) {
-          errors.push({ field: `teams.${team}.history[${h}].secretCode`, message: `Expected 3-element code, got ${code.length}`, severity: "error" });
+          errors.push({ field: `teams.${team}.history[${h}].targetCode`, message: `Expected 3-element code, got ${code.length}`, severity: "error" });
         }
         const validPositions = code.every((n: number) => n >= 1 && n <= 4);
         if (!validPositions) {
-          errors.push({ field: `teams.${team}.history[${h}].secretCode`, message: `Code contains invalid positions (must be 1-4)`, severity: "error" });
+          errors.push({ field: `teams.${team}.history[${h}].targetCode`, message: `Code contains invalid positions (must be 1-4)`, severity: "error" });
         }
         const uniquePositions = new Set(code);
         if (uniquePositions.size !== code.length) {
-          errors.push({ field: `teams.${team}.history[${h}].secretCode`, message: `Code contains duplicate positions`, severity: "warning" });
-        }
-      }
-      if (entry.guess) {
-        const guess = entry.guess;
-        if (guess.length !== 3) {
-          errors.push({ field: `teams.${team}.history[${h}].guess`, message: `Expected 3-element guess, got ${guess.length}`, severity: "warning" });
+          errors.push({ field: `teams.${team}.history[${h}].targetCode`, message: `Code contains duplicate positions`, severity: "warning" });
         }
       }
     }

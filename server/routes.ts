@@ -398,18 +398,18 @@ export async function registerRoutes(
       const allRounds = await storage.getMatchRoundsForMatches(matchIds);
 
       if (format === "csv") {
-        const csvRows = ["id,matchId,roundNumber,team,clues,secretCode,ownGuess,opponentGuess,ownCorrect,intercepted,clueGiver"];
+        const csvRows = ["id,matchId,roundNumber,team,clues,code,ownGuess,opponentGuess,ownCorrect,intercepted,clueGiverId"];
         allRounds.forEach(r => {
           const esc = (v: unknown) => typeof v === 'string' && v.includes(',') ? `"${v.replace(/"/g, '""')}"` : (v ?? "");
           csvRows.push([
             r.id, r.matchId, r.roundNumber, r.team,
             esc(JSON.stringify(r.clues)),
-            esc(JSON.stringify(r.secretCode)),
+            esc(JSON.stringify(r.code)),
             esc(JSON.stringify(r.ownGuess)),
             esc(JSON.stringify(r.opponentGuess)),
             r.ownCorrect ?? "",
             r.intercepted ?? "",
-            r.clueGiver || "",
+            r.clueGiverId || "",
           ].join(","));
         });
         res.setHeader("Content-Type", "text/csv");
