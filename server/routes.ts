@@ -16,7 +16,7 @@ const headlessMatchConfigSchema = z.object({
     team: z.enum(["amber", "blue"]),
   })).min(2).max(4),
   fastMode: z.boolean().optional(),
-  seed: z.number().int().optional(),
+  seed: z.union([z.string(), z.number().int().transform(String)]).optional(),
 });
 
 const tournamentConfigSchema = z.object({
@@ -351,7 +351,10 @@ export async function registerRoutes(
   app.get("/api/export/matches", async (req, res) => {
     try {
       const format = (req.query.format as string) || "json";
-      const allMatches = await storage.getAllMatches();
+      const model = req.query.model as string | undefined;
+      const dateFrom = req.query.dateFrom as string | undefined;
+      const dateTo = req.query.dateTo as string | undefined;
+      const allMatches = await storage.getAllMatches({ model, dateFrom, dateTo });
       const matchIds = allMatches.map(m => m.id);
       const allRounds = await storage.getMatchRoundsForMatches(matchIds);
 
