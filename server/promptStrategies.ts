@@ -11,17 +11,20 @@ export interface ClueTemplateParams {
   keywords: string[];
   targetCode: [number, number, number];
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  scratchNotes?: string;
 }
 
 export interface GuessTemplateParams {
   keywords: string[];
   clues: string[];
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  scratchNotes?: string;
 }
 
 export interface InterceptionTemplateParams {
   clues: string[];
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  scratchNotes?: string;
 }
 
 function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
@@ -29,6 +32,11 @@ function formatHistory(history: Array<{ clues: string[]; targetCode: [number, nu
   return history.map((round, i) =>
     `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]`
   ).join("\n");
+}
+
+function formatScratchNotes(notes?: string): string {
+  if (!notes) return "";
+  return `\n\n--- STRATEGIC NOTES FROM PREVIOUS GAMES ---\nThe following are your accumulated strategic observations from prior games in this series. Use these insights to inform your decisions:\n\n${notes}\n--- END STRATEGIC NOTES ---`;
 }
 
 const defaultStrategy: PromptStrategy = {
@@ -57,6 +65,7 @@ Strategic considerations:
       prompt += `\n\nOpponents have seen these patterns. Shift your approach for any keyword you've clued before.`;
     }
 
+    prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\n\nRespond with exactly 3 words separated by commas, nothing else. Example: ocean,bright,ancient`;
     return prompt;
   },
@@ -77,6 +86,7 @@ Each clue maps to one keyword (in order of the secret code). Determine which key
       prompt += `\n\nUse your teammate's past cluing patterns to inform your guess.`;
     }
 
+    prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\n\nRespond with exactly 3 numbers (1-4) separated by commas. Example: 3,1,4`;
     return prompt;
   },
@@ -95,6 +105,7 @@ You don't know their keywords, but you can deduce patterns from their clue histo
       prompt += `\n\nThis is round 1 — no history available. Make your best educated guess.`;
     }
 
+    prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\n\nRespond with exactly 3 numbers (1-4) separated by commas. Example: 2,4,1`;
     return prompt;
   },
@@ -138,9 +149,9 @@ Step 1 — Opponent Model: What do opponents know so far? Which keywords might t
     prompt += `\nStep 4 — Teammate Communication: Ensure your teammate can still decode. Think about what your teammate knows about your cluing style.
 Step 5 — Final Selection: Choose 3 single-word clues that balance teammate clarity with opponent deception.
 
-RULES: Each clue must be a SINGLE WORD. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.
-
-Respond with ONLY 3 words separated by commas, nothing else. Example: ocean,bright,ancient`;
+RULES: Each clue must be a SINGLE WORD. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.`;
+    prompt += formatScratchNotes(params.scratchNotes);
+    prompt += `\n\nRespond with ONLY 3 words separated by commas, nothing else. Example: ocean,bright,ancient`;
     return prompt;
   },
   guessTemplate: (params) => {
@@ -166,6 +177,7 @@ Step 2 — Elimination: If multiple clues point to the same keyword, re-evaluate
       prompt += `\nStep 4 — Consistency Check: Does your proposed mapping make sense given your teammate's historical approach?`;
     }
 
+    prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\nStep 5 — Final Answer: Commit to the mapping with highest confidence.
 
 Respond with exactly 3 numbers (1-4) separated by commas. Example: 3,1,4`;
@@ -192,6 +204,7 @@ Step 5 — Confidence Assessment: Rate your confidence for each position. Where 
       prompt += `\n\nNo history yet — this is round 1. Use your best intuition about likely word associations.`;
     }
 
+    prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\nStep 6 — Final Interception: Commit to your best guess of their code.
 
 Respond with exactly 3 numbers (1-4) separated by commas. Example: 2,4,1`;

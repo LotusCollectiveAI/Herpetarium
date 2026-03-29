@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments } from "@shared/schema";
+import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, type Series, type InsertSeries, type ScratchNote, type InsertScratchNote, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments, series, scratchNotes } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, like, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -37,6 +37,16 @@ export interface IStorage {
   getExperiment(id: number): Promise<Experiment | undefined>;
   getExperiments(): Promise<Experiment[]>;
   updateExperiment(id: number, data: Partial<InsertExperiment>): Promise<Experiment | undefined>;
+
+  createSeries(data: InsertSeries): Promise<Series>;
+  updateSeries(id: number, data: Partial<InsertSeries>): Promise<Series | undefined>;
+  getSeries(id: number): Promise<Series | undefined>;
+  getAllSeries(): Promise<Series[]>;
+
+  createScratchNote(note: InsertScratchNote): Promise<ScratchNote>;
+  getScratchNotes(seriesId: number): Promise<ScratchNote[]>;
+  getLatestScratchNote(seriesId: number, playerConfigHash: string): Promise<ScratchNote | undefined>;
+  getScratchNotesForPlayer(seriesId: number, playerConfigHash: string): Promise<ScratchNote[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -223,6 +233,48 @@ export class DatabaseStorage implements IStorage {
   async updateExperiment(id: number, data: Partial<InsertExperiment>): Promise<Experiment | undefined> {
     const [updated] = await db.update(experiments).set(data).where(eq(experiments.id, id)).returning();
     return updated;
+  }
+
+  async createSeries(data: InsertSeries): Promise<Series> {
+    const [created] = await db.insert(series).values(data).returning();
+    return created;
+  }
+
+  async updateSeries(id: number, data: Partial<InsertSeries>): Promise<Series | undefined> {
+    const [updated] = await db.update(series).set(data).where(eq(series.id, id)).returning();
+    return updated;
+  }
+
+  async getSeries(id: number): Promise<Series | undefined> {
+    const [s] = await db.select().from(series).where(eq(series.id, id)).limit(1);
+    return s;
+  }
+
+  async getAllSeries(): Promise<Series[]> {
+    return db.select().from(series).orderBy(desc(series.createdAt));
+  }
+
+  async createScratchNote(note: InsertScratchNote): Promise<ScratchNote> {
+    const [created] = await db.insert(scratchNotes).values(note).returning();
+    return created;
+  }
+
+  async getScratchNotes(seriesId: number): Promise<ScratchNote[]> {
+    return db.select().from(scratchNotes).where(eq(scratchNotes.seriesId, seriesId)).orderBy(scratchNotes.gameIndex);
+  }
+
+  async getLatestScratchNote(seriesId: number, playerConfigHash: string): Promise<ScratchNote | undefined> {
+    const [note] = await db.select().from(scratchNotes)
+      .where(and(eq(scratchNotes.seriesId, seriesId), eq(scratchNotes.playerConfigHash, playerConfigHash)))
+      .orderBy(desc(scratchNotes.gameIndex))
+      .limit(1);
+    return note;
+  }
+
+  async getScratchNotesForPlayer(seriesId: number, playerConfigHash: string): Promise<ScratchNote[]> {
+    return db.select().from(scratchNotes)
+      .where(and(eq(scratchNotes.seriesId, seriesId), eq(scratchNotes.playerConfigHash, playerConfigHash)))
+      .orderBy(scratchNotes.gameIndex);
   }
 }
 

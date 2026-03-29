@@ -247,6 +247,80 @@ export async function generateGuess(config: AIPlayerConfig, params: GuessTemplat
   }
 }
 
+export interface ReflectionParams {
+  teamKeywords: string[];
+  teamHistory: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  opponentHistory: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  winner: "amber" | "blue" | null;
+  myTeam: "amber" | "blue";
+  whiteTokens: number;
+  blackTokens: number;
+  opponentWhiteTokens: number;
+  opponentBlackTokens: number;
+  currentNotes: string;
+  tokenBudget: number;
+}
+
+function buildReflectionPrompt(params: ReflectionParams): string {
+  const won = params.winner === params.myTeam;
+  const lost = params.winner !== null && params.winner !== params.myTeam;
+  const outcome = won ? "WON" : lost ? "LOST" : "DRAW/INCOMPLETE";
+
+  let prompt = `GAME REFLECTION — Update your strategic notes.
+
+You just finished a Decrypto game. Your team ${outcome}.
+Your team: ${params.myTeam}
+Your team's keywords: ${params.teamKeywords.join(", ")}
+White tokens (miscommunications): ${params.whiteTokens} | Black tokens (intercepted by opponent): ${params.blackTokens}
+Opponent white tokens: ${params.opponentWhiteTokens} | Opponent black tokens (your interceptions): ${params.opponentBlackTokens}
+
+Your team's round history:
+${params.teamHistory.map((h, i) => `  Round ${i + 1}: Clues [${h.clues.join(", ")}] → Code [${h.targetCode.join(", ")}]`).join("\n")}
+
+Opponent's round history:
+${params.opponentHistory.map((h, i) => `  Round ${i + 1}: Clues [${h.clues.join(", ")}] → Code [${h.targetCode.join(", ")}]`).join("\n")}`;
+
+  if (params.currentNotes) {
+    prompt += `\n\nYour current strategic notes from previous games:\n${params.currentNotes}`;
+  } else {
+    prompt += `\n\nThis is your first game in the series — no prior notes exist.`;
+  }
+
+  prompt += `\n\nUpdate your strategic notes based on this game. Focus on:
+1. What cluing strategies worked or failed
+2. Patterns you noticed in opponent behavior
+3. Theories about effective approaches
+4. What to try differently next game
+5. Any meta-level observations about the game dynamics
+
+Keep your notes concise and actionable — they will be provided to you in future games.
+Stay within approximately ${params.tokenBudget} tokens.
+
+Respond with ONLY your updated notes text, nothing else.`;
+
+  return prompt;
+}
+
+export async function generateReflection(config: AIPlayerConfig, params: ReflectionParams): Promise<AICallResult<string>> {
+  const systemPrompt = "You are an AI agent reflecting on a completed Decrypto game. Your job is to update your strategic notes with observations and insights that will help you play better in future games.";
+  const prompt = buildReflectionPrompt(params);
+  const fullPrompt = `${systemPrompt}\n\n${prompt}`;
+  const startTime = Date.now();
+  try {
+    const raw = await callAI(config, systemPrompt, prompt);
+    const latencyMs = Date.now() - startTime;
+    let notes = raw.text.trim();
+    const approxTokens = Math.ceil(notes.length / 4);
+    if (approxTokens > params.tokenBudget * 1.5) {
+      notes = notes.slice(0, params.tokenBudget * 6);
+    }
+    return { result: notes, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs, reasoningTrace: raw.reasoningTrace };
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    return { result: params.currentNotes || "", prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err) };
+  }
+}
+
 export async function generateInterception(config: AIPlayerConfig, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
   const strategy = getPromptStrategy(config.promptStrategy);
   const prompt = strategy.interceptionTemplate(params);

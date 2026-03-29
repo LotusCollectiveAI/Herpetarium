@@ -5,6 +5,7 @@ import { createGameSchema, HeadlessMatchConfig, TournamentConfig } from "@shared
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning } from "./tournament";
+import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { z } from "zod";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues } from "./metrics";
 
@@ -397,6 +398,104 @@ export async function registerRoutes(
       }
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to export AI logs" });
+    }
+  });
+
+  const seriesConfigSchema = z.object({
+    matchConfig: headlessMatchConfigSchema,
+    totalGames: z.number().int().min(1).max(100),
+    noteTokenBudget: z.number().int().min(100).max(5000).optional(),
+  });
+
+  app.post("/api/series", async (req, res) => {
+    try {
+      const parsed = seriesConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid series configuration", details: parsed.error.issues });
+      }
+
+      const config = parsed.data;
+      const matchConfig = config.matchConfig as HeadlessMatchConfig;
+
+      const amberCount = matchConfig.players.filter(p => p.team === "amber").length;
+      const blueCount = matchConfig.players.filter(p => p.team === "blue").length;
+      if (amberCount < 1 || blueCount < 1) {
+        return res.status(400).json({ error: "Each team must have at least 1 player" });
+      }
+
+      const s = await createSeries({
+        matchConfig,
+        totalGames: config.totalGames,
+        noteTokenBudget: config.noteTokenBudget,
+      });
+
+      runSeries(s.id).catch(err => {
+        console.error("Series execution failed:", err);
+      });
+
+      res.json({ id: s.id, status: "started" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to create series" });
+    }
+  });
+
+  app.get("/api/series", async (req, res) => {
+    try {
+      const allSeries = await storage.getAllSeries();
+      res.json(allSeries);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch series" });
+    }
+  });
+
+  app.get("/api/series/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid series ID" });
+      }
+
+      const s = await storage.getSeries(id);
+      if (!s) {
+        return res.status(404).json({ error: "Series not found" });
+      }
+
+      const notes = await storage.getScratchNotes(id);
+      const running = isSeriesRunning(id);
+
+      const config = s.config as any;
+      const playerHashes = config.matchConfig?.players?.map((p: any) => ({
+        hash: getPlayerConfigHash(p.aiProvider, p.team, p.name),
+        provider: p.aiProvider,
+        team: p.team,
+        name: p.name,
+      })) || [];
+
+      const notesByPlayer: Record<string, any[]> = {};
+      for (const ph of playerHashes) {
+        notesByPlayer[ph.hash] = notes
+          .filter(n => n.playerConfigHash === ph.hash)
+          .map(n => ({
+            ...n,
+            playerName: ph.name,
+            provider: ph.provider,
+            team: ph.team,
+          }));
+      }
+
+      const matchIds = [...new Set(notes.filter(n => n.matchId).map(n => n.matchId as number))];
+      const matchDetails = await storage.getMatchesByIds(matchIds);
+
+      res.json({
+        series: s,
+        notes,
+        notesByPlayer,
+        playerHashes,
+        matchDetails,
+        running,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch series" });
     }
   });
 

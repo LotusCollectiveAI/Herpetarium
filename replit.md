@@ -50,6 +50,15 @@ Preferred communication style: Simple, everyday language.
 - AI failures broadcast "ai_fallback" messages to all clients for UI feedback
 - Every AI call is logged to `ai_call_logs` table with: provider, model, prompt, raw response, parsed result, latency, timeout/error status
 
+### Persistent Scratch Notes & Series
+- **Series System**: Agents play multiple games in sequence, carrying strategic notes forward between games
+- **Database Tables**: `series` (id, name, config, total_games, completed_games, status, note_token_budget), `scratch_notes` (id, series_id, player_config_hash, game_index, notes_text, token_count, match_id)
+- **Post-Game Reflection**: After each game in a series, an AI call generates updated strategic notes based on game results and prior notes
+- **Notes Injection**: Scratch notes are injected into clue, guess, and interception prompts as additional strategic context
+- **Series Runner** (`server/seriesRunner.ts`): Executes N games sequentially with note propagation between games
+- **API Endpoints**: POST `/api/series` (create and run), GET `/api/series` (list), GET `/api/series/:id` (detail with note evolution)
+- **UI**: `/series` page with series creation form, list view, detail view with notes evolution timeline and token growth visualization
+
 ### Match Persistence
 - **Database Tables**: `matches`, `match_rounds`, `ai_call_logs`, `experiments`, `tournaments`, `tournament_matches`
 - Match record created when teams are confirmed (before first round)
@@ -103,18 +112,19 @@ client/           # React frontend
     components/   # UI components (game-specific and shadcn/ui)
                   # DeductionNotes.tsx - Collapsible notes panel for tracking opponent keywords (localStorage)
                   # RoundHistory.tsx - Supports both list and columnar view (columnar=true for interception)
-    pages/        # Route pages (Home, Game, History, Tournaments, EvalDashboard)
+    pages/        # Route pages (Home, Game, History, Tournaments, EvalDashboard, Series)
     lib/          # Utilities, context providers, query client
     hooks/        # Custom React hooks
 server/           # Express backend
   index.ts        # Server entry point
-  routes.ts       # API route registration (games, matches, tournaments, eval metrics, experiments, export)
+  routes.ts       # API route registration (games, matches, tournaments, eval metrics, experiments, export, series)
   metrics.ts      # Metrics computation module (model, strategy, matchup, clue analysis)
   websocket.ts    # WebSocket handler for game logic + match persistence + auto-advance
   game.ts         # Game state management functions
   ai.ts           # AI provider integrations (configurable models, reasoning support, trace capture) with call logging
   headlessRunner.ts # Headless game runner for all-AI games
   tournament.ts   # Tournament creation and execution
+  seriesRunner.ts # Series execution with scratch note propagation between games
   db.ts           # Database connection setup
   storage.ts      # Storage interface with match/round/AI log CRUD
   promptStrategies.ts # Named prompt strategy presets (default, advanced)

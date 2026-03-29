@@ -77,7 +77,7 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
   }
 }
 
-async function processClues(game: GameState, matchId: number): Promise<GameState> {
+async function processClues(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>): Promise<GameState> {
   for (const team of ["amber", "blue"] as const) {
     const clueGiverId = game.currentClueGiver[team];
     if (!clueGiverId || game.currentClues[team]) continue;
@@ -93,8 +93,9 @@ async function processClues(game: GameState, matchId: number): Promise<GameState
       targetCode: h.targetCode,
     }));
 
+    const noteKey = `${clueGiver.aiProvider}-${team}`;
     const fallbackClues = code.map(n => keywords[n - 1].slice(0, 3));
-    const clueParams = { keywords, targetCode: code, history };
+    const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey] };
 
     const { result: callResult, timedOut } = await withTimeout(
       generateClues(config, clueParams),
@@ -109,7 +110,7 @@ async function processClues(game: GameState, matchId: number): Promise<GameState
   return game;
 }
 
-async function processGuesses(game: GameState, matchId: number): Promise<GameState> {
+async function processGuesses(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
   for (const team of ["amber", "blue"] as const) {
@@ -133,7 +134,8 @@ async function processGuesses(game: GameState, matchId: number): Promise<GameSta
       targetCode: h.targetCode,
     }));
 
-    const guessParams = { keywords, clues, history };
+    const noteKey = `${aiGuesser.aiProvider}-${team}`;
+    const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey] };
     const { result: callResult, timedOut } = await withTimeout(
       generateGuess(config, guessParams),
       AI_TIMEOUT_MS,
@@ -147,7 +149,7 @@ async function processGuesses(game: GameState, matchId: number): Promise<GameSta
   return game;
 }
 
-async function processInterceptions(game: GameState, matchId: number): Promise<GameState> {
+async function processInterceptions(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
   for (const team of ["amber", "blue"] as const) {
@@ -166,7 +168,8 @@ async function processInterceptions(game: GameState, matchId: number): Promise<G
       targetCode: h.targetCode,
     }));
 
-    const interceptParams = { clues, history };
+    const noteKey = `${aiInterceptor.aiProvider}-${team}`;
+    const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey] };
     const { result: callResult, timedOut } = await withTimeout(
       generateInterception(config, interceptParams),
       AI_TIMEOUT_MS,
@@ -210,7 +213,7 @@ async function persistRoundResults(matchId: number, game: GameState) {
 
 const MAX_ROUNDS = 20;
 
-export async function runHeadlessMatch(config: HeadlessMatchConfig): Promise<HeadlessResult> {
+export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotesMap?: Record<string, string>): Promise<HeadlessResult> {
   const hostId = generatePlayerId();
   let game = createNewGame(hostId, config.players[0].name);
 
@@ -269,21 +272,21 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig): Promise<Hea
     game = startNewRound(game);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 
-    game = await processClues(game, matchId);
+    game = await processClues(game, matchId, scratchNotesMap);
 
     if (game.phase !== "own_team_guessing") {
       log(`[headless] Match ${matchId} - Unexpected phase after clues: ${game.phase}`, "headless");
       break;
     }
 
-    game = await processGuesses(game, matchId);
+    game = await processGuesses(game, matchId, scratchNotesMap);
 
     if (game.phase !== "opponent_intercepting") {
       log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
       break;
     }
 
-    game = await processInterceptions(game, matchId);
+    game = await processInterceptions(game, matchId, scratchNotesMap);
 
     if (game.phase === "round_results" || game.phase === "game_over") {
       await persistRoundResults(matchId, game);

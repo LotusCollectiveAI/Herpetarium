@@ -329,6 +329,46 @@ export interface TournamentConfig {
   gamesPerMatchup?: number;
 }
 
+// Series tables for persistent scratch notes
+
+export const series = pgTable("series", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 200 }).notNull(),
+  config: jsonb("config").notNull(),
+  totalGames: integer("total_games").notNull().default(0),
+  completedGames: integer("completed_games").notNull().default(0),
+  status: varchar("status", { length: 20 }).notNull().default("pending"),
+  noteTokenBudget: integer("note_token_budget").notNull().default(500),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertSeriesSchema = createInsertSchema(series).omit({ id: true, createdAt: true });
+export type InsertSeries = z.infer<typeof insertSeriesSchema>;
+export type Series = typeof series.$inferSelect;
+
+export const scratchNotes = pgTable("scratch_notes", {
+  id: serial("id").primaryKey(),
+  seriesId: integer("series_id").notNull(),
+  playerConfigHash: varchar("player_config_hash", { length: 100 }).notNull(),
+  gameIndex: integer("game_index").notNull(),
+  notesText: text("notes_text").notNull(),
+  tokenCount: integer("token_count").notNull().default(0),
+  matchId: integer("match_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertScratchNoteSchema = createInsertSchema(scratchNotes).omit({ id: true, createdAt: true });
+export type InsertScratchNote = z.infer<typeof insertScratchNoteSchema>;
+export type ScratchNote = typeof scratchNotes.$inferSelect;
+
+export interface SeriesConfig {
+  matchConfig: HeadlessMatchConfig;
+  totalGames: number;
+  noteTokenBudget?: number;
+}
+
 // Legacy exports for compatibility
 export { users, insertUserSchema } from "./models/user";
 export type { InsertUser, User } from "./models/user";
