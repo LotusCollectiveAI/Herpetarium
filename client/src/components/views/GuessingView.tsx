@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { KeywordCard } from "@/components/KeywordCard";
+import { DeductionNotes } from "@/components/DeductionNotes";
 import { Loader2, Target } from "lucide-react";
 
 export function GuessingView() {
@@ -10,6 +11,7 @@ export function GuessingView() {
 
   if (!gameState || !myTeam) return null;
 
+  const opponentTeam = myTeam === "amber" ? "blue" : "amber";
   const myClues = gameState.currentClues[myTeam];
   const isClueGiver = gameState.currentClueGiver[myTeam] === playerId;
   const hasGuessed = gameState.currentGuesses[myTeam].ownTeam !== null;
@@ -60,6 +62,12 @@ export function GuessingView() {
           </CardContent>
         </Card>
       )}
+
+      <DeductionNotes
+        gameId={gameState.id}
+        opponentTeam={opponentTeam}
+        defaultExpanded={false}
+      />
 
       {hasGuessed ? (
         <Card>

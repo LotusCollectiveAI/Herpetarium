@@ -58,6 +58,8 @@ Preferred communication style: Simple, everyday language.
 client/           # React frontend
   src/
     components/   # UI components (game-specific and shadcn/ui)
+                  # DeductionNotes.tsx - Collapsible notes panel for tracking opponent keywords (localStorage)
+                  # RoundHistory.tsx - Supports both list and columnar view (columnar=true for interception)
     pages/        # Route pages (Home, Game)
     lib/          # Utilities, context providers, query client
     hooks/        # Custom React hooks

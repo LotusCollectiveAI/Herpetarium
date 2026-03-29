@@ -3,6 +3,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { RoundHistory } from "@/components/RoundHistory";
+import { DeductionNotes } from "@/components/DeductionNotes";
 import { Loader2, Crosshair, Shield } from "lucide-react";
 
 export function InterceptingView() {
@@ -43,16 +44,22 @@ export function InterceptingView() {
         </Card>
       )}
 
+      <DeductionNotes
+        gameId={gameState.id}
+        opponentTeam={opponentTeam}
+        defaultExpanded={true}
+      />
+
       {opponentHistory.length > 0 && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Opponent's Clue History</CardTitle>
             <CardDescription>
-              Use past clues to decode their keywords
+              Clues grouped by keyword slot — spot the patterns
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <RoundHistory history={opponentHistory} team={opponentTeam} />
+            <RoundHistory history={opponentHistory} team={opponentTeam} columnar={true} />
           </CardContent>
         </Card>
       )}
