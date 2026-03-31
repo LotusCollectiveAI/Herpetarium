@@ -2,6 +2,8 @@ import express, { type Request, Response, NextFunction } from "express";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { validateApiKeys } from "./ai";
+import { resumeIncompleteRuns } from "./tournament";
 
 const app = express();
 const httpServer = createServer(app);
@@ -60,7 +62,13 @@ app.use((req, res, next) => {
 });
 
 (async () => {
+  validateApiKeys();
   await registerRoutes(httpServer, app);
+
+  // Resume any tournaments that were interrupted by a server restart
+  resumeIncompleteRuns().catch(err => {
+    console.error("[startup] Failed to resume incomplete runs:", err);
+  });
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -94,7 +102,6 @@ app.use((req, res, next) => {
     {
       port,
       host: "0.0.0.0",
-      reusePort: true,
     },
     () => {
       log(`serving on port ${port}`);

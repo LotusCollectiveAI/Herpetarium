@@ -372,7 +372,7 @@ export async function runEvolution(runId: number) {
         stats.set(g.id, { elo: g.eloRating, wins: 0, losses: 0, matchesPlayed: 0, interceptedOpp: 0, interceptAttempts: 0, miscommunications: 0, ownGuesses: 0 });
       }
 
-      const matchPairs = buildFrequencyWeightedPairings(population, config.matchesPerEvaluation);
+      const matchPairs = buildFrequencyWeightedPairings(population, config.matchesPerEvaluation ?? 5);
 
       for (const [idxA, idxB] of matchPairs) {
         if (!activeRuns.get(runId)) break;
@@ -385,8 +385,8 @@ export async function runEvolution(runId: number) {
 
           const result = await runHeadlessMatch({
             players: [
-              { name: `G${gen}-${idxA}`, aiProvider: config.baseProvider, team: "amber", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const } },
-              { name: `G${gen}-${idxB}`, aiProvider: config.baseProvider, team: "blue", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const } },
+              { name: `G${gen}-${idxA}`, aiProvider: config.baseProvider, team: "amber", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const, reasoningEffort: "high" as const } },
+              { name: `G${gen}-${idxB}`, aiProvider: config.baseProvider, team: "blue", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const, reasoningEffort: "high" as const } },
             ],
             fastMode: true,
             seed: `evo-${runId}-g${gen}-${idxA}v${idxB}-m${matchIds.length}`,
@@ -675,6 +675,7 @@ async function mutateModulesWithAI(
     timeoutMs: 30000,
     temperature: 0.9,
     promptStrategy: "default" as const,
+    reasoningEffort: "high" as const,
   };
 
   const systemPrompt = `You are a strategy evolution engine for a word deduction game called Decrypto. Your job is to mutate one module of a strategy genome to create a meaningfully different variant. Keep mutations targeted — change the approach while preserving coherence. Respond with ONLY the new module text (1-3 sentences), no explanation.`;

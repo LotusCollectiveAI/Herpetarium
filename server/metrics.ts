@@ -1,5 +1,74 @@
 import type { Match, MatchRound, AiCallLog } from "@shared/schema";
 
+// --- Bootstrap CI + Cohen's d (Week 1 Statistical Foundation) ---
+
+export interface ConfidenceInterval {
+  lower: number;
+  upper: number;
+  point: number;
+}
+
+/**
+ * Non-parametric bootstrap confidence interval.
+ * Resamples `data` with replacement `nBoot` times, computes `statFn`
+ * on each resample, returns percentile-based CI at `1 - alpha` level.
+ */
+export function bootstrapConfidenceInterval(
+  data: number[],
+  statFn: (d: number[]) => number,
+  options?: { nBoot?: number; alpha?: number }
+): ConfidenceInterval {
+  const nBoot = options?.nBoot ?? 1000;
+  const alpha = options?.alpha ?? 0.05;
+  const point = statFn(data);
+
+  if (data.length < 2) {
+    return { lower: point, upper: point, point };
+  }
+
+  const bootstrapStats: number[] = [];
+  for (let b = 0; b < nBoot; b++) {
+    const resample: number[] = [];
+    for (let i = 0; i < data.length; i++) {
+      resample.push(data[Math.floor(Math.random() * data.length)]);
+    }
+    bootstrapStats.push(statFn(resample));
+  }
+
+  bootstrapStats.sort((a, b) => a - b);
+  const lowerIdx = Math.floor((alpha / 2) * nBoot);
+  const upperIdx = Math.ceil((1 - alpha / 2) * nBoot);
+
+  return {
+    lower: bootstrapStats[lowerIdx],
+    upper: bootstrapStats[Math.min(upperIdx, nBoot - 1)],
+    point,
+  };
+}
+
+/**
+ * Cohen's d for independent samples.
+ * Uses pooled standard deviation. Returns 0 if either group is empty
+ * or has zero variance.
+ */
+export function cohensD(groupA: number[], groupB: number[]): number {
+  if (groupA.length < 2 || groupB.length < 2) return 0;
+
+  const meanA = groupA.reduce((s, v) => s + v, 0) / groupA.length;
+  const meanB = groupB.reduce((s, v) => s + v, 0) / groupB.length;
+
+  const varA = groupA.reduce((s, v) => s + (v - meanA) ** 2, 0) / (groupA.length - 1);
+  const varB = groupB.reduce((s, v) => s + (v - meanB) ** 2, 0) / (groupB.length - 1);
+
+  const pooledSD = Math.sqrt(
+    ((groupA.length - 1) * varA + (groupB.length - 1) * varB) /
+    (groupA.length + groupB.length - 2)
+  );
+
+  if (pooledSD === 0) return 0;
+  return (meanA - meanB) / pooledSD;
+}
+
 export interface MatchMetrics {
   winRate: Record<string, number>;
   interceptionSuccessRate: Record<string, number>;
@@ -37,6 +106,7 @@ export interface ModelMetrics {
   avgRounds: number;
   clueDiversity: number;
   parseQuality?: ParseQualityMetrics;
+  winRateCI?: ConfidenceInterval;
 }
 
 export interface MatchupMetrics {
@@ -87,6 +157,10 @@ export interface ExperimentResult {
   };
   totalGames: number;
   significanceIndicator: string;
+  winRateCI_A?: ConfidenceInterval;
+  winRateCI_B?: ConfidenceInterval;
+  effectSize?: number;
+  effectSizeMagnitude?: string;
 }
 
 interface PlayerConfig {
@@ -203,6 +277,23 @@ export function computeModelMetrics(
       if (found !== "unknown") { provider = found; break; }
     }
 
+    // Build per-game win indicator array for bootstrap CI
+    const winIndicators: number[] = [];
+    matches.forEach(match => {
+      const teams = ["amber", "blue"] as const;
+      for (const team of teams) {
+        const models = [...new Set(getTeamModels(match, team))];
+        if (models.includes(model)) {
+          winIndicators.push(match.winner === team ? 1 : 0);
+        }
+      }
+    });
+
+    const meanFn = (arr: number[]) => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : 0;
+    const winRateCI = winIndicators.length >= 2
+      ? bootstrapConfidenceInterval(winIndicators, meanFn)
+      : undefined;
+
     return {
       model,
       provider,
@@ -219,6 +310,7 @@ export function computeModelMetrics(
       avgRounds: stats.totalGames > 0 ? stats.totalRounds / stats.totalGames : 0,
       clueDiversity: stats.allClues.length > 0
         ? uniqueClues.size / stats.allClues.length : 0,
+      winRateCI,
     };
   });
 }
@@ -744,10 +836,52 @@ export function computeExperimentResults(
   else if (totalGames >= 10 && winDiff > 0.3) significanceIndicator = "Possibly significant";
   else if (totalGames < 5) significanceIndicator = "Insufficient data";
 
+  // Build per-match win indicator arrays for CIs and effect size
+  const meanFn = (arr: number[]) => arr.length > 0 ? arr.reduce((s, v) => s + v, 0) / arr.length : 0;
+
+  const winsArrayA = matchesA.map(m => {
+    // Strategy A's team wins if the match winner matches a team using strategy A
+    const configs = (m.playerConfigs as any[]) || [];
+    for (const p of configs) {
+      const strat = p.aiConfig?.promptStrategy || "default";
+      if (strat === strategyAName && m.winner === p.team) return 1;
+    }
+    return 0;
+  });
+
+  const winsArrayB = matchesB.map(m => {
+    const configs = (m.playerConfigs as any[]) || [];
+    for (const p of configs) {
+      const strat = p.aiConfig?.promptStrategy || "default";
+      if (strat === strategyBName && m.winner === p.team) return 1;
+    }
+    return 0;
+  });
+
+  const winRateCI_A = winsArrayA.length >= 2
+    ? bootstrapConfidenceInterval(winsArrayA, meanFn)
+    : undefined;
+  const winRateCI_B = winsArrayB.length >= 2
+    ? bootstrapConfidenceInterval(winsArrayB, meanFn)
+    : undefined;
+
+  const effectSize = (winsArrayA.length >= 2 && winsArrayB.length >= 2)
+    ? cohensD(winsArrayA, winsArrayB)
+    : undefined;
+
+  const abs = effectSize !== undefined ? Math.abs(effectSize) : 0;
+  const effectSizeMagnitude = effectSize !== undefined
+    ? (abs < 0.2 ? "negligible" : abs < 0.5 ? "small" : abs < 0.8 ? "medium" : "large")
+    : undefined;
+
   return {
     strategyA: { name: strategyAName, ...aStats },
     strategyB: { name: strategyBName, ...bStats },
     totalGames,
     significanceIndicator,
+    winRateCI_A,
+    winRateCI_B,
+    effectSize,
+    effectSizeMagnitude,
   };
 }

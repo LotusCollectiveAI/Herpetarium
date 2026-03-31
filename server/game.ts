@@ -1,4 +1,5 @@
 import { GameState, Player, RoundHistory, AIProvider } from "@shared/schema";
+import { getRandomKeywords } from "./wordPacks";
 
 export function createSeededRng(seed: string): () => number {
   let h = 0;
@@ -27,18 +28,6 @@ function seededShuffleArray<T>(array: T[], rng: () => number): T[] {
   return shuffled;
 }
 
-// Word list for generating keywords
-const WORD_LIST = [
-  "beach", "castle", "dragon", "eagle", "forest", "garden", "harbor", "island",
-  "jungle", "knight", "lantern", "mountain", "Neptune", "ocean", "palace", "queen",
-  "rainbow", "shadow", "thunder", "unicorn", "valley", "wizard", "arctic", "bridge",
-  "crystal", "desert", "ember", "falcon", "glacier", "horizon", "ivory", "jasmine",
-  "kingdom", "legend", "meteor", "nebula", "oracle", "phoenix", "quartz", "raven",
-  "serpent", "temple", "umbrella", "volcano", "whisper", "xenon", "youth", "zenith",
-  "anchor", "blossom", "canyon", "diamond", "eclipse", "flame", "ghost", "harvest",
-  "iceberg", "jester", "kraken", "labyrinth", "mirror", "nova", "obsidian", "prism"
-];
-
 export function generateGameId(): string {
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
@@ -61,10 +50,7 @@ export function shuffleArray<T>(array: T[]): T[] {
   return shuffled;
 }
 
-export function getRandomKeywords(count: number = 4, rng?: () => number): string[] {
-  const shuffled = rng ? seededShuffleArray(WORD_LIST, rng) : shuffleArray(WORD_LIST);
-  return shuffled.slice(0, count);
-}
+// getRandomKeywords is now imported from ./wordPacks (see top of file)
 
 export function generateSecretCode(rng?: () => number): [number, number, number] {
   const numbers = [1, 2, 3, 4];
@@ -101,7 +87,7 @@ export function createNewGame(hostId: string, hostName: string): GameState {
 }
 
 export function addPlayer(game: GameState, player: Player): GameState {
-  if (game.players.length >= 4) {
+  if (game.players.length >= 6) {
     throw new Error("Game is full");
   }
   if (game.phase !== "lobby") {
@@ -344,6 +330,7 @@ export function getAIProviderName(provider: AIProvider): string {
     case "chatgpt": return "ChatGPT";
     case "claude": return "Claude";
     case "gemini": return "Gemini";
+    case "openrouter": return "OpenRouter";
   }
 }
 

@@ -15,12 +15,14 @@ const aiIcons: Record<AIProvider, React.ReactNode> = {
   chatgpt: <SiOpenai className="h-4 w-4" />,
   claude: <SiAnthropic className="h-4 w-4" />,
   gemini: <SiGoogle className="h-4 w-4" />,
+  openrouter: <Bot className="h-4 w-4" />,
 };
 
 const aiColors: Record<AIProvider, string> = {
   chatgpt: "bg-emerald-600",
   claude: "bg-orange-500",
   gemini: "bg-blue-500",
+  openrouter: "bg-violet-600",
 };
 
 export function PlayerAvatar({ player, size = "md", showName = true, isCurrentPlayer = false }: PlayerAvatarProps) {

@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
-import { Bot, ChevronDown, ChevronUp, Settings2 } from "lucide-react";
+import { Bot, ChevronDown, ChevronUp, Settings2, Globe } from "lucide-react";
 import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import { type AIProvider, type AIPlayerConfig, MODEL_OPTIONS, PROMPT_STRATEGY_OPTIONS, getDefaultConfig } from "@shared/schema";
 
@@ -32,6 +32,12 @@ const providerUi: Record<AIProvider, { name: string; icon: React.ReactNode; colo
     icon: <SiGoogle className="h-4 w-4" />,
     color: "text-blue-500",
     bgColor: "bg-blue-500/10 hover:bg-blue-500/20 border-blue-500/30",
+  },
+  openrouter: {
+    name: "OpenRouter",
+    icon: <Globe className="h-4 w-4" />,
+    color: "text-violet-500",
+    bgColor: "bg-violet-500/10 hover:bg-violet-500/20 border-violet-500/30",
   },
 };
 
@@ -104,7 +110,7 @@ export function AIPlayerButton({ provider, onAdd, disabled = false }: AIPlayerBu
             <Label className="text-xs">Prompt Strategy</Label>
             <Select
               value={config.promptStrategy}
-              onValueChange={(val) => setConfig({ ...config, promptStrategy: val })}
+              onValueChange={(val) => setConfig({ ...config, promptStrategy: val as typeof config.promptStrategy })}
             >
               <SelectTrigger className="h-8 text-xs" data-testid={`select-strategy-${provider}`}>
                 <SelectValue />

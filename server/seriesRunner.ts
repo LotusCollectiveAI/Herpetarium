@@ -1,4 +1,6 @@
 import { SeriesConfig, HeadlessMatchConfig, AIPlayerConfig, getDefaultConfig } from "@shared/schema";
+import type { AIProvider } from "@shared/schema";
+
 import { runHeadlessMatch } from "./headlessRunner";
 import { generateReflection, ReflectionParams, AICallResult } from "./ai";
 import { storage } from "./storage";
@@ -20,9 +22,10 @@ interface PlayerHashEntry {
   provider: string;
   team: "amber" | "blue";
   name: string;
+  aiConfig?: AIPlayerConfig;
 }
 
-function dedupePlayerHashes(players: Array<{ name: string; aiProvider: string; team: string }>): PlayerHashEntry[] {
+function dedupePlayerHashes(players: Array<{ name: string; aiProvider: string; team: string; aiConfig?: AIPlayerConfig }>): PlayerHashEntry[] {
   const seen = new Set<string>();
   const result: PlayerHashEntry[] = [];
   for (const p of players) {
@@ -34,6 +37,7 @@ function dedupePlayerHashes(players: Array<{ name: string; aiProvider: string; t
         provider: p.aiProvider,
         team: p.team as "amber" | "blue",
         name: p.name,
+        aiConfig: p.aiConfig,
       });
     }
   }
@@ -154,7 +158,7 @@ export async function runSeries(seriesId: number) {
           const currentNotes = latestNote?.notesText || "";
 
           const opponentTeam = ph.team === "amber" ? "blue" : "amber";
-          const aiConfig = getDefaultConfig(ph.provider as any);
+          const aiConfig = ph.aiConfig || getDefaultConfig(ph.provider as AIProvider);
 
           const reflectionParams: ReflectionParams = {
             teamKeywords: result.teams[ph.team].keywords,

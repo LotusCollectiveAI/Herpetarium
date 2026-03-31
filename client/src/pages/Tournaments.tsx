@@ -115,6 +115,7 @@ function getProviderLabel(provider: string) {
     case "chatgpt": return "ChatGPT";
     case "claude": return "Claude";
     case "gemini": return "Gemini";
+    case "openrouter": return "OpenRouter";
     default: return provider;
   }
 }
@@ -320,7 +321,7 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
   );
 }
 
-const PROVIDERS = ["chatgpt", "claude", "gemini"] as const;
+const PROVIDERS = ["chatgpt", "claude", "gemini", "openrouter"] as const;
 
 function generateCrossModelRoundRobin(): MatchupConfig[] {
   const matchups: MatchupConfig[] = [];

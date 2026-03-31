@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
-import type { AIPlayerConfig, ParseQuality } from "@shared/schema";
+import type { AIPlayerConfig, ParseQuality, AblationFlag } from "@shared/schema";
 import { getPromptStrategy, applyAblations } from "./promptStrategies";
 import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
 
@@ -101,8 +101,9 @@ async function callAIWithBackoff(config: AIPlayerConfig, systemPrompt: string, u
 function getOpenAI(): OpenAI {
   if (!openaiClient) {
     openaiClient = new OpenAI({
-      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY,
-      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL,
+      apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
+      baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL,
+      timeout: 4 * 60 * 60 * 1000, // 4 hours — let models think as long as they need
     });
   }
   return openaiClient;
@@ -111,8 +112,9 @@ function getOpenAI(): OpenAI {
 function getAnthropic(): Anthropic {
   if (!anthropicClient) {
     anthropicClient = new Anthropic({
-      apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY,
+      apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY,
       baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
+      timeout: 4 * 60 * 60 * 1000, // 4 hours — let models think as long as they need
     });
   }
   return anthropicClient;
@@ -121,19 +123,33 @@ function getAnthropic(): Anthropic {
 function getGemini(): GoogleGenAI {
   if (!geminiClient) {
     geminiClient = new GoogleGenAI({
-      apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+      apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY,
     });
   }
   return geminiClient;
 }
 
 function isOpenAIReasoningModel(model: string): boolean {
-  return /^o[0-9]/.test(model) || model.startsWith("o1");
+  return model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4");
 }
 
 function isGeminiThinkingModel(model: string): boolean {
-  return model.includes("2.5-pro") || model.includes("2.5-flash");
+  return model.includes("2.5-pro") || model.includes("2.5-flash") || model.includes("3.1-pro");
 }
+
+const ANTHROPIC_THINKING_BUDGET: Record<string, number> = {
+  low: 5000,
+  medium: 15000,
+  high: 30000,
+  xhigh: 50000,
+};
+
+const GEMINI_THINKING_BUDGET: Record<string, number> = {
+  low: 5000,
+  medium: 15000,
+  high: 32000,
+  xhigh: 50000,
+};
 
 export interface AICallResult<T> {
   result: T;
@@ -150,21 +166,52 @@ export interface AICallResult<T> {
   estimatedCostUsd?: string;
 }
 
+// Costs per 1K tokens. For reasoning/thinking models, thinking tokens are billed
+// at the output rate and should be counted as completion tokens.
 export const MODEL_COST_PER_1K: Record<string, { input: number; output: number }> = {
+  // OpenAI — current models
+  "gpt-5.4": { input: 0.0025, output: 0.015 },
+  "gpt-5.4-mini": { input: 0.0004, output: 0.0016 },
+  "codex-5.3": { input: 0.003, output: 0.015 },
+  "o3": { input: 0.002, output: 0.008 },
+  "o4-mini": { input: 0.0011, output: 0.0044 },
+  // OpenAI — legacy (kept for historical cost estimates)
   "gpt-4o": { input: 0.0025, output: 0.01 },
   "gpt-4o-mini": { input: 0.00015, output: 0.0006 },
-  "o3": { input: 0.01, output: 0.04 },
-  "o3-mini": { input: 0.0011, output: 0.0044 },
   "o1": { input: 0.015, output: 0.06 },
+  "o3-mini": { input: 0.0011, output: 0.0044 },
+  // Anthropic — current models (thinking tokens billed at output rate)
+  "claude-opus-4-6": { input: 0.005, output: 0.025 },
+  "claude-sonnet-4-6": { input: 0.003, output: 0.015 },
   "claude-sonnet-4-20250514": { input: 0.003, output: 0.015 },
+  "claude-haiku-4-5-20251001": { input: 0.001, output: 0.005 },
+  // Anthropic — legacy
+  "claude-opus-4-20250514": { input: 0.015, output: 0.075 },
   "claude-haiku-4-20250414": { input: 0.0008, output: 0.004 },
   "claude-3-5-sonnet-20241022": { input: 0.003, output: 0.015 },
+  // Google Gemini — current models (thinking tokens billed at output rate for thinking models)
+  "gemini-3.1-pro-preview": { input: 0.002, output: 0.012 },
+  "gemini-3.1-flash-lite-preview": { input: 0.00025, output: 0.0015 },
+  "gemini-2.5-pro": { input: 0.0035, output: 0.021 },
+  "gemini-2.5-flash": { input: 0.0003, output: 0.0025 },
+  // Google Gemini — legacy
   "gemini-2.0-flash": { input: 0.0001, output: 0.0004 },
-  "gemini-2.5-pro": { input: 0.00125, output: 0.01 },
-  "gemini-2.5-flash": { input: 0.00015, output: 0.0006 },
+  // OpenRouter — current models
+  "deepseek/deepseek-v3.2": { input: 0.00026, output: 0.00038 },
+  "deepseek-ai/deepseek-reasoner": { input: 0.00055, output: 0.00219 },
+  "x-ai/grok-4.20-beta": { input: 0.002, output: 0.006 },
+  "qwen/qwen3.6-plus-preview": { input: 0.0005, output: 0.002 },
+  "qwen/qwen3-max-thinking": { input: 0.00039, output: 0.00234 },
+  "meta-llama/llama-4-maverick": { input: 0.0005, output: 0.0015 },
+  "moonshotai/kimi-k2.5": { input: 0.0006, output: 0.002 },
+  // OpenRouter — legacy
+  "deepseek/deepseek-r1": { input: 0.00055, output: 0.00219 },
+  "x-ai/grok-3-beta": { input: 0.003, output: 0.015 },
+  "mistralai/mistral-large-latest": { input: 0.002, output: 0.006 },
+  "qwen/qwen-2.5-72b-instruct": { input: 0.0006, output: 0.0018 },
 };
 
-function estimateCost(model: string, promptTokens?: number, completionTokens?: number): string | undefined {
+export function estimateCost(model: string, promptTokens?: number, completionTokens?: number): string | undefined {
   if (!promptTokens && !completionTokens) return undefined;
   const costs = MODEL_COST_PER_1K[model];
   if (!costs) return undefined;
@@ -191,7 +238,8 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
       messages: [
         { role: "user", content: `${systemPrompt}\n\n${userPrompt}` },
       ],
-      max_completion_tokens: 2048,
+      max_completion_tokens: 100000, // Let reasoning models think as long as they need
+      reasoning_effort: config.reasoningEffort || "high",
     } as any);
 
     const choice = response.choices[0];
@@ -201,6 +249,9 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
     const msg = choice?.message as any;
     if (msg?.reasoning_content) {
       reasoningTrace = msg.reasoning_content;
+    } else if (msg?.reasoning) {
+      // Some models return reasoning in a different field
+      reasoningTrace = typeof msg.reasoning === 'string' ? msg.reasoning : JSON.stringify(msg.reasoning);
     }
 
     const usage = response.usage;
@@ -213,19 +264,41 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
     };
   }
 
-  const response = await getOpenAI().chat.completions.create({
+  // Modern models (GPT-5+, GPT-4.1+, Codex) require max_completion_tokens and support reasoning_effort
+  const isModernModel = config.model.startsWith("gpt-5") || config.model.startsWith("gpt-4.1") || config.model.startsWith("codex-");
+  const advancedStrategies = ["advanced", "k-level", "enriched"];
+
+  const completionParams: Record<string, any> = {
     model: config.model,
     messages: [
       { role: "system", content: systemPrompt },
       { role: "user", content: userPrompt },
     ],
-    max_tokens: 200,
-    temperature: config.temperature ?? 0.7,
-  });
+  };
 
+  if (isModernModel) {
+    // GPT-5+ with reasoning_effort only supports temperature=1 (the default)
+    // Don't set temperature at all — let the API use its default
+    completionParams.max_completion_tokens = 16384;
+    if (advancedStrategies.includes(config.promptStrategy)) {
+      completionParams.reasoning_effort = config.reasoningEffort || "high";
+      completionParams.max_completion_tokens = 100000;
+    }
+  } else {
+    completionParams.temperature = config.temperature ?? 0.7;
+    completionParams.max_tokens = 4096;
+  }
+
+  const response = await getOpenAI().chat.completions.create(completionParams as any);
+
+  // Extract reasoning token count from usage details
   const usage = response.usage;
+  const usageAny = usage as any;
+  const reasoningTokens = usageAny?.completion_tokens_details?.reasoning_tokens;
+
   return {
     text: response.choices[0]?.message?.content || "",
+    reasoningTrace: reasoningTokens ? `[GPT internal reasoning: ${reasoningTokens} tokens]` : undefined,
     promptTokens: usage?.prompt_tokens,
     completionTokens: usage?.completion_tokens,
     totalTokens: usage?.total_tokens,
@@ -233,19 +306,24 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
 }
 
 async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
-  const isExtendedThinking = config.model.includes("claude-3-7") || config.promptStrategy === "advanced";
+  const thinkingStrategies = ["advanced", "k-level", "enriched"];
+  const isExtendedThinking = config.model.includes("claude-3-7") || thinkingStrategies.includes(config.promptStrategy);
 
-  if (isExtendedThinking && config.promptStrategy === "advanced") {
+  if (isExtendedThinking && thinkingStrategies.includes(config.promptStrategy)) {
     try {
-      const response = await getAnthropic().messages.create({
+      // Use streaming to avoid timeout on long thinking operations
+      const stream = getAnthropic().messages.stream({
         model: config.model,
-        max_tokens: 16000,
+        max_tokens: 64000,
         thinking: {
           type: "enabled",
-          budget_tokens: 10000,
+          budget_tokens: ANTHROPIC_THINKING_BUDGET[config.reasoningEffort || "high"] || 30000,
         },
+        temperature: 1, // Required for extended thinking
         messages: [{ role: "user", content: `${systemPrompt}\n\n${userPrompt}` }],
       } as any);
+
+      const response = await stream.finalMessage();
 
       let text = "";
       let reasoningTrace: string | undefined;
@@ -265,13 +343,14 @@ async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userP
         completionTokens: response.usage?.output_tokens,
         totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0) || undefined,
       };
-    } catch {
+    } catch (err) {
+      console.error("[AI] Extended thinking failed, falling back to standard:", err instanceof Error ? err.message : err);
     }
   }
 
   const response = await getAnthropic().messages.create({
     model: config.model,
-    max_tokens: 200,
+    max_tokens: 8192, // Let models write full responses
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
   });
@@ -324,7 +403,7 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
       contents: `${systemPrompt}\n\n${userPrompt}`,
       config: {
         thinkingConfig: {
-          thinkingBudget: 8000,
+          thinkingBudget: GEMINI_THINKING_BUDGET[config.reasoningEffort || "high"] || 32000,
         },
       },
     } as Parameters<ReturnType<typeof getGemini>['models']['generateContent']>[0]);
@@ -366,6 +445,67 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
   };
 }
 
+async function callOpenRouter(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) {
+    throw new Error("OPENROUTER_API_KEY environment variable is not set");
+  }
+
+  const isReasoning = config.model.includes("deepseek-r1") || config.model.includes("deepseek-reasoner") || config.model.includes("qwen3-max-thinking") || config.model.includes("o1") || config.model.includes("o3") || config.model.includes("o4");
+
+  const messages: Array<{ role: string; content: string }> = [];
+  if (!isReasoning) {
+    messages.push({ role: "system", content: systemPrompt });
+  }
+  messages.push({ role: "user", content: isReasoning ? `${systemPrompt}\n\n${userPrompt}` : userPrompt });
+
+  const body: Record<string, unknown> = {
+    model: config.model,
+    messages,
+    max_tokens: isReasoning ? 100000 : 8192,
+  };
+
+  if (!isReasoning && config.temperature !== undefined) {
+    body.temperature = config.temperature;
+  }
+
+  // Request reasoning effort for models that support it
+  if (isReasoning) {
+    body.reasoning = { effort: config.reasoningEffort || "high" };
+  }
+
+  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost:5000",
+      "X-Title": process.env.OPENROUTER_TITLE || "Decrypto Arena",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    const error: any = new Error(`OpenRouter API error: ${response.status} ${errorText}`);
+    error.status = response.status;
+    throw error;
+  }
+
+  const data = await response.json() as any;
+  const choice = data.choices?.[0]?.message;
+  const content = choice?.content || "";
+  const reasoningContent = choice?.reasoning_content || data.choices?.[0]?.message?.reasoning || "";
+
+  return {
+    text: content,
+    reasoningTrace: reasoningContent || undefined,
+    promptTokens: data.usage?.prompt_tokens,
+    completionTokens: data.usage?.completion_tokens,
+    totalTokens: data.usage?.total_tokens,
+  };
+}
+
 function callAIRaw(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
   switch (config.provider) {
     case "chatgpt":
@@ -374,6 +514,8 @@ function callAIRaw(config: AIPlayerConfig, systemPrompt: string, userPrompt: str
       return callAnthropic(config, systemPrompt, userPrompt);
     case "gemini":
       return callGemini(config, systemPrompt, userPrompt);
+    case "openrouter":
+      return callOpenRouter(config, systemPrompt, userPrompt);
   }
 }
 
@@ -387,13 +529,33 @@ interface ParseResult<T> {
 }
 
 function parseCodeResponse(response: string): ParseResult<[number, number, number]> {
+  // Strategy 1: Look for "ANSWER:" prefix line
+  const answerMatch = response.match(/ANSWER:\s*(.+)/im);
+  const searchText = answerMatch ? answerMatch[1] : response;
+
+  // Strategy 2: Find a clean digit,digit,digit pattern (last match wins)
+  const cleanPattern = /\b([1-4])\s*,\s*([1-4])\s*,\s*([1-4])\b/g;
+  let lastCleanMatch: RegExpMatchArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = cleanPattern.exec(searchText)) !== null) {
+    lastCleanMatch = match;
+  }
+
+  if (lastCleanMatch) {
+    const code = [parseInt(lastCleanMatch[1]), parseInt(lastCleanMatch[2]), parseInt(lastCleanMatch[3])] as [number, number, number];
+    const unique = new Set(code);
+    const quality: ParseQuality = unique.size === 3 ? "clean" : "partial_recovery";
+    return { value: code, quality };
+  }
+
+  // Strategy 3: Fall back to current approach (strip non-digit-non-comma, split)
   const cleaned = response.replace(/[^1-4,\s]/g, "");
   const numbers = cleaned.split(/[,\s]+/).map(n => parseInt(n.trim())).filter(n => n >= 1 && n <= 4);
 
   if (numbers.length >= 3) {
     const code = [numbers[0], numbers[1], numbers[2]] as [number, number, number];
     const unique = new Set(code);
-    const quality: ParseQuality = unique.size === 3 ? "clean" : "partial_recovery";
+    const quality: ParseQuality = unique.size === 3 ? "partial_recovery" : "partial_recovery";
     return { value: code, quality };
   }
 
@@ -402,20 +564,41 @@ function parseCodeResponse(response: string): ParseResult<[number, number, numbe
 }
 
 function parseCluesResponse(response: string): ParseResult<string[]> {
+  // Strategy 1: Look for "ANSWER:" prefix line, then extract word,word,word from it
+  const answerMatch = response.match(/ANSWER:\s*(.+)/im);
+  const searchText = answerMatch ? answerMatch[1] : response;
+
+  // Strategy 2: Find a clean word,word,word pattern (last match wins — answer is usually at the end)
+  const cleanPattern = /\b([a-z]{1,25})\s*,\s*([a-z]{1,25})\s*,\s*([a-z]{1,25})\b/gi;
+  let lastCleanMatch: RegExpMatchArray | null = null;
+  let match: RegExpExecArray | null;
+  while ((match = cleanPattern.exec(searchText)) !== null) {
+    lastCleanMatch = match;
+  }
+
+  if (lastCleanMatch) {
+    const words = [lastCleanMatch[1].toLowerCase(), lastCleanMatch[2].toLowerCase(), lastCleanMatch[3].toLowerCase()];
+    // Filter out any "word" longer than 25 chars (thinking noise)
+    if (words.every(w => w.length >= 1 && w.length <= 25)) {
+      return { value: words, quality: "clean" };
+    }
+  }
+
+  // Strategy 3: Fall back to line-by-line parsing but filter out words > 25 chars
   const lines = response.split("\n").map(l => l.trim()).filter(l => l.length > 0);
   let words: string[] = [];
 
   for (const line of lines) {
-    const lineWords = line.split(",").map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length > 0);
+    const lineWords = line.split(",").map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length >= 1 && w.length <= 25);
     words.push(...lineWords);
   }
 
   if (words.length === 0) {
-    words = response.split(/[\s,]+/).map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length > 0);
+    words = response.split(/[\s,]+/).map(w => w.trim().toLowerCase().replace(/[^a-z]/g, "")).filter(w => w.length >= 1 && w.length <= 25);
   }
 
   if (words.length >= 3) {
-    return { value: words.slice(0, 3), quality: "clean" };
+    return { value: words.slice(0, 3), quality: "partial_recovery" };
   }
 
   if (words.length > 0 && words.length < 3) {
@@ -429,9 +612,10 @@ function parseCluesResponse(response: string): ParseResult<string[]> {
 }
 
 export const MODEL_MAP: Record<string, string> = {
-  chatgpt: "gpt-4o",
-  claude: "claude-sonnet-4-20250514",
-  gemini: "gemini-2.0-flash",
+  chatgpt: "gpt-5.4",
+  claude: "claude-sonnet-4-6",
+  gemini: "gemini-3.1-pro-preview",
+  openrouter: "deepseek/deepseek-v3.2",
 };
 
 export function buildCluePrompt(params: ClueTemplateParams): string {
@@ -454,9 +638,10 @@ function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfi
     const provider = configOrProvider as AIPlayerConfig["provider"];
     return {
       provider,
-      model: MODEL_MAP[provider] || "gpt-4o",
+      model: MODEL_MAP[provider] || "gpt-5.4",
       timeoutMs: 120000,
       temperature: 0.7,
+      reasoningEffort: "high",
       promptStrategy: "default",
     };
   }
@@ -474,7 +659,7 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
   }
 
   const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.clueTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
@@ -500,7 +685,7 @@ export async function generateGuess(configOrProvider: AIPlayerConfig | string, p
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "guess");
   const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.guessTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
@@ -601,11 +786,73 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
   }
 }
 
+export function validateApiKeys(): void {
+  const providers: Array<{ name: string; key: string | undefined }> = [
+    { name: "OpenAI", key: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY },
+    { name: "Anthropic", key: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY },
+    { name: "Gemini", key: process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY },
+    { name: "OpenRouter", key: process.env.OPENROUTER_API_KEY },
+  ];
+
+  const available = providers.filter(p => p.key);
+  const missing = providers.filter(p => !p.key);
+
+  console.log(`[AI] Available providers: ${available.map(p => p.name).join(", ") || "none"}`);
+  if (missing.length > 0) {
+    console.log(`[AI] Missing keys for: ${missing.map(p => p.name).join(", ")}`);
+  }
+  if (available.length === 0) {
+    console.warn("[AI] Warning: No AI provider keys configured. AI features will not work.");
+  }
+}
+
+export interface DeliberationParams {
+  systemPrompt: string;
+  userPrompt: string;
+  ablations?: AblationFlag[];
+}
+
+export async function generateDeliberationMessage(
+  config: AIPlayerConfig,
+  params: DeliberationParams,
+): Promise<AICallResult<string>> {
+  const fullPrompt = `${params.systemPrompt}\n\n${params.userPrompt}`;
+  const startTime = Date.now();
+  try {
+    const raw = await callAI(config, params.systemPrompt, params.userPrompt);
+    const latencyMs = Date.now() - startTime;
+    return {
+      result: raw.text,
+      prompt: fullPrompt,
+      rawResponse: raw.text,
+      model: config.model,
+      latencyMs,
+      reasoningTrace: raw.reasoningTrace,
+      parseQuality: "clean",
+      promptTokens: raw.promptTokens,
+      completionTokens: raw.completionTokens,
+      totalTokens: raw.totalTokens,
+      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
+    };
+  } catch (err: unknown) {
+    const latencyMs = Date.now() - startTime;
+    return {
+      result: "",
+      prompt: fullPrompt,
+      rawResponse: "",
+      model: config.model,
+      latencyMs,
+      error: String(err),
+      parseQuality: "error",
+    };
+  }
+}
+
 export async function generateInterception(configOrProvider: AIPlayerConfig | string, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "interception");
   const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && config.promptStrategy === "advanced";
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.interceptionTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;

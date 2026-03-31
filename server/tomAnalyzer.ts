@@ -49,6 +49,9 @@ const LEVEL_1_PATTERNS = [
   /\bavoid repeat/i,
   /\bchange (my|our) approach\b/i,
   /\bswitch\b.*\bstrategy\b/i,
+  /\blevel\s*0\b/i,
+  /\bdirect (match|association)/i,
+  /\braw association/i,
 ];
 
 const LEVEL_2_PATTERNS = [
@@ -64,6 +67,15 @@ const LEVEL_2_PATTERNS = [
   /\bdeceiv(e|ing)\b/i,
   /\bdeception\b/i,
   /\bdisguise\b/i,
+  /\blevel\s*1\b/i,
+  /\blevel\s*2\b/i,
+  /\bk[- ]?level\b/i,
+  /\bteammate model\b/i,
+  /\bopponent model\b/i,
+  /\bencryptor model\b/i,
+  /\bpattern detection\b/i,
+  /\bdeception awareness\b/i,
+  /\bcounter[- ]?deception\b/i,
 ];
 
 const LEVEL_3_PATTERNS = [
@@ -80,6 +92,12 @@ const LEVEL_3_PATTERNS = [
   /\brecursive\b.*\b(reason|think)\b/i,
   /\bthey expect us to\b/i,
   /\bwe expect them to expect\b/i,
+  /\blevel\s*3\b/i,
+  /\bmeta[- ]?strategy\b/i,
+  /\bmisdirection\b/i,
+  /\bexploit\b.*\bexpectation/i,
+  /\bsubvert\b.*\bexpectation/i,
+  /\bdeliberately breaking\b.*\bpattern/i,
 ];
 
 function analyzeText(text: string): TomAnalysis {

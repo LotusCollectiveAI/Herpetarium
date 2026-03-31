@@ -19,9 +19,15 @@ import {
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Cell
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Cell, ErrorBar
 } from "recharts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+
+interface ConfidenceInterval {
+  lower: number;
+  upper: number;
+  point: number;
+}
 
 interface ModelMetrics {
   model: string;
@@ -35,6 +41,7 @@ interface ModelMetrics {
   miscommunicationRate: number;
   avgRounds: number;
   clueDiversity: number;
+  winRateCI?: ConfidenceInterval;
 }
 
 interface MatchupMetrics {
@@ -123,6 +130,7 @@ interface EvalData {
   teamCompositionMetrics: TeamCompositionMetrics;
   selfPlayMetrics: SelfPlayMetrics;
   parseQualityMetrics: ParseQualityMetrics[];
+  btRatings?: Record<string, number>;
   summary: {
     totalMatches: number;
     totalRounds: number;
@@ -192,6 +200,93 @@ function MetricCard({ title, value, icon: Icon, description }: { title: string; 
             {description && <p className="text-xs text-muted-foreground mt-1">{description}</p>}
           </div>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function WinRateChart({ metrics, btRatings }: { metrics: ModelMetrics[]; btRatings?: Record<string, number> }) {
+  if (metrics.length === 0) return null;
+
+  const chartData = metrics.map(m => {
+    const winRatePct = +(m.winRate * 100).toFixed(1);
+    const ciLower = m.winRateCI ? +(m.winRateCI.lower * 100).toFixed(1) : winRatePct;
+    const ciUpper = m.winRateCI ? +(m.winRateCI.upper * 100).toFixed(1) : winRatePct;
+    return {
+      name: m.model,
+      winRate: winRatePct,
+      // ErrorBar uses absolute deviation from the data value
+      errorLow: +(winRatePct - ciLower).toFixed(1),
+      errorHigh: +(ciUpper - winRatePct).toFixed(1),
+      totalGames: m.totalGames,
+      btRating: btRatings?.[m.model] ? +btRatings[m.model].toFixed(3) : undefined,
+    };
+  });
+
+  const hasCI = metrics.some(m => m.winRateCI);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <TrendingUp className="h-5 w-5" />
+          Win Rate with Confidence Intervals
+        </CardTitle>
+        <CardDescription>
+          {hasCI
+            ? "Error bars show 95% bootstrap confidence intervals"
+            : "Play more games to see confidence intervals"}
+          {btRatings && Object.keys(btRatings).length > 0 && " | Bradley-Terry ratings in tooltip"}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <ResponsiveContainer width="100%" height={350}>
+          <BarChart data={chartData} margin={{ top: 20, right: 30, left: 10, bottom: 10 }}>
+            <CartesianGrid strokeDasharray="3 3" />
+            <XAxis dataKey="name" fontSize={12} />
+            <YAxis unit="%" domain={[0, 100]} fontSize={12} />
+            <Tooltip
+              formatter={(value: number, name: string, props: any) => {
+                const item = props.payload;
+                const lines: string[] = [`${value}%`];
+                if (item.btRating !== undefined) {
+                  lines.push(`BT: ${item.btRating}`);
+                }
+                return [lines.join(" | "), "Win Rate"];
+              }}
+              labelFormatter={(label: string) => {
+                const item = chartData.find(d => d.name === label);
+                return `${label} (${item?.totalGames ?? 0} games)`;
+              }}
+            />
+            <Legend />
+            <Bar dataKey="winRate" name="Win Rate" fill="#f59e0b" radius={[4, 4, 0, 0]}>
+              {hasCI && (
+                <ErrorBar
+                  dataKey="errorHigh"
+                  width={6}
+                  strokeWidth={2}
+                  stroke="#b45309"
+                  direction="y"
+                />
+              )}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+        {btRatings && Object.keys(btRatings).length > 0 && (
+          <div className="mt-4 border-t pt-3">
+            <p className="text-sm font-medium text-muted-foreground mb-2">Bradley-Terry Strength Ratings</p>
+            <div className="flex flex-wrap gap-2">
+              {Object.entries(btRatings)
+                .sort(([, a], [, b]) => b - a)
+                .map(([model, rating]) => (
+                  <Badge key={model} variant="outline" className="text-xs">
+                    {model}: {rating.toFixed(3)}
+                  </Badge>
+                ))}
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -1139,6 +1234,7 @@ function TomComparisonSection({ filterModel, filterDateFrom, filterDateTo }: { f
       case "chatgpt": return "ChatGPT";
       case "claude": return "Claude";
       case "gemini": return "Gemini";
+      case "openrouter": return "OpenRouter";
       default: return p;
     }
   };
@@ -1432,6 +1528,7 @@ export default function EvalDashboard() {
                 </div>
 
                 <ModelMetricsChart metrics={data.modelMetrics} />
+                <WinRateChart metrics={data.modelMetrics} btRatings={data.btRatings} />
                 <ModelDetailsTable metrics={data.modelMetrics} />
                 <MatchupTable matchups={data.matchupMetrics} />
                 <StrategyComparison strategies={data.strategyMetrics} />

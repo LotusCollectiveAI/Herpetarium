@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, type Series, type InsertSeries, type ScratchNote, type InsertScratchNote, type StrategyGenome, type InsertStrategyGenome, type EvolutionRun, type InsertEvolutionRun, type Generation, type InsertGeneration, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments, series, scratchNotes, strategyGenomes, evolutionRuns, generations } from "@shared/schema";
+import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, type Series, type InsertSeries, type ScratchNote, type InsertScratchNote, type StrategyGenome, type InsertStrategyGenome, type EvolutionRun, type InsertEvolutionRun, type Generation, type InsertGeneration, type TeamChatter, type InsertTeamChatter, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments, series, scratchNotes, strategyGenomes, evolutionRuns, generations, teamChatter } from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, like, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -12,8 +12,8 @@ export interface IStorage {
   updateMatch(id: number, data: Partial<InsertMatch>): Promise<Match | undefined>;
   getMatch(id: number): Promise<Match | undefined>;
   getMatchByGameId(gameId: string): Promise<Match | undefined>;
-  getMatches(params: { page: number; limit: number; model?: string; winner?: string; dateFrom?: string; dateTo?: string }): Promise<{ matches: Match[]; total: number }>;
-  getAllMatches(params?: { model?: string; strategy?: string; dateFrom?: string; dateTo?: string }): Promise<Match[]>;
+  getMatches(params: { page: number; limit: number; model?: string; winner?: string; dateFrom?: string; dateTo?: string; experimentId?: string }): Promise<{ matches: Match[]; total: number }>;
+  getAllMatches(params?: { model?: string; strategy?: string; dateFrom?: string; dateTo?: string; experimentId?: string }): Promise<Match[]>;
   getMatchesByIds(ids: number[]): Promise<Match[]>;
 
   createMatchRound(round: InsertMatchRound): Promise<MatchRound>;
@@ -63,6 +63,10 @@ export interface IStorage {
   getStrategyGenomes(evolutionRunId: number, generationNumber?: number): Promise<StrategyGenome[]>;
   getStrategyGenome(id: number): Promise<StrategyGenome | undefined>;
   getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]>;
+
+  createTeamChatter(entry: InsertTeamChatter): Promise<TeamChatter>;
+  getTeamChatter(matchId: number): Promise<TeamChatter[]>;
+  getTeamChatterByRound(matchId: number, roundNumber: number): Promise<TeamChatter[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -104,7 +108,7 @@ export class DatabaseStorage implements IStorage {
     return match;
   }
 
-  async getMatches(params: { page: number; limit: number; model?: string; winner?: string; dateFrom?: string; dateTo?: string }): Promise<{ matches: Match[]; total: number }> {
+  async getMatches(params: { page: number; limit: number; model?: string; winner?: string; dateFrom?: string; dateTo?: string; experimentId?: string }): Promise<{ matches: Match[]; total: number }> {
     const conditions = [];
 
     if (params.winner) {
@@ -117,6 +121,10 @@ export class DatabaseStorage implements IStorage {
 
     if (params.dateTo) {
       conditions.push(sql`${matches.createdAt} <= ${params.dateTo}::timestamp`);
+    }
+
+    if (params.experimentId) {
+      conditions.push(eq(matches.experimentId, params.experimentId));
     }
 
     if (params.model) {
@@ -174,7 +182,7 @@ export class DatabaseStorage implements IStorage {
         inArray(aiCallLogs.matchId, matchIds),
         sql`${aiCallLogs.reasoningTrace} IS NOT NULL`
       ));
-    return new Set(rows.map(r => r.matchId));
+    return new Set(rows.map(r => r.matchId).filter((id): id is number => id !== null));
   }
 
   async getCumulativeCost(matchIds: number[]): Promise<number> {
@@ -216,7 +224,7 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(tournamentMatches).where(eq(tournamentMatches.tournamentId, tournamentId)).orderBy(tournamentMatches.matchIndex);
   }
 
-  async getAllMatches(params?: { model?: string; strategy?: string; dateFrom?: string; dateTo?: string }): Promise<Match[]> {
+  async getAllMatches(params?: { model?: string; strategy?: string; dateFrom?: string; dateTo?: string; experimentId?: string }): Promise<Match[]> {
     const conditions = [];
     if (params?.model) {
       conditions.push(
@@ -233,6 +241,9 @@ export class DatabaseStorage implements IStorage {
     }
     if (params?.dateTo) {
       conditions.push(sql`${matches.createdAt} <= ${params.dateTo}::timestamp`);
+    }
+    if (params?.experimentId) {
+      conditions.push(eq(matches.experimentId, params.experimentId));
     }
     conditions.push(sql`${matches.winner} IS NOT NULL`);
     const where = conditions.length > 0 ? and(...conditions) : undefined;
@@ -382,6 +393,26 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(strategyGenomes.evolutionRunId, evolutionRunId), eq(strategyGenomes.generationNumber, generationNumber)))
       .orderBy(desc(strategyGenomes.eloRating))
       .limit(limit);
+  }
+
+  async createTeamChatter(entry: InsertTeamChatter): Promise<TeamChatter> {
+    const [created] = await db.insert(teamChatter).values(entry).returning();
+    return created;
+  }
+
+  async getTeamChatter(matchId: number): Promise<TeamChatter[]> {
+    return db.select().from(teamChatter)
+      .where(eq(teamChatter.matchId, matchId))
+      .orderBy(teamChatter.roundNumber, teamChatter.team, teamChatter.phase);
+  }
+
+  async getTeamChatterByRound(matchId: number, roundNumber: number): Promise<TeamChatter[]> {
+    return db.select().from(teamChatter)
+      .where(and(
+        eq(teamChatter.matchId, matchId),
+        eq(teamChatter.roundNumber, roundNumber),
+      ))
+      .orderBy(teamChatter.team, teamChatter.phase);
   }
 }
 

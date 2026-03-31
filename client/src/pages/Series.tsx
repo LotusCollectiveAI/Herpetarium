@@ -105,6 +105,7 @@ function getProviderLabel(provider: string) {
     case "chatgpt": return "ChatGPT";
     case "claude": return "Claude";
     case "gemini": return "Gemini";
+    case "openrouter": return "OpenRouter";
     default: return provider;
   }
 }

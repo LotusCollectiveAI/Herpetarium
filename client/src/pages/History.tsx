@@ -103,6 +103,7 @@ function getProviderColor(provider: string): string {
     case "chatgpt": return "text-green-600 dark:text-green-400";
     case "claude": return "text-orange-600 dark:text-orange-400";
     case "gemini": return "text-blue-600 dark:text-blue-400";
+    case "openrouter": return "text-violet-600 dark:text-violet-400";
     default: return "text-foreground";
   }
 }
@@ -112,6 +113,7 @@ function getProviderBgColor(provider: string): string {
     case "chatgpt": return "bg-green-50 dark:bg-green-950/30 border-green-200 dark:border-green-800";
     case "claude": return "bg-orange-50 dark:bg-orange-950/30 border-orange-200 dark:border-orange-800";
     case "gemini": return "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800";
+    case "openrouter": return "bg-violet-50 dark:bg-violet-950/30 border-violet-200 dark:border-violet-800";
     default: return "bg-muted border-border";
   }
 }

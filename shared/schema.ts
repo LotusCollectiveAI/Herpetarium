@@ -2,45 +2,58 @@ import { z } from "zod";
 import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 
-export type AIProvider = "chatgpt" | "claude" | "gemini";
+export type AIProvider = "chatgpt" | "claude" | "gemini" | "openrouter";
 
 export const aiPlayerConfigSchema = z.object({
-  provider: z.enum(["chatgpt", "claude", "gemini"]),
+  provider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
   model: z.string(),
-  timeoutMs: z.number().min(10000).max(300000).default(120000),
+  timeoutMs: z.number().min(10000).max(14400000).default(900000), // Up to 4 hours, default 15 min
   temperature: z.number().min(0).max(2).optional(),
-  promptStrategy: z.enum(["default", "advanced"]).default("default"),
+  promptStrategy: z.enum(["default", "advanced", "k-level", "enriched"]).default("default"),
+  reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).default("high"),
 });
 
 export type AIPlayerConfig = z.infer<typeof aiPlayerConfigSchema>;
 
 export const MODEL_OPTIONS: Record<AIProvider, Array<{ value: string; label: string; isReasoning?: boolean }>> = {
   chatgpt: [
-    { value: "gpt-4o", label: "GPT-4o" },
-    { value: "gpt-4o-mini", label: "GPT-4o Mini" },
+    { value: "gpt-5.4", label: "GPT-5.4" },
+    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
+    { value: "codex-5.3", label: "Codex 5.3" },
     { value: "o3", label: "o3 (Reasoning)", isReasoning: true },
-    { value: "o3-mini", label: "o3-mini (Reasoning)", isReasoning: true },
-    { value: "o1", label: "o1 (Reasoning)", isReasoning: true },
+    { value: "o4-mini", label: "o4-mini (Reasoning)", isReasoning: true },
   ],
   claude: [
+    { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
+    { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
     { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-    { value: "claude-haiku-4-20250414", label: "Claude Haiku 4" },
-    { value: "claude-3-5-sonnet-20241022", label: "Claude 3.5 Sonnet" },
+    { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
   ],
   gemini: [
-    { value: "gemini-2.0-flash", label: "Gemini 2.0 Flash" },
+    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
+    { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash Lite" },
     { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Thinking)", isReasoning: true },
     { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Thinking)", isReasoning: true },
   ],
+  openrouter: [
+    { value: "deepseek/deepseek-v3.2", label: "DeepSeek V3.2" },
+    { value: "deepseek-ai/deepseek-reasoner", label: "DeepSeek Reasoner", isReasoning: true },
+    { value: "x-ai/grok-4.20-beta", label: "Grok 4.20 Beta" },
+    { value: "qwen/qwen3.6-plus-preview", label: "Qwen 3.6 Plus" },
+    { value: "qwen/qwen3-max-thinking", label: "Qwen 3 Max (Thinking)", isReasoning: true },
+    { value: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick" },
+    { value: "moonshotai/kimi-k2.5", label: "Kimi K2.5 (Reasoning)" },
+  ],
 };
 
-export const PROMPT_STRATEGY_OPTIONS = ["default", "advanced"] as const;
+export const PROMPT_STRATEGY_OPTIONS = ["default", "advanced", "k-level", "enriched"] as const;
 
 export function getDefaultConfig(provider: AIProvider): AIPlayerConfig {
   const defaultModels: Record<AIProvider, string> = {
-    chatgpt: "gpt-4o",
-    claude: "claude-sonnet-4-20250514",
-    gemini: "gemini-2.0-flash",
+    chatgpt: "gpt-5.4",
+    claude: "claude-sonnet-4-6",
+    gemini: "gemini-3.1-pro-preview",
+    openrouter: "deepseek/deepseek-v3.2",
   };
   return {
     provider,
@@ -48,6 +61,7 @@ export function getDefaultConfig(provider: AIProvider): AIPlayerConfig {
     timeoutMs: 120000,
     temperature: 0.7,
     promptStrategy: "default",
+    reasoningEffort: "high",
   };
 }
 
@@ -55,7 +69,7 @@ export const playerSchema = z.object({
   id: z.string(),
   name: z.string(),
   isAI: z.boolean(),
-  aiProvider: z.enum(["chatgpt", "claude", "gemini"]).optional(),
+  aiProvider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]).optional(),
   aiConfig: aiPlayerConfigSchema.optional(),
   team: z.enum(["amber", "blue"]).nullable(),
   isReady: z.boolean(),
@@ -63,11 +77,13 @@ export const playerSchema = z.object({
 
 export type Player = z.infer<typeof playerSchema>;
 
-export type GamePhase = 
+export type GamePhase =
   | "lobby"
   | "team_setup"
   | "giving_clues"
+  | "own_team_deliberation"
   | "own_team_guessing"
+  | "opponent_deliberation"
   | "opponent_intercepting"
   | "round_results"
   | "game_over";
@@ -112,7 +128,7 @@ export type TeamState = z.infer<typeof teamStateSchema>;
 
 export const gameStateSchema = z.object({
   id: z.string(),
-  phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_guessing", "opponent_intercepting", "round_results", "game_over"]),
+  phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]),
   round: z.number(),
   players: z.array(playerSchema),
   hostId: z.string(),
@@ -151,7 +167,7 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("join"), gameId: z.string(), playerName: z.string(), playerId: z.string().optional() }),
   z.object({ 
     type: z.literal("add_ai"), 
-    provider: z.enum(["chatgpt", "claude", "gemini"]),
+    provider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
     config: aiPlayerConfigSchema.optional(),
   }),
   z.object({ type: z.literal("remove_player"), playerId: z.string() }),
@@ -180,7 +196,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ai_done"), aiName: z.string() }),
   z.object({ type: z.literal("ai_fallback"), aiName: z.string(), reason: z.string() }),
   z.object({ type: z.literal("new_game_created"), gameId: z.string() }),
-  z.object({ type: z.literal("phase_changed"), phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_guessing", "opponent_intercepting", "round_results", "game_over"]), round: z.number() }),
+  z.object({ type: z.literal("phase_changed"), phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]), round: z.number() }),
 ]);
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
@@ -216,6 +232,12 @@ export const matches = pgTable("matches", {
   blueBlackTokens: integer("blue_black_tokens").notNull().default(0),
   gameSeed: varchar("game_seed", { length: 50 }),
   ablations: jsonb("ablations"),
+  // Week 1: experimentId for scoped queries
+  // Migration SQL:
+  //   ALTER TABLE matches ADD COLUMN experiment_id VARCHAR(100);
+  //   CREATE INDEX idx_matches_experiment_id ON matches (experiment_id) WHERE experiment_id IS NOT NULL;
+  experimentId: varchar("experiment_id", { length: 100 }),
+  teamSize: integer("team_size").notNull().default(2),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
@@ -240,6 +262,40 @@ export const insertMatchRoundSchema = createInsertSchema(matchRounds).omit({ id:
 export type InsertMatchRound = z.infer<typeof insertMatchRoundSchema>;
 export type MatchRound = typeof matchRounds.$inferSelect;
 
+// Team chatter table for 3v3 deliberation transcripts
+export const teamChatter = pgTable("team_chatter", {
+  id: serial("id").primaryKey(),
+  matchId: integer("match_id").notNull(),
+  gameId: varchar("game_id", { length: 10 }).notNull(),
+  roundNumber: integer("round_number").notNull(),
+  team: varchar("team", { length: 10 }).notNull(),
+  phase: varchar("phase", { length: 40 }).notNull(), // "own_guess_deliberation" | "opponent_intercept_deliberation"
+  messages: jsonb("messages").notNull(), // ChatterMessage[]
+  totalExchanges: integer("total_exchanges").notNull().default(0),
+  consensusReached: boolean("consensus_reached").notNull().default(false),
+  finalAnswer: jsonb("final_answer"), // [number, number, number] | null
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertTeamChatterSchema = createInsertSchema(teamChatter).omit({ id: true, createdAt: true });
+export type InsertTeamChatter = z.infer<typeof insertTeamChatterSchema>;
+export type TeamChatter = typeof teamChatter.$inferSelect;
+
+export interface ChatterMessage {
+  playerId: string;
+  playerName: string;
+  content: string;
+  timestamp: string;          // ISO 8601
+  exchangeNumber: number;     // 0-indexed exchange this message belongs to
+  model: string;
+  latencyMs: number;
+  promptTokens?: number;
+  completionTokens?: number;
+  reasoningTokens?: number;
+  estimatedCostUsd?: string;
+  readySignal?: [number, number, number] | null;  // Extracted READY signal, if present
+}
+
 export type ParseQuality = "clean" | "partial_recovery" | "fallback_used" | "error";
 
 export const aiCallLogs = pgTable("ai_call_logs", {
@@ -257,6 +313,7 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   timedOut: boolean("timed_out").notNull().default(false),
   error: text("error"),
   parseQuality: varchar("parse_quality", { length: 20 }),
+  usedFallback: boolean("used_fallback").notNull().default(false),
   promptTokens: integer("prompt_tokens"),
   completionTokens: integer("completion_tokens"),
   totalTokens: integer("total_tokens"),
@@ -337,6 +394,8 @@ export interface HeadlessMatchConfig {
   fastMode?: boolean;
   seed?: string;
   ablations?: HeadlessMatchAblations;
+  experimentId?: string;
+  teamSize?: 2 | 3;
 }
 
 export interface TournamentConfig {
@@ -349,7 +408,16 @@ export interface TournamentConfig {
   ablations?: HeadlessMatchAblations;
 }
 
-export type AblationFlag = "no_history" | "no_scratch_notes" | "no_opponent_history" | "no_chain_of_thought" | "random_clues";
+export type AblationFlag =
+  | "no_history"
+  | "no_scratch_notes"
+  | "no_opponent_history"
+  | "no_chain_of_thought"
+  | "random_clues"
+  // Enriched strategy module ablations:
+  | "no_persona"            // Disable persona injection in enriched strategy
+  | "no_semantic_context"   // Disable word card vibe/tags in enriched strategy keyword listing
+  ;
 
 export interface HeadlessMatchAblations {
   flags: AblationFlag[];
@@ -503,6 +571,41 @@ export interface EvolutionConfig {
   matchesPerEvaluation: number;
   budgetCapUsd?: string;
 }
+
+// Experiment config schema for reproducible experiments (Week 3)
+
+export const experimentConfigSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().optional(),
+  hypothesis: z.string().optional(),
+
+  // Independent variable: strategy comparison
+  strategies: z.array(z.enum(["default", "advanced", "k-level", "enriched"])).min(1),
+
+  // Models to test across
+  models: z.array(z.object({
+    provider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
+    model: z.string(),
+  })).min(1),
+
+  // Experiment parameters
+  gamesPerCell: z.number().int().min(1).max(100).default(10),
+  seed: z.string().optional(),  // Base seed; per-match seeds derived as `${seed}-cell${cellIndex}-game${gameIndex}`
+
+  // Optional ablations applied to all matches
+  ablations: z.object({
+    flags: z.array(z.enum([
+      "no_history", "no_scratch_notes", "no_opponent_history",
+      "no_chain_of_thought", "random_clues",
+      "no_persona", "no_semantic_context",
+    ])),
+  }).optional(),
+
+  // Budget
+  budgetCapUsd: z.string().optional(),
+});
+
+export type ExperimentConfig = z.infer<typeof experimentConfigSchema>;
 
 // Legacy exports for compatibility
 export { users, insertUserSchema } from "./models/user";

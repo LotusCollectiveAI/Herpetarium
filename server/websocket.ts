@@ -26,12 +26,12 @@ interface ClientConnection {
   gameId: string;
 }
 
-const DEFAULT_AI_TIMEOUT_MS = 120000;
-const MAX_AI_TIMEOUT_MS = 300000;
+const DEFAULT_AI_TIMEOUT_MS = 900000; // 15 min default for interactive games
+// No artificial ceiling — researchers control their own timeouts via config
 
 function getPlayerTimeout(player: Player): number {
   if (player.aiConfig?.timeoutMs) {
-    return Math.min(player.aiConfig.timeoutMs, MAX_AI_TIMEOUT_MS);
+    return player.aiConfig.timeoutMs; // Respect the configured value, no cap
   }
   return DEFAULT_AI_TIMEOUT_MS;
 }

@@ -5,6 +5,8 @@ export interface PromptStrategy {
   clueTemplate: (params: ClueTemplateParams) => string;
   guessTemplate: (params: GuessTemplateParams) => string;
   interceptionTemplate: (params: InterceptionTemplateParams) => string;
+  deliberationOwnTemplate?: (params: DeliberationOwnTemplateParams) => string;
+  deliberationInterceptTemplate?: (params: DeliberationInterceptTemplateParams) => string;
 }
 
 import type { AblationFlag } from "@shared/schema";
@@ -33,6 +35,42 @@ export interface InterceptionTemplateParams {
   scratchNotes?: string;
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
+}
+
+export interface DeliberationOwnTemplateParams {
+  team: "amber" | "blue";
+  keywords: string[];
+  clues: string[];
+  history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  clueGiverName: string;
+  currentPlayerName: string;
+  otherPlayerName: string;
+  conversationSoFar: Array<{ playerName: string; content: string }>;
+  exchangeNumber: number;
+  roundNumber: number;
+  score: { amber: { miscommunication: number; interception: number }; blue: { miscommunication: number; interception: number } };
+  scratchNotes?: string;
+  ablations?: AblationFlag[];
+  systemPromptOverride?: string;
+  isPlayerB?: boolean;
+}
+
+export interface DeliberationInterceptTemplateParams {
+  team: "amber" | "blue";
+  opponentTeam: "amber" | "blue";
+  clues: string[];
+  opponentHistory: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  opponentDeliberationTranscript: Array<{ playerName: string; content: string }>;
+  currentPlayerName: string;
+  otherPlayerName: string;
+  conversationSoFar: Array<{ playerName: string; content: string }>;
+  exchangeNumber: number;
+  roundNumber: number;
+  score: { amber: { miscommunication: number; interception: number }; blue: { miscommunication: number; interception: number } };
+  scratchNotes?: string;
+  ablations?: AblationFlag[];
+  systemPromptOverride?: string;
+  isPlayerB?: boolean;
 }
 
 interface AblationTarget {
@@ -71,9 +109,231 @@ function formatHistory(history: Array<{ clues: string[]; targetCode: [number, nu
   ).join("\n");
 }
 
-function formatScratchNotes(notes?: string): string {
+export function formatScratchNotes(notes?: string): string {
   if (!notes) return "";
-  return `\n\n--- STRATEGIC NOTES FROM PREVIOUS GAMES ---\nThe following are your accumulated strategic observations from prior games in this series. Use these insights to inform your decisions:\n\n${notes}\n--- END STRATEGIC NOTES ---`;
+  return `\n\n--- STRATEGIC NOTES FROM PREVIOUS GAMES ---\nThe following are your accumulated strategic observations from prior games in this series. Reference and build upon your previous notes when making decisions. Explicitly consider what worked and what failed in prior games before choosing your approach:\n\n${notes}\n--- END STRATEGIC NOTES ---`;
+}
+
+// --- Deliberation prompt builders for 3v3 team chatter ---
+
+export function defaultDeliberationOwnFirstTurn(params: DeliberationOwnTemplateParams & { isPlayerB?: boolean }): string {
+  const { team, keywords, clues, history, clueGiverName, currentPlayerName, otherPlayerName, roundNumber, score, isPlayerB } = params;
+  const opponentTeam = team === "amber" ? "blue" : "amber";
+  const ownScore = score[team];
+  const oppScore = score[opponentTeam];
+
+  let prompt = `STRATEGIC CODE DECRYPTION -- ROUND ${roundNumber}
+
+You are ${currentPlayerName}, playing Decrypto on team ${team} in a 3-player team.
+
+GAME STATE:
+  Score: Team ${team} has ${ownScore.miscommunication} miscommunication tokens and ${ownScore.interception} interception tokens.
+         Team ${opponentTeam} has ${oppScore.miscommunication} miscommunication tokens and ${oppScore.interception} interception tokens.
+  Round: ${roundNumber}
+  Stakes: If you guess your own code WRONG, your team takes a miscommunication token (2 = elimination).
+          If the opponents guess your code RIGHT, they earn an interception token (2 = they win).
+
+YOUR TEAM'S SECRET KEYWORDS:
+  1. ${keywords[0]}
+  2. ${keywords[1]}
+  3. ${keywords[2]}
+  4. ${keywords[3]}
+
+THIS ROUND'S CLUES (from your clue-giver, ${clueGiverName}):
+  Clue 1: ${clues[0]}
+  Clue 2: ${clues[1]}
+  Clue 3: ${clues[2]}`;
+
+  if (history.length > 0) {
+    prompt += `\n\nCLUE HISTORY (your team's previous rounds, visible to opponents):\n${formatHistory(history)}`;
+  }
+
+  prompt += `\n\nYOUR TASK: Work with your teammate ${otherPlayerName} to determine which keyword (1-4) each clue refers to -- i.e., decode the 3-number code your clue-giver is communicating.`;
+
+  if (isPlayerB) {
+    prompt += `\n\nANALYTICAL APPROACH: Start by analyzing your clue-giver's history and patterns. How has ${clueGiverName} clued each keyword position before? Look for consistency or deliberate variation in their cluing style. If they used a synonym for keyword 2 last round, did they shift to a lateral association this round? Use the clue history to build a model of how ${clueGiverName} thinks, then apply that model to this round's clues.`;
+    prompt += `\n\nTHEORY OF MIND: Your teammate ${otherPlayerName} has already shared their initial analysis. They may have spotted connections you missed -- or they may have been drawn to surface-level associations that mask the real mapping. Consider where their reasoning is strong and where it might have gaps.`;
+  } else {
+    prompt += `\n\nANALYTICAL APPROACH: Start by analyzing the semantic relationships between each clue and the keywords. For each clue, consider multiple possible keyword mappings before committing to one. What are the strongest associations? Where is there genuine ambiguity? Which mappings can you rule out, and why?`;
+    prompt += `\n\nTHEORY OF MIND: What was your clue-giver ${clueGiverName} thinking? Consider their cluing style from previous rounds. Did they tend toward direct synonyms, lateral associations, or category-level connections? How might they have chosen these particular clues to communicate the code while avoiding patterns the opponents have already seen?`;
+  }
+
+  prompt += `\n\nCRITICAL -- INFORMATION SECURITY: The opposing team is listening to everything you say. Every word you speak gives them information. When discussing potential keyword-clue mappings, consider whether your reasoning reveals too much about your keywords. You may want to reason abstractly, use indirect references, or even deliberately misdirect. The tension between communicating clearly with ${otherPlayerName} and protecting your keywords from eavesdroppers is the central strategic challenge.`;
+
+  prompt += `\n\nWhen you are confident in your answer, include READY: followed by your guess as three numbers (e.g., READY: 3,1,4). Both you and ${otherPlayerName} must agree and signal READY for the discussion to end.`;
+
+  return prompt;
+}
+
+export function defaultDeliberationOwnFollowUp(params: DeliberationOwnTemplateParams & { exchangeNumber: number }): string {
+  const { team, keywords, clues, history, clueGiverName, currentPlayerName, otherPlayerName, conversationSoFar, exchangeNumber, roundNumber, score } = params;
+  const opponentTeam = team === "amber" ? "blue" : "amber";
+  const ownScore = score[team];
+  const oppScore = score[opponentTeam];
+
+  let prompt = `STRATEGIC CODE DECRYPTION -- ROUND ${roundNumber}, EXCHANGE ${exchangeNumber}
+
+You are ${currentPlayerName}, playing Decrypto on team ${team}.
+
+GAME STATE:
+  Score: Team ${team} has ${ownScore.miscommunication} miscommunication tokens and ${ownScore.interception} interception tokens.
+         Team ${opponentTeam} has ${oppScore.miscommunication} miscommunication tokens and ${oppScore.interception} interception tokens.
+  Round: ${roundNumber}
+
+YOUR TEAM'S SECRET KEYWORDS:
+  1. ${keywords[0]}
+  2. ${keywords[1]}
+  3. ${keywords[2]}
+  4. ${keywords[3]}
+
+THIS ROUND'S CLUES (from ${clueGiverName}):
+  Clue 1: ${clues[0]}
+  Clue 2: ${clues[1]}
+  Clue 3: ${clues[2]}`;
+
+  if (history.length > 0) {
+    prompt += `\n\nCLUE HISTORY (your team):\n${formatHistory(history)}`;
+  }
+
+  prompt += `\n\nDISCUSSION SO FAR:`;
+  for (const msg of conversationSoFar) {
+    prompt += `\n  ${msg.playerName}: ${msg.content}`;
+  }
+
+  // Summary of last message from other player
+  const lastOtherMsg = [...conversationSoFar].reverse().find(m => m.playerName === otherPlayerName);
+  if (lastOtherMsg) {
+    const summary = lastOtherMsg.content.slice(0, 200);
+    prompt += `\n\nYour teammate ${otherPlayerName} just argued: "${summary}"`;
+  }
+
+  prompt += `\n\nNow that you've heard ${otherPlayerName}'s perspective, do you see the mapping differently? What evidence supports or contradicts their interpretation? Consider:
+- Are there keyword-clue connections they identified that you overlooked?
+- Are there alternative mappings they haven't considered?
+- Does the clue history support their reading or yours?
+
+Remember: the opponents are listening. Be thoughtful about what you reveal.`;
+
+  if (exchangeNumber >= 3) {
+    prompt += `\n\nYou've been deliberating for several exchanges. If you're converging on an answer, signal READY: X,Y,Z. If genuine disagreement remains, explain what specific evidence would change your mind.`;
+  } else {
+    prompt += `\n\nWhen you are confident in your answer, include READY: followed by your guess as three numbers (e.g., READY: 3,1,4). Both you and ${otherPlayerName} must agree and signal READY for the discussion to end.`;
+  }
+
+  return prompt;
+}
+
+export function defaultDeliberationInterceptFirstTurn(params: DeliberationInterceptTemplateParams & { isPlayerB?: boolean }): string {
+  const { team, opponentTeam, clues, opponentHistory, opponentDeliberationTranscript, currentPlayerName, otherPlayerName, roundNumber, score, isPlayerB } = params;
+  const ownScore = score[team];
+  const oppScore = score[opponentTeam];
+
+  let prompt = `STRATEGIC INTERCEPTION -- ROUND ${roundNumber}
+
+You are ${currentPlayerName}, playing Decrypto on team ${team}.
+
+GAME STATE:
+  Score: Team ${team} has ${ownScore.miscommunication} miscommunication tokens and ${ownScore.interception} interception tokens.
+         Team ${opponentTeam} has ${oppScore.miscommunication} miscommunication tokens and ${oppScore.interception} interception tokens.
+  Round: ${roundNumber}
+  Stakes: If you correctly intercept the opponent's code, your team earns an interception token (2 = you win).
+          A wrong interception has no penalty -- this is a free shot. Be aggressive.
+
+THE OPPOSING TEAM (${opponentTeam}) GAVE THESE CLUES THIS ROUND:
+  Clue 1: ${clues[0]}
+  Clue 2: ${clues[1]}
+  Clue 3: ${clues[2]}
+
+You do NOT know their keywords, but you can deduce patterns from their clue history.`;
+
+  if (opponentHistory.length > 0) {
+    prompt += `\n\nOPPONENT CLUE HISTORY (all rounds, all visible):\n${formatHistory(opponentHistory)}`;
+  }
+
+  if (opponentDeliberationTranscript && opponentDeliberationTranscript.length > 0) {
+    prompt += `\n\n---BEGIN INTERCEPTED OPPONENT TEAM DISCUSSION---`;
+    for (const msg of opponentDeliberationTranscript) {
+      prompt += `\n${msg.playerName}: ${msg.content}`;
+    }
+    prompt += `\n---END INTERCEPTED OPPONENT TEAM DISCUSSION---`;
+
+    prompt += `\n\nINTELLIGENCE ANALYSIS DIRECTIVE: Above is the opposing team's full discussion about their own clues this round. You are intelligence analysts intercepting enemy communications. Analyze their reasoning carefully:
+- What keyword-clue mappings did they consider? Which did they commit to?
+- Did they reveal anything about their keywords -- directly or indirectly?
+- Did they attempt to misdirect, or were they being genuine? How can you tell?
+- Where were they most confident vs. most uncertain?
+- Every slip, every moment of confidence, every topic they avoided is a signal.`;
+  }
+
+  if (isPlayerB) {
+    prompt += `\n\nYOUR ANALYTICAL FOCUS: Focus on what the opponents DIDN'T say -- what topics did they avoid? What connections did they seem to dance around? If they discussed clue 1 and clue 3 in depth but barely mentioned clue 2, why? Silence and hesitation are often more revealing than explicit statements. Also watch for moments where they seemed to self-censor or redirect -- that's where the information security tension is highest, and where truth leaks through.`;
+  } else {
+    prompt += `\n\nYOUR ANALYTICAL FOCUS: Focus on what the opponents SAID -- their explicit reasoning, keyword mentions, and confidence levels. Map their stated associations back to the clue history to build hypotheses about their keywords.`;
+  }
+
+  prompt += `\n\nYou and your teammate ${otherPlayerName} are trying to crack the opposing team's code. Discuss what you think each clue maps to.`;
+
+  prompt += `\n\nIMPORTANT: The opposing team can hear your discussion too. Be strategic about what reasoning you reveal -- they may adjust their cluing in future rounds based on what they learn about your interception strategies.`;
+
+  prompt += `\n\nWhen you are confident, include READY: followed by your interception guess as three numbers (e.g., READY: 2,4,1). Both you and ${otherPlayerName} must agree for the discussion to end.`;
+
+  return prompt;
+}
+
+export function defaultDeliberationInterceptFollowUp(params: DeliberationInterceptTemplateParams & { exchangeNumber: number }): string {
+  const { team, opponentTeam, clues, opponentHistory, opponentDeliberationTranscript, currentPlayerName, otherPlayerName, conversationSoFar, exchangeNumber, roundNumber, score } = params;
+  const ownScore = score[team];
+  const oppScore = score[opponentTeam];
+
+  let prompt = `STRATEGIC INTERCEPTION -- ROUND ${roundNumber}, EXCHANGE ${exchangeNumber}
+
+You are ${currentPlayerName}, playing Decrypto on team ${team}.
+
+GAME STATE:
+  Score: Team ${team} has ${ownScore.miscommunication} miscommunication tokens and ${ownScore.interception} interception tokens.
+         Team ${opponentTeam} has ${oppScore.miscommunication} miscommunication tokens and ${oppScore.interception} interception tokens.
+  Round: ${roundNumber}
+
+THE OPPOSING TEAM (${opponentTeam}) GAVE THESE CLUES THIS ROUND:
+  Clue 1: ${clues[0]}
+  Clue 2: ${clues[1]}
+  Clue 3: ${clues[2]}`;
+
+  if (opponentHistory.length > 0) {
+    prompt += `\n\nOPPONENT CLUE HISTORY:\n${formatHistory(opponentHistory)}`;
+  }
+
+  if (opponentDeliberationTranscript && opponentDeliberationTranscript.length > 0) {
+    prompt += `\n\n---BEGIN INTERCEPTED OPPONENT TEAM DISCUSSION---`;
+    for (const msg of opponentDeliberationTranscript) {
+      prompt += `\n${msg.playerName}: ${msg.content}`;
+    }
+    prompt += `\n---END INTERCEPTED OPPONENT TEAM DISCUSSION---`;
+  }
+
+  prompt += `\n\nDISCUSSION SO FAR:`;
+  for (const msg of conversationSoFar) {
+    prompt += `\n  ${msg.playerName}: ${msg.content}`;
+  }
+
+  // Summary of last message from other player
+  const lastOtherMsg = [...conversationSoFar].reverse().find(m => m.playerName === otherPlayerName);
+  if (lastOtherMsg) {
+    const summary = lastOtherMsg.content.slice(0, 200);
+    prompt += `\n\nYour teammate ${otherPlayerName} just argued: "${summary}"`;
+  }
+
+  prompt += `\n\nConsider their reasoning -- did they spot a signal in the opponent's discussion that you missed? Revisit the intercepted transcript. What patterns emerge when you combine your analysis with theirs?
+
+Remember: the opponents are listening to your interception discussion too. Be strategic.`;
+
+  if (exchangeNumber >= 3) {
+    prompt += `\n\nYou've been deliberating for several exchanges. If you're converging on an answer, signal READY: X,Y,Z. If genuine disagreement remains, explain what specific evidence would change your mind.`;
+  } else {
+    prompt += `\n\nWhen you are confident, include READY: followed by your interception guess as three numbers (e.g., READY: 2,4,1). Both you and ${otherPlayerName} must agree for the discussion to end.`;
+  }
+
+  return prompt;
 }
 
 const defaultStrategy: PromptStrategy = {
@@ -90,7 +350,7 @@ const defaultStrategy: PromptStrategy = {
 
 Your secret code this round: ${targetCode.join(", ")}
 
-Give 3 clues (one per code number) that help your teammates identify the correct keywords. Each clue must be a SINGLE WORD — no phrases, numbers, or symbols. Clues cannot be any keyword or share the same root.
+Give 3 clues (one per code number) that help your teammates identify the correct keywords. Each clue must be a complete, real English word. No abbreviations, acronyms, fragments, or prefixes. No phrases, numbers, or symbols. Clues cannot be any keyword or share the same root.
 
 Strategic considerations:
 - Opponents see your clues and codes each round. Vary your associations to avoid revealing keyword identities.
@@ -103,7 +363,7 @@ Strategic considerations:
     }
 
     prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nRespond with exactly 3 words separated by commas, nothing else. Example: ocean,bright,ancient`;
+    prompt += `\n\nANSWER: Respond with exactly 3 words separated by commas on a line starting with "ANSWER:". Example:\nANSWER: ocean,bright,ancient`;
     return prompt;
   },
   guessTemplate: (params) => {
@@ -124,7 +384,7 @@ Each clue maps to one keyword (in order of the secret code). Determine which key
     }
 
     prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nRespond with exactly 3 numbers (1-4) separated by commas. Example: 3,1,4`;
+    prompt += `\n\nANSWER: Respond with exactly 3 numbers (1-4) separated by commas on a line starting with "ANSWER:". Example:\nANSWER: 3,1,4`;
     return prompt;
   },
   interceptionTemplate: (params) => {
@@ -143,7 +403,7 @@ You don't know their keywords, but you can deduce patterns from their clue histo
     }
 
     prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nRespond with exactly 3 numbers (1-4) separated by commas. Example: 2,4,1`;
+    prompt += `\n\nANSWER: Respond with exactly 3 numbers (1-4) separated by commas on a line starting with "ANSWER:". Example:\nANSWER: 2,4,1`;
     return prompt;
   },
 };
@@ -186,9 +446,9 @@ Step 1 — Opponent Model: What do opponents know so far? Which keywords might t
     prompt += `\nStep 4 — Teammate Communication: Ensure your teammate can still decode. Think about what your teammate knows about your cluing style.
 Step 5 — Final Selection: Choose 3 single-word clues that balance teammate clarity with opponent deception.
 
-RULES: Each clue must be a SINGLE WORD. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.`;
+RULES: Each clue must be a complete, real English word. No abbreviations, acronyms, fragments, or prefixes. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.`;
     prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nRespond with ONLY 3 words separated by commas, nothing else. Example: ocean,bright,ancient`;
+    prompt += `\n\nPut your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 words separated by commas. Example:\nANSWER: ocean,bright,ancient`;
     return prompt;
   },
   guessTemplate: (params) => {
@@ -217,7 +477,7 @@ Step 2 — Elimination: If multiple clues point to the same keyword, re-evaluate
     prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\nStep 5 — Final Answer: Commit to the mapping with highest confidence.
 
-Respond with exactly 3 numbers (1-4) separated by commas. Example: 3,1,4`;
+Put your final answer on its own line starting with "ANSWER:". Example:\nANSWER: 3,1,4`;
     return prompt;
   },
   interceptionTemplate: (params) => {
@@ -244,14 +504,19 @@ Step 5 — Confidence Assessment: Rate your confidence for each position. Where 
     prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\nStep 6 — Final Interception: Commit to your best guess of their code.
 
-Respond with exactly 3 numbers (1-4) separated by commas. Example: 2,4,1`;
+Put your final answer on its own line starting with "ANSWER:". Example:\nANSWER: 2,4,1`;
     return prompt;
   },
 };
 
+import { kLevelStrategy } from "./kLevelStrategy";
+import { enrichedStrategy } from "./enrichedStrategy";
+
 const strategies: Map<string, PromptStrategy> = new Map([
   ["default", defaultStrategy],
   ["advanced", advancedStrategy],
+  ["k-level", kLevelStrategy],
+  ["enriched", enrichedStrategy],
 ]);
 
 export function getPromptStrategy(name: string): PromptStrategy {

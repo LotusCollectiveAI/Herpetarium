@@ -10,10 +10,11 @@ interface AIThinkingIndicatorProps {
   startTime?: number | null;
 }
 
-const providerStyles: Record<string, { color: string; icon: typeof Bot }> = {
+const providerStyles: Record<string, { color: string; icon: React.ComponentType<{ className?: string }> }> = {
   ChatGPT: { color: "text-emerald-500", icon: SiOpenai },
   Claude: { color: "text-orange-500", icon: Bot },
   Gemini: { color: "text-blue-500", icon: Bot },
+  OpenRouter: { color: "text-violet-500", icon: Bot },
 };
 
 function getProviderAction(aiName: string, context?: string): string {
@@ -82,7 +83,7 @@ export function AIThinkingIndicator({ aiName, context = "generic", size = "lg", 
     <div className="flex flex-col items-center gap-3" data-testid="ai-thinking-indicator">
       <div className={cn(
         "w-12 h-12 rounded-full flex items-center justify-center",
-        baseProviderName === "ChatGPT" ? "bg-emerald-500/10" : baseProviderName === "Claude" ? "bg-orange-500/10" : "bg-blue-500/10"
+        baseProviderName === "ChatGPT" ? "bg-emerald-500/10" : baseProviderName === "Claude" ? "bg-orange-500/10" : baseProviderName === "OpenRouter" ? "bg-violet-500/10" : "bg-blue-500/10"
       )}>
         <IconComponent className={cn("h-6 w-6", style.color)} />
       </div>

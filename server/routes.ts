@@ -1,32 +1,39 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig } from "@shared/schema";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema } from "@shared/schema";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
-import { createTournament, runTournament, isTournamentRunning } from "./tournament";
+import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, interleaveByProvider } from "./tournament";
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun } from "./evolution";
 import { z } from "zod";
+import { experimentConfigSchema } from "@shared/schema";
+import { runExperiment } from "./experimentRunner";
+import { registerExportRoutes } from "./exportRouter";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
 import { MODEL_COST_PER_1K, getProviderThrottleState } from "./ai";
-import { getDefaultConfig } from "@shared/schema";
+import { getDefaultConfig, type AIProvider } from "@shared/schema";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
+import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
 
-function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: any }>, totalGames: number, includeReflection = false): number {
+function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: any }>, totalGames: number, includeReflection = false, teamSize: number = 2): number {
   const AVG_ROUNDS_PER_GAME = 6;
   const CALL_TYPE_TOKENS: Record<string, { input: number; output: number; callsPerRound: number }> = {
     clue:        { input: 900, output: 150, callsPerRound: 1 },
-    guess:       { input: 650, output: 80,  callsPerRound: 1 },
-    intercept:   { input: 750, output: 80,  callsPerRound: 0.5 },
+    guess:       { input: 650, output: 80,  callsPerRound: teamSize === 3 ? 0 : 1 },
+    intercept:   { input: 750, output: 80,  callsPerRound: teamSize === 3 ? 0 : 0.5 },
     reflection:  { input: 1200, output: 300, callsPerRound: 0 },
+    // 3v3 deliberation: avg ~4 exchanges * 2 players per phase
+    deliberation_own:       { input: 2000, output: 500, callsPerRound: teamSize === 3 ? 8 : 0 },
+    deliberation_intercept: { input: 3000, output: 500, callsPerRound: teamSize === 3 ? 8 : 0 },
   };
   let total = 0;
   const uniqueModels = new Map<string, { provider: string; count: number }>();
   for (const p of players) {
     if (!p.aiProvider) continue;
-    const config = p.aiConfig || getDefaultConfig(p.aiProvider);
-    const model = config.model || getDefaultConfig(p.aiProvider).model;
+    const config = p.aiConfig || getDefaultConfig(p.aiProvider as AIProvider);
+    const model = config.model || getDefaultConfig(p.aiProvider as AIProvider).model;
     const key = `${p.aiProvider}:${model}`;
     const existing = uniqueModels.get(key);
     if (existing) existing.count++; else uniqueModels.set(key, { provider: p.aiProvider, count: 1 });
@@ -48,21 +55,23 @@ function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: a
 const headlessMatchConfigSchema = z.object({
   players: z.array(z.object({
     name: z.string(),
-    aiProvider: z.enum(["chatgpt", "claude", "gemini"]),
+    aiProvider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
     team: z.enum(["amber", "blue"]),
-  })).min(2).max(4),
+    aiConfig: aiPlayerConfigSchema.optional(),
+  })).min(2).max(6),
   fastMode: z.boolean().optional(),
   seed: z.union([z.string(), z.number().int().transform(String)]).optional(),
+  teamSize: z.number().int().min(2).max(3).optional(),
 });
 
-const ablationFlagSchema = z.enum(["no_history", "no_scratch_notes", "no_opponent_history", "no_chain_of_thought", "random_clues"]);
+const ablationFlagSchema = z.enum(["no_history", "no_scratch_notes", "no_opponent_history", "no_chain_of_thought", "random_clues", "no_persona", "no_semantic_context"]);
 
 const tournamentConfigSchema = z.object({
   name: z.string().min(1).max(200),
   matchConfigs: z.array(headlessMatchConfigSchema).min(1),
   gamesPerMatchup: z.number().int().min(1).max(100).optional(),
   budgetCapUsd: z.string().optional(),
-  concurrency: z.number().int().min(1).max(5).optional(),
+  concurrency: z.number().int().min(1).max(20).optional(),
   delayBetweenMatchesMs: z.number().int().min(0).max(60000).optional(),
   ablations: z.object({ flags: z.array(ablationFlagSchema).min(1) }).optional(),
 });
@@ -95,8 +104,9 @@ export async function registerRoutes(
       const winner = req.query.winner as string | undefined;
       const dateFrom = req.query.dateFrom as string | undefined;
       const dateTo = req.query.dateTo as string | undefined;
+      const experimentId = req.query.experimentId as string | undefined;
 
-      const result = await storage.getMatches({ page, limit, model, winner, dateFrom, dateTo });
+      const result = await storage.getMatches({ page, limit, model, winner, dateFrom, dateTo, experimentId });
       const matchIds = result.matches.map(m => m.id);
       const traceMatchIds = await storage.getMatchIdsWithTraces(matchIds);
       res.json({
@@ -144,8 +154,8 @@ export async function registerRoutes(
 
       const amberCount = config.players.filter(p => p.team === "amber").length;
       const blueCount = config.players.filter(p => p.team === "blue").length;
-      if (amberCount < 1 || blueCount < 1) {
-        return res.status(400).json({ error: "Each team must have at least 1 player" });
+      if (amberCount < 2 || blueCount < 2) {
+        return res.status(400).json({ error: "Each team must have at least 2 players" });
       }
 
       res.json({ status: "started", message: "Match is running. Check /api/matches for results." });
@@ -169,8 +179,8 @@ export async function registerRoutes(
 
       const amberCount = config.players.filter(p => p.team === "amber").length;
       const blueCount = config.players.filter(p => p.team === "blue").length;
-      if (amberCount < 1 || blueCount < 1) {
-        return res.status(400).json({ error: "Each team must have at least 1 player" });
+      if (amberCount < 2 || blueCount < 2) {
+        return res.status(400).json({ error: "Each team must have at least 2 players" });
       }
 
       const result = await runHeadlessMatch(config);
@@ -192,8 +202,8 @@ export async function registerRoutes(
       for (const mc of config.matchConfigs) {
         const amberCount = mc.players.filter(p => p.team === "amber").length;
         const blueCount = mc.players.filter(p => p.team === "blue").length;
-        if (amberCount < 1 || blueCount < 1) {
-          return res.status(400).json({ error: "Each team in every matchup must have at least 1 player" });
+        if (amberCount < 2 || blueCount < 2) {
+          return res.status(400).json({ error: "Each team in every matchup must have at least 2 players" });
         }
       }
 
@@ -212,6 +222,80 @@ export async function registerRoutes(
       res.json({ id: tournament.id, status: "started" });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to create tournament" });
+    }
+  });
+
+  // ── Round-robin tournament endpoint ─────────────────────────────────
+  const roundRobinSchema = z.object({
+    name: z.string().min(1).max(200),
+    models: z.array(z.object({
+      name: z.string(),
+      provider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
+      model: z.string(),
+      reasoningEffort: z.enum(["low", "medium", "high", "xhigh"]).optional(),
+    })).min(2),
+    gamesPerMatchup: z.number().int().min(1).max(100).default(4),
+    concurrency: z.number().int().min(1).max(20).default(10),
+    delayBetweenMatchesMs: z.number().int().min(0).max(60000).default(12000),
+    budgetCapUsd: z.string().default("250.00"),
+    teamSize: z.number().int().min(2).max(3).default(3),
+  });
+
+  app.post("/api/tournaments/round-robin", async (req, res) => {
+    try {
+      const parsed = roundRobinSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid round-robin configuration", details: parsed.error.issues });
+      }
+
+      const { name, models, gamesPerMatchup, concurrency, delayBetweenMatchesMs, budgetCapUsd, teamSize } = parsed.data;
+
+      // Build model specs — all models get advanced strategy, per-model reasoning effort
+      const modelSpecs = models.map(m => ({
+        name: m.name,
+        provider: m.provider as AIProvider,
+        model: m.model,
+        config: {
+          timeoutMs: 14400000 as const,
+          promptStrategy: "advanced" as const,
+          reasoningEffort: (m.reasoningEffort || "xhigh") as "low" | "medium" | "high" | "xhigh",
+        },
+      }));
+
+      const rawConfigs = generateRoundRobinConfigs(modelSpecs, teamSize as 2 | 3);
+      const matchConfigs = interleaveByProvider(rawConfigs);
+
+      const tournamentConfig: TournamentConfig = {
+        name,
+        matchConfigs,
+        gamesPerMatchup,
+        concurrency,
+        delayBetweenMatchesMs,
+        budgetCapUsd,
+      };
+
+      // Estimate cost
+      let estimatedCost = 0;
+      for (const mc of matchConfigs) {
+        estimatedCost += computeEstimatedCost(mc.players, gamesPerMatchup, false, teamSize);
+      }
+
+      const tournament = await createTournament(tournamentConfig, estimatedCost > 0 ? estimatedCost.toFixed(4) : null);
+
+      runTournament(tournament.id).catch(err => {
+        console.error("Round-robin tournament execution failed:", err);
+      });
+
+      const totalMatchups = (models.length * (models.length - 1)) / 2;
+      res.json({
+        id: tournament.id,
+        status: "started",
+        totalMatchups,
+        totalMatches: totalMatchups * gamesPerMatchup,
+        estimatedCostUsd: estimatedCost.toFixed(4),
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to create round-robin tournament" });
     }
   });
 
@@ -250,7 +334,26 @@ export async function registerRoutes(
 
       const stats = computeTournamentStats(matchDetails);
 
-      res.json({ tournament, matches: tournamentMatchesData, matchDetails, stats });
+      // Compute Bradley-Terry ratings from tournament match results
+      const btResults: Array<{ winner: string; loser: string }> = [];
+      for (const match of matchDetails) {
+        if (!match.winner) continue;
+        const configs = match.playerConfigs as PlayerConfig[];
+        const winnerTeam = match.winner;
+        const loserTeam = winnerTeam === "amber" ? "blue" : "amber";
+        const winnerPlayer = configs.find((c) => c.team === winnerTeam && c.isAI);
+        const loserPlayer = configs.find((c) => c.team === loserTeam && c.isAI);
+        const winnerModel = winnerPlayer ? getModelLabel(winnerPlayer) : "unknown";
+        const loserModel = loserPlayer ? getModelLabel(loserPlayer) : "unknown";
+        if (winnerModel !== "unknown" && loserModel !== "unknown" && winnerModel !== loserModel) {
+          btResults.push({ winner: winnerModel, loser: loserModel });
+        }
+      }
+
+      const btRatingsResult = bradleyTerryRatings(btResults);
+      const btRatings = Object.fromEntries(btRatingsResult.ratings);
+
+      res.json({ tournament, matches: tournamentMatchesData, matchDetails, stats, btRatings });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch tournament" });
     }
@@ -284,8 +387,9 @@ export async function registerRoutes(
       const strategy = req.query.strategy as string | undefined;
       const dateFrom = req.query.dateFrom as string | undefined;
       const dateTo = req.query.dateTo as string | undefined;
+      const experimentId = req.query.experimentId as string | undefined;
 
-      const allMatches = await storage.getAllMatches({ model, strategy, dateFrom, dateTo });
+      const allMatches = await storage.getAllMatches({ model, strategy, dateFrom, dateTo, experimentId });
       const matchIds = allMatches.map(m => m.id);
       const allRounds = await storage.getMatchRoundsForMatches(matchIds);
 
@@ -307,6 +411,25 @@ export async function registerRoutes(
       const allAiLogs = await storage.getAllAiCallLogs(matchIds);
       const parseQualityMetrics = computeParseQualityMetrics(allAiLogs);
 
+      // Compute Bradley-Terry global strength ratings from all matches
+      const btResults: Array<{ winner: string; loser: string }> = [];
+      for (const match of allMatches) {
+        if (!match.winner) continue;
+        const configs = match.playerConfigs as PlayerConfig[];
+        const winnerTeam = match.winner;
+        const loserTeam = winnerTeam === "amber" ? "blue" : "amber";
+        const winnerPlayer = configs.find((c) => c.team === winnerTeam && c.isAI);
+        const loserPlayer = configs.find((c) => c.team === loserTeam && c.isAI);
+        const winnerModel = winnerPlayer ? getModelLabel(winnerPlayer) : "unknown";
+        const loserModel = loserPlayer ? getModelLabel(loserPlayer) : "unknown";
+        if (winnerModel !== "unknown" && loserModel !== "unknown" && winnerModel !== loserModel) {
+          btResults.push({ winner: winnerModel, loser: loserModel });
+        }
+      }
+
+      const btRatingsResult = bradleyTerryRatings(btResults);
+      const btRatings = Object.fromEntries(btRatingsResult.ratings);
+
       res.json({
         modelMetrics,
         matchupMetrics,
@@ -314,6 +437,7 @@ export async function registerRoutes(
         teamCompositionMetrics,
         selfPlayMetrics,
         parseQualityMetrics,
+        btRatings,
         summary: {
           totalMatches,
           totalRounds,
@@ -543,8 +667,8 @@ export async function registerRoutes(
 
       const amberCount = matchConfig.players.filter(p => p.team === "amber").length;
       const blueCount = matchConfig.players.filter(p => p.team === "blue").length;
-      if (amberCount < 1 || blueCount < 1) {
-        return res.status(400).json({ error: "Each team must have at least 1 player" });
+      if (amberCount < 2 || blueCount < 2) {
+        return res.status(400).json({ error: "Each team must have at least 2 players" });
       }
 
       const estimatedCost = computeEstimatedCost(matchConfig.players, config.totalGames, true);
@@ -852,14 +976,14 @@ export async function registerRoutes(
   });
 
   const evolutionConfigSchema = z.object({
-    baseProvider: z.enum(["chatgpt", "claude", "gemini"]),
+    baseProvider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
     baseModel: z.string(),
     populationSize: z.number().min(4).max(20).default(8),
     totalGenerations: z.number().min(1).max(50).default(10),
     mutationRate: z.number().min(0).max(1).default(0.3),
     crossoverRate: z.number().min(0).max(1).default(0.7),
     elitismCount: z.number().min(0).max(10).default(2),
-    matchesPerEvaluation: z.number().min(1).max(5).default(1),
+    matchesPerEvaluation: z.number().min(1).max(10).default(5),
     budgetCapUsd: z.string().optional(),
   });
 
@@ -936,6 +1060,41 @@ export async function registerRoutes(
     }
   });
 
+  // Week 3: Reproducible experiment runner (v2 endpoint)
+  app.post("/api/experiments/v2", async (req, res) => {
+    try {
+      const parsed = experimentConfigSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid experiment config", details: parsed.error.issues });
+      }
+
+      const config = parsed.data;
+      const totalMatches = config.gamesPerCell * config.strategies.length * config.models.length;
+
+      const experiment = await storage.createExperiment({
+        name: config.name,
+        model: config.models.map(m => m.model).join(", "),
+        provider: config.models.map(m => m.provider).join(", "),
+        strategyA: config.strategies[0],
+        strategyB: config.strategies.length > 1 ? config.strategies[1] : config.strategies[0],
+        numGames: totalMatches,
+        status: "pending",
+        matchIdsA: [],
+        matchIdsB: [],
+        results: null,
+      });
+
+      // Run in background -- do not await
+      runExperiment(experiment.id, config).catch(err => {
+        console.error(`[experiment] Experiment ${experiment.id} failed:`, err);
+      });
+
+      res.json({ id: experiment.id, status: "started", totalMatches });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to create experiment" });
+    }
+  });
+
   app.post("/api/evolution/:id/stop", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -948,6 +1107,9 @@ export async function registerRoutes(
     }
   });
 
+  // Week 3: Publication-ready CSV export routes
+  registerExportRoutes(app);
+
   return httpServer;
 }
 
@@ -959,6 +1121,12 @@ interface PlayerConfig {
   team: string;
 }
 
+function getModelLabel(player: PlayerConfig): string {
+  // Extract model label from player name, e.g. "GPT-5.4 (A1)" -> "GPT-5.4"
+  const match = player.name.match(/^(.+?)\s*\([AB]\d\)$/);
+  return match ? match[1].trim() : player.aiProvider || "unknown";
+}
+
 function computeTournamentStats(matchDetails: any[]) {
   const modelStats: Record<string, { wins: number; losses: number; games: number; interceptions: number; miscommunications: number }> = {};
 
@@ -966,16 +1134,24 @@ function computeTournamentStats(matchDetails: any[]) {
     if (!match.winner) continue;
     const players = match.playerConfigs as PlayerConfig[];
 
+    // Deduplicate by team — all players on the same team are the same model
+    const teamModels = new Map<string, string>();
     for (const p of players) {
       if (!p.aiProvider) continue;
-      if (!modelStats[p.aiProvider]) {
-        modelStats[p.aiProvider] = { wins: 0, losses: 0, games: 0, interceptions: 0, miscommunications: 0 };
+      if (!teamModels.has(p.team)) {
+        teamModels.set(p.team, getModelLabel(p));
       }
-      modelStats[p.aiProvider].games++;
-      if (p.team === match.winner) {
-        modelStats[p.aiProvider].wins++;
+    }
+
+    for (const [team, model] of teamModels) {
+      if (!modelStats[model]) {
+        modelStats[model] = { wins: 0, losses: 0, games: 0, interceptions: 0, miscommunications: 0 };
+      }
+      modelStats[model].games++;
+      if (team === match.winner) {
+        modelStats[model].wins++;
       } else {
-        modelStats[p.aiProvider].losses++;
+        modelStats[model].losses++;
       }
     }
 
@@ -984,14 +1160,13 @@ function computeTournamentStats(matchDetails: any[]) {
     const amberBlack = match.amberBlackTokens || 0;
     const blueBlack = match.blueBlackTokens || 0;
 
-    for (const p of players) {
-      if (!p.aiProvider) continue;
-      if (p.team === "amber") {
-        modelStats[p.aiProvider].miscommunications += amberWhite;
-        modelStats[p.aiProvider].interceptions += blueBlack;
+    for (const [team, model] of teamModels) {
+      if (team === "amber") {
+        modelStats[model].miscommunications += amberWhite;
+        modelStats[model].interceptions += blueBlack;
       } else {
-        modelStats[p.aiProvider].miscommunications += blueWhite;
-        modelStats[p.aiProvider].interceptions += amberBlack;
+        modelStats[model].miscommunications += blueWhite;
+        modelStats[model].interceptions += amberBlack;
       }
     }
   }

@@ -1,4 +1,4 @@
-import { GameState, Player, HeadlessMatchConfig, AIProvider, AIPlayerConfig, getDefaultConfig, AblationFlag } from "@shared/schema";
+import { GameState, GamePhase, Player, HeadlessMatchConfig, AIProvider, AIPlayerConfig, getDefaultConfig, AblationFlag, ChatterMessage } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -12,20 +12,31 @@ import {
   getAIProviderName,
   generateSeed,
   createSeededRng,
-  getRandomKeywords,
   generateSecretCode,
   validateGameState,
 } from "./game";
+import { getRandomKeywords } from "./wordPacks";
 import {
   generateClues,
   generateGuess,
   generateInterception,
+  generateDeliberationMessage,
+  estimateCost,
   AICallResult,
 } from "./ai";
+import {
+  getPromptStrategy,
+  formatScratchNotes,
+  defaultDeliberationOwnFirstTurn,
+  defaultDeliberationOwnFollowUp,
+  defaultDeliberationInterceptFirstTurn,
+  defaultDeliberationInterceptFollowUp,
+} from "./promptStrategies";
+import type { DeliberationOwnTemplateParams, DeliberationInterceptTemplateParams } from "./promptStrategies";
 import { storage } from "./storage";
 import { log } from "./index";
 
-const AI_TIMEOUT_MS = 60000;
+// Timeout is now controlled per-player via config.timeoutMs (validated by schema: min 10s, max 1hr)
 
 interface HeadlessResult {
   matchId: number;
@@ -43,6 +54,7 @@ function withTimeout<T>(
   model: string
 ): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
   const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
+  // Timeout controlled by config.timeoutMs — no floor override. Researchers set their own limits.
   const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
     setTimeout(() => resolve({
       result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
@@ -61,7 +73,7 @@ function getConfigForPlayer(player: Player): AIPlayerConfig {
   return getDefaultConfig("chatgpt");
 }
 
-async function logAiCall(matchId: number, gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean) {
+async function logAiCall(matchId: number, gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean, usedFallback: boolean = false) {
   try {
     await storage.createAiCallLog({
       matchId,
@@ -77,6 +89,7 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
       timedOut,
       error: callResult.error || null,
       parseQuality: callResult.parseQuality || null,
+      usedFallback,
       promptTokens: callResult.promptTokens || null,
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
@@ -105,17 +118,25 @@ async function processClues(game: GameState, matchId: number, scratchNotesMap?: 
     }));
 
     const noteKey = `${clueGiver.aiProvider}-${team}`;
-    const fallbackClues = code.map(n => keywords[n - 1].slice(0, 3));
+    const GENERIC_FALLBACK_POOL = ["signal", "trace", "mark", "pulse", "drift", "bloom", "frost", "ridge", "shore", "vault"];
+    const fallbackClues = Array.from({ length: 3 }, () => GENERIC_FALLBACK_POOL[Math.floor(Math.random() * GENERIC_FALLBACK_POOL.length)]);
     const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
 
     const { result: callResult, timedOut } = await withTimeout(
       generateClues(config, clueParams),
-      AI_TIMEOUT_MS,
+      config.timeoutMs,
       fallbackClues,
       config.model
     );
 
-    await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut);
+    if (timedOut) {
+      log(`[headless] WARNING: Clue generation timed out for ${clueGiver.name} (${config.model}) in match ${matchId} round ${game.round}`, "headless");
+    }
+    if (callResult.parseQuality === "error") {
+      log(`[headless] WARNING: Clue parse error for ${clueGiver.name} (${config.model}) in match ${matchId} round ${game.round}. Raw: "${(callResult.rawResponse || "").slice(0, 200)}"`, "headless");
+    }
+    const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
+    await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut, usedFallback);
     game = submitClues(game, team, callResult.result);
   }
   return game;
@@ -149,12 +170,19 @@ async function processGuesses(game: GameState, matchId: number, scratchNotesMap?
     const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
     const { result: callResult, timedOut } = await withTimeout(
       generateGuess(config, guessParams),
-      AI_TIMEOUT_MS,
+      config.timeoutMs,
       fallbackGuess,
       config.model
     );
 
-    await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, "generate_guess", callResult, timedOut);
+    if (timedOut) {
+      log(`[headless] WARNING: Guess generation timed out for ${aiGuesser.name} (${config.model}) in match ${matchId} round ${game.round}`, "headless");
+    }
+    if (callResult.parseQuality === "error") {
+      log(`[headless] WARNING: Guess parse error for ${aiGuesser.name} (${config.model}) in match ${matchId} round ${game.round}. Raw: "${(callResult.rawResponse || "").slice(0, 200)}"`, "headless");
+    }
+    const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
+    await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, "generate_guess", callResult, timedOut, usedFallback);
     game = submitOwnTeamGuess(game, team, callResult.result);
   }
   return game;
@@ -183,15 +211,212 @@ async function processInterceptions(game: GameState, matchId: number, scratchNot
     const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
     const { result: callResult, timedOut } = await withTimeout(
       generateInterception(config, interceptParams),
-      AI_TIMEOUT_MS,
+      config.timeoutMs,
       fallbackGuess,
       config.model
     );
 
-    await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, "generate_interception", callResult, timedOut);
+    if (timedOut) {
+      log(`[headless] WARNING: Interception generation timed out for ${aiInterceptor.name} (${config.model}) in match ${matchId} round ${game.round}`, "headless");
+    }
+    if (callResult.parseQuality === "error") {
+      log(`[headless] WARNING: Interception parse error for ${aiInterceptor.name} (${config.model}) in match ${matchId} round ${game.round}. Raw: "${(callResult.rawResponse || "").slice(0, 200)}"`, "headless");
+    }
+    const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
+    await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, "generate_interception", callResult, timedOut, usedFallback);
     game = submitInterception(game, team, callResult.result);
   }
   return game;
+}
+
+// --- 3v3 Team Deliberation ---
+
+interface DeliberationContext {
+  team: "amber" | "blue";
+  phase: "own_guess_deliberation" | "opponent_intercept_deliberation";
+  clues: string[];
+  keywords?: string[];
+  teamHistory: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  opponentHistory?: Array<{ clues: string[]; targetCode: [number, number, number] }>;
+  opponentDeliberationTranscript?: ChatterMessage[];
+  clueGiverName: string;
+  guessers: [Player, Player];
+  scratchNotes?: Record<string, string>;
+  ablations?: AblationFlag[];
+  teamSystemPrompts?: Record<string, string>;
+  roundNumber: number;
+  score: { amber: { miscommunication: number; interception: number }; blue: { miscommunication: number; interception: number } };
+}
+
+interface DeliberationResult {
+  answer: [number, number, number];
+  messages: ChatterMessage[];
+  totalExchanges: number;
+  consensusReached: boolean;
+}
+
+function parseReadySignal(content: string): [number, number, number] | null {
+  const match = content.match(/READY:\s*([1-4])\s*,\s*([1-4])\s*,\s*([1-4])/i);
+  if (!match) return null;
+  return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+}
+
+function arraysEqual(a: number[], b: number[]): boolean {
+  return a.length === b.length && a.every((val, idx) => val === b[idx]);
+}
+
+async function processDeliberation(
+  context: DeliberationContext,
+  matchId: number,
+  gameId: string,
+  roundNumber: number,
+): Promise<DeliberationResult> {
+  const MAX_EXCHANGES = 10; // 10 rounds = 20 messages max
+  const messages: ChatterMessage[] = [];
+  const readySignals: Map<string, [number, number, number]> = new Map();
+  const [playerA, playerB] = context.guessers;
+  const opponentTeam: "amber" | "blue" = context.team === "amber" ? "blue" : "amber";
+
+  for (let exchange = 0; exchange < MAX_EXCHANGES; exchange++) {
+    const turnOrder: Array<[Player, Player, boolean]> = [
+      [playerA, playerB, false],
+      [playerB, playerA, true],
+    ];
+
+    for (const [currentPlayer, otherPlayer, isPlayerB] of turnOrder) {
+      const config = getConfigForPlayer(currentPlayer);
+      const strategy = getPromptStrategy(config.promptStrategy || "default");
+      let prompt: string;
+
+      // Build conversation-so-far for prompt injection
+      const conversationSoFar = messages.map(m => ({ playerName: m.playerName, content: m.content }));
+
+      if (context.phase === "own_guess_deliberation") {
+        const templateParams: DeliberationOwnTemplateParams = {
+          team: context.team,
+          keywords: context.keywords || [],
+          clues: context.clues,
+          history: context.teamHistory,
+          clueGiverName: context.clueGiverName,
+          currentPlayerName: currentPlayer.name,
+          otherPlayerName: otherPlayer.name,
+          conversationSoFar,
+          exchangeNumber: exchange,
+          roundNumber: context.roundNumber,
+          score: context.score,
+          ablations: context.ablations,
+          systemPromptOverride: context.teamSystemPrompts?.[context.team],
+          isPlayerB,
+        };
+
+        if (messages.length === 0 || (messages.length === 1 && isPlayerB)) {
+          // First turn
+          const builder = strategy.deliberationOwnTemplate
+            ? strategy.deliberationOwnTemplate
+            : (params: DeliberationOwnTemplateParams) => defaultDeliberationOwnFirstTurn({ ...params, isPlayerB });
+          prompt = builder(templateParams);
+        } else {
+          prompt = defaultDeliberationOwnFollowUp({ ...templateParams, exchangeNumber: exchange });
+        }
+      } else {
+        // opponent_intercept_deliberation
+        const opponentTranscriptFormatted = (context.opponentDeliberationTranscript || [])
+          .map(m => ({ playerName: m.playerName, content: m.content }));
+
+        const templateParams: DeliberationInterceptTemplateParams = {
+          team: context.team,
+          opponentTeam,
+          clues: context.clues,
+          opponentHistory: context.opponentHistory || [],
+          opponentDeliberationTranscript: opponentTranscriptFormatted,
+          currentPlayerName: currentPlayer.name,
+          otherPlayerName: otherPlayer.name,
+          conversationSoFar,
+          exchangeNumber: exchange,
+          roundNumber: context.roundNumber,
+          score: context.score,
+          ablations: context.ablations,
+          systemPromptOverride: context.teamSystemPrompts?.[context.team],
+          isPlayerB,
+        };
+
+        if (messages.length === 0 || (messages.length === 1 && isPlayerB)) {
+          const builder = strategy.deliberationInterceptTemplate
+            ? strategy.deliberationInterceptTemplate
+            : (params: DeliberationInterceptTemplateParams) => defaultDeliberationInterceptFirstTurn({ ...params, isPlayerB });
+          prompt = builder(templateParams);
+        } else {
+          prompt = defaultDeliberationInterceptFollowUp({ ...templateParams, exchangeNumber: exchange });
+        }
+      }
+
+      // Append scratch notes
+      const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
+      if (context.scratchNotes?.[noteKey]) {
+        prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+      }
+
+      // Get system prompt from strategy
+      const systemPrompt = context.teamSystemPrompts?.[context.team] || strategy.systemPrompt;
+
+      const startTime = Date.now();
+      const callResult = await generateDeliberationMessage(config, {
+        systemPrompt,
+        userPrompt: prompt,
+        ablations: context.ablations,
+      });
+      const latencyMs = Date.now() - startTime;
+
+      const readySignal = parseReadySignal(callResult.result);
+      if (readySignal) {
+        readySignals.set(currentPlayer.id, readySignal);
+      }
+
+      const message: ChatterMessage = {
+        playerId: currentPlayer.id,
+        playerName: currentPlayer.name,
+        content: callResult.result,
+        timestamp: new Date().toISOString(),
+        exchangeNumber: exchange,
+        model: config.model,
+        latencyMs: callResult.latencyMs,
+        promptTokens: callResult.promptTokens,
+        completionTokens: callResult.completionTokens,
+        estimatedCostUsd: callResult.estimatedCostUsd,
+        readySignal,
+      };
+      messages.push(message);
+
+      // Log to ai_call_logs
+      const actionType = context.phase === "own_guess_deliberation"
+        ? "deliberation_own"
+        : "deliberation_intercept";
+      await logAiCall(matchId, gameId, roundNumber, currentPlayer.aiProvider!, actionType, callResult, false, false);
+
+      // Check consensus: both players READY with same answer
+      if (readySignals.size === 2) {
+        const signals = [...readySignals.values()];
+        if (arraysEqual(signals[0], signals[1])) {
+          return {
+            answer: signals[0] as [number, number, number],
+            messages,
+            totalExchanges: exchange + 1,
+            consensusReached: true,
+          };
+        }
+      }
+    }
+  }
+
+  // Safety cap reached -- extract best answer
+  const lastReady = [...readySignals.values()].pop() || [1, 2, 3] as [number, number, number];
+
+  return {
+    answer: lastReady as [number, number, number],
+    messages,
+    totalExchanges: MAX_EXCHANGES,
+    consensusReached: false,
+  };
 }
 
 async function persistRoundResults(matchId: number, game: GameState) {
@@ -277,6 +502,8 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     team: p.team,
   }));
 
+  const teamSize = config.teamSize || 2;
+
   const match = await storage.createMatch({
     gameId: game.id,
     playerConfigs,
@@ -289,6 +516,8 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     blueBlackTokens: 0,
     gameSeed: seed,
     ablations: config.ablations || null,
+    experimentId: config.experimentId || null,
+    teamSize,
   });
 
   const matchId = match.id;
@@ -302,19 +531,136 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
 
     game = await processClues(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
 
-    if (game.phase !== "own_team_guessing") {
-      log(`[headless] Match ${matchId} - Unexpected phase after clues: ${game.phase}`, "headless");
-      break;
+    if (teamSize === 3) {
+      // 3v3 mode: deliberation replaces single-shot guess/intercept
+
+      // Phase: own_team_deliberation
+      game = { ...game, phase: "own_team_deliberation" as GamePhase };
+
+      const buildScore = () => ({
+        amber: { miscommunication: game.teams.amber.whiteTokens, interception: game.teams.amber.blackTokens },
+        blue: { miscommunication: game.teams.blue.whiteTokens, interception: game.teams.blue.blackTokens },
+      });
+
+      const buildOwnDelibContext = (team: "amber" | "blue"): DeliberationContext | null => {
+        const clueGiverId = game.currentClueGiver[team]!;
+        const teamPlayers = game.players.filter(p => p.team === team);
+        const guessers = teamPlayers.filter(p => p.id !== clueGiverId);
+        if (guessers.length < 2) {
+          log(`[headless] Match ${matchId} - Team ${team} has <2 guessers, falling back to single-shot`, "headless");
+          return null;
+        }
+        return {
+          team,
+          phase: "own_guess_deliberation",
+          clues: game.currentClues[team]!,
+          keywords: game.teams[team].keywords,
+          teamHistory: game.teams[team].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
+          clueGiverName: teamPlayers.find(p => p.id === clueGiverId)!.name,
+          guessers: [guessers[0], guessers[1]] as [Player, Player],
+          scratchNotes: scratchNotesMap,
+          ablations,
+          teamSystemPrompts,
+          roundNumber: game.round,
+          score: buildScore(),
+        };
+      };
+
+      const amberCtx = buildOwnDelibContext("amber");
+      const blueCtx = buildOwnDelibContext("blue");
+
+      // Run both teams in parallel
+      const [amberResult, blueResult] = await Promise.all([
+        amberCtx ? processDeliberation(amberCtx, matchId, game.id, game.round) : Promise.resolve(null),
+        blueCtx ? processDeliberation(blueCtx, matchId, game.id, game.round) : Promise.resolve(null),
+      ]);
+
+      const ownDelibResults: Record<string, DeliberationResult | null> = {
+        amber: amberResult,
+        blue: blueResult,
+      };
+
+      // Persist chatter and apply guesses
+      for (const team of ["amber", "blue"] as const) {
+        const result = ownDelibResults[team];
+        if (result) {
+          await storage.createTeamChatter({
+            matchId,
+            gameId: game.id,
+            roundNumber: game.round,
+            team,
+            phase: "own_guess_deliberation",
+            messages: result.messages,
+            totalExchanges: result.totalExchanges,
+            consensusReached: result.consensusReached,
+            finalAnswer: result.answer,
+          });
+          game = submitOwnTeamGuess(game, team, result.answer);
+        }
+      }
+
+      // Phase: opponent_deliberation
+      game = { ...game, phase: "opponent_deliberation" as GamePhase };
+
+      for (const team of ["amber", "blue"] as const) {
+        const opponentTeam: "amber" | "blue" = team === "amber" ? "blue" : "amber";
+        const clueGiverId = game.currentClueGiver[team]!;
+        const teamPlayers = game.players.filter(p => p.team === team);
+        const guessers = teamPlayers.filter(p => p.id !== clueGiverId);
+
+        if (guessers.length < 2) {
+          continue;
+        }
+
+        const opponentTranscript = ownDelibResults[opponentTeam]?.messages || [];
+
+        const result = await processDeliberation({
+          team,
+          phase: "opponent_intercept_deliberation",
+          clues: game.currentClues[opponentTeam]!,
+          opponentHistory: game.teams[opponentTeam].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
+          teamHistory: game.teams[team].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
+          opponentDeliberationTranscript: opponentTranscript,
+          clueGiverName: game.players.find(p => p.id === game.currentClueGiver[opponentTeam]!)!.name,
+          guessers: [guessers[0], guessers[1]] as [Player, Player],
+          scratchNotes: scratchNotesMap,
+          ablations,
+          teamSystemPrompts,
+          roundNumber: game.round,
+          score: buildScore(),
+        }, matchId, game.id, game.round);
+
+        await storage.createTeamChatter({
+          matchId,
+          gameId: game.id,
+          roundNumber: game.round,
+          team,
+          phase: "opponent_intercept_deliberation",
+          messages: result.messages,
+          totalExchanges: result.totalExchanges,
+          consensusReached: result.consensusReached,
+          finalAnswer: result.answer,
+        });
+
+        game = submitInterception(game, team, result.answer);
+      }
+
+    } else {
+      // 2v2 mode: existing single-shot behavior
+      if (game.phase !== "own_team_guessing") {
+        log(`[headless] Match ${matchId} - Unexpected phase after clues: ${game.phase}`, "headless");
+        break;
+      }
+
+      game = await processGuesses(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
+
+      if (game.phase !== "opponent_intercepting") {
+        log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
+        break;
+      }
+
+      game = await processInterceptions(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
     }
-
-    game = await processGuesses(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
-
-    if (game.phase !== "opponent_intercepting") {
-      log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
-      break;
-    }
-
-    game = await processInterceptions(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
 
     if (game.phase === "round_results" || game.phase === "game_over") {
       await persistRoundResults(matchId, game);
