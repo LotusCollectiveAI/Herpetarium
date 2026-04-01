@@ -128,6 +128,37 @@ export function interleaveByProvider(configs: HeadlessMatchConfig[]): HeadlessMa
 }
 
 const activeTournaments = new Map<number, boolean>();
+const activeTournamentHealthTrackers = new Map<number, ModelHealthTracker>();
+
+export function getMatchConfigModelKeys(config: HeadlessMatchConfig): string[] {
+  const keys = new Set<string>();
+
+  for (const player of config.players) {
+    const provider = player.aiConfig?.provider ?? player.aiProvider;
+    const defaults = getDefaultConfigForProvider(provider);
+    const model = player.aiConfig?.model ?? defaults.model;
+    keys.add(getModelKey(provider, model));
+  }
+
+  return Array.from(keys);
+}
+
+export function getTournamentModelKeys(tournamentMatches: TournamentMatch[]): string[] {
+  const keys = new Set<string>();
+
+  for (const tournamentMatch of tournamentMatches) {
+    const config = tournamentMatch.config as HeadlessMatchConfig;
+    for (const key of getMatchConfigModelKeys(config)) {
+      keys.add(key);
+    }
+  }
+
+  return Array.from(keys);
+}
+
+export function getActiveTournamentHealthTracker(tournamentId: number): ModelHealthTracker | undefined {
+  return activeTournamentHealthTrackers.get(tournamentId);
+}
 
 /**
  * Resume any tournaments that were running when the server last shut down.
@@ -213,6 +244,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
   }
 
   activeTournaments.set(tournamentId, true);
+  activeTournamentHealthTrackers.set(tournamentId, healthTracker);
 
   try {
     const tournament = await storage.getTournament(tournamentId);
@@ -277,22 +309,8 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
       return providers;
     }
 
-    function getMatchModelKeys(tm: TournamentMatch): string[] {
-      const cfg = tm.config as HeadlessMatchConfig;
-      const keys = new Set<string>();
-
-      for (const player of cfg.players) {
-        const provider = player.aiConfig?.provider ?? player.aiProvider;
-        const defaults = getDefaultConfigForProvider(provider);
-        const model = player.aiConfig?.model ?? defaults.model;
-        keys.add(getModelKey(provider, model));
-      }
-
-      return Array.from(keys);
-    }
-
     function getMatchHealthState(tm: TournamentMatch) {
-      const statuses = getMatchModelKeys(tm).map((key) => healthTracker.getStatus(key));
+      const statuses = getMatchConfigModelKeys(tm.config as HeadlessMatchConfig).map((key) => healthTracker.getStatus(key));
       const pausedUntil = statuses
         .filter((status) => status.state === "paused" && status.pausedUntil !== null)
         .reduce<number | null>((earliest, status) => {
@@ -537,5 +555,6 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     });
   } finally {
     activeTournaments.delete(tournamentId);
+    activeTournamentHealthTrackers.delete(tournamentId);
   }
 }

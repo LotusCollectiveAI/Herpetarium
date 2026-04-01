@@ -2,10 +2,10 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { setupWebSocket, createGame } from "./websocket";
 import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig } from "@shared/schema";
-import { getModelCost, getModelKey } from "@shared/modelRegistry";
+import { MODEL_REGISTRY, getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
-import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, interleaveByProvider } from "./tournament";
+import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, getActiveTournamentHealthTracker, getTournamentModelKeys, interleaveByProvider } from "./tournament";
 import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
 import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun } from "./evolution";
 import { z } from "zod";
@@ -18,6 +18,7 @@ import { getDefaultConfig, type AIProvider } from "@shared/schema";
 import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
+import { analyzeMatchTranscripts, analyzeTournamentTranscripts } from "./transcriptAnalyzer";
 
 function resolvePlayerConfig(player: { aiProvider?: string; aiConfig?: Partial<AIPlayerConfig> }): AIPlayerConfig | null {
   if (!player.aiProvider) return null;
@@ -145,6 +146,15 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/models", (_req, res) => {
+    const models = Object.values(MODEL_REGISTRY).sort((left, right) => {
+      const providerComparison = left.provider.localeCompare(right.provider);
+      return providerComparison !== 0 ? providerComparison : left.displayName.localeCompare(right.displayName);
+    });
+
+    res.json({ models });
+  });
+
   app.get("/api/matches", async (req, res) => {
     try {
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
@@ -189,6 +199,25 @@ export async function registerRoutes(
       res.json({ match, rounds, aiLogs });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch match" });
+    }
+  });
+
+  app.get("/api/matches/:id/transcript-analysis", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid match ID" });
+      }
+
+      const match = await storage.getMatch(id);
+      if (!match) {
+        return res.status(404).json({ error: "Match not found" });
+      }
+
+      const analysis = await analyzeMatchTranscripts(id);
+      res.json(analysis);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to analyze transcripts" });
     }
   });
 
@@ -380,7 +409,26 @@ export async function registerRoutes(
     }
   });
 
-  app.get("/api/tournaments/:id", async (req, res) => {
+  app.get("/api/tournaments/:id/transcript-analysis", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid tournament ID" });
+      }
+
+      const tournament = await storage.getTournament(id);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      const analysis = await analyzeTournamentTranscripts(id);
+      res.json(analysis);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to analyze tournament transcripts" });
+    }
+  });
+
+  app.get("/api/tournaments/:id/health", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) {
@@ -393,16 +441,66 @@ export async function registerRoutes(
       }
 
       const tournamentMatchesData = await storage.getTournamentMatches(id);
+      const completedMatchIds = Array.from(new Set(
+        tournamentMatchesData
+          .map((match) => match.matchId)
+          .filter((matchId): matchId is number => typeof matchId === "number"),
+      ));
+      const allMatchDetails = completedMatchIds.length > 0
+        ? await storage.getMatchesByIds(completedMatchIds)
+        : [];
+      const qualityCounts = computeMatchQualityCounts(allMatchDetails);
+      const tracker = getActiveTournamentHealthTracker(id);
+      const active = isTournamentRunning(id);
+      const models = getTournamentModelKeys(tournamentMatchesData)
+        .sort((left, right) => left.localeCompare(right))
+        .map((key) => ({
+          key,
+          metadata: MODEL_REGISTRY[key] || null,
+          health: tracker ? tracker.getStatus(key) : null,
+        }));
 
-      const completedMatchIds = tournamentMatchesData
-        .filter(tm => tm.matchId)
-        .map(tm => tm.matchId as number);
+      res.json({
+        tournamentId: id,
+        active,
+        qualityCounts,
+        matchStatusCounts: computeTournamentMatchStatusCounts(tournamentMatchesData),
+        models,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch tournament health" });
+    }
+  });
 
-      const matchDetails: any[] = [];
-      for (const matchId of completedMatchIds) {
-        const match = await storage.getMatch(matchId);
-        if (match) matchDetails.push(match);
+  app.get("/api/tournaments/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid tournament ID" });
       }
+
+      const tournament = await storage.getTournament(id);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+
+      const includeTainted = parseBooleanQuery(req.query.includeTainted);
+      const tournamentMatchesData = await storage.getTournamentMatches(id);
+      const completedMatchIds = tournamentMatchesData
+        .map((tournamentMatch) => tournamentMatch.matchId)
+        .filter((matchId): matchId is number => typeof matchId === "number");
+      const uniqueCompletedMatchIds = Array.from(new Set(completedMatchIds));
+      const fetchedMatchDetails = uniqueCompletedMatchIds.length > 0
+        ? await storage.getMatchesByIds(uniqueCompletedMatchIds)
+        : [];
+      const matchById = new Map(fetchedMatchDetails.map((match) => [match.id, match]));
+      const allMatchDetails = completedMatchIds
+        .map((matchId) => matchById.get(matchId))
+        .filter((match): match is (typeof fetchedMatchDetails)[number] => Boolean(match));
+      const qualityCounts = computeMatchQualityCounts(allMatchDetails);
+      const matchDetails = includeTainted
+        ? allMatchDetails
+        : allMatchDetails.filter((match) => match.qualityStatus !== "tainted");
 
       const stats = computeTournamentStats(matchDetails);
 
@@ -412,7 +510,16 @@ export async function registerRoutes(
       const btRatingsResult = bradleyTerryRatings(btResults);
       const btRatings = Object.fromEntries(btRatingsResult.ratings);
 
-      res.json({ tournament, matches: tournamentMatchesData, matchDetails, stats, btRatings });
+      res.json({
+        tournament,
+        matches: tournamentMatchesData,
+        matchDetails,
+        stats,
+        btRatings,
+        qualityCounts,
+        includeTainted,
+        dataScope: includeTainted ? "all_matches" : "clean_only",
+      });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch tournament" });
     }
@@ -1148,6 +1255,35 @@ export async function registerRoutes(
 }
 
 type TeamId = "amber" | "blue";
+
+function parseBooleanQuery(value: unknown): boolean {
+  return value === "true" || value === "1";
+}
+
+function computeMatchQualityCounts(matchDetails: Array<{ qualityStatus?: string | null }>) {
+  const counts = {
+    clean: 0,
+    tainted: 0,
+    completed: matchDetails.length,
+  };
+
+  for (const match of matchDetails) {
+    if (match.qualityStatus === "tainted") {
+      counts.tainted += 1;
+    } else {
+      counts.clean += 1;
+    }
+  }
+
+  return counts;
+}
+
+function computeTournamentMatchStatusCounts(tournamentMatchesData: Array<{ status: string }>) {
+  return tournamentMatchesData.reduce<Record<string, number>>((counts, match) => {
+    counts[match.status] = (counts[match.status] || 0) + 1;
+    return counts;
+  }, {});
+}
 
 function getUniqueTeamModelIds(playerConfigs: MatchPlayerConfig[], team: TeamId): string[] {
   return Array.from(new Set(

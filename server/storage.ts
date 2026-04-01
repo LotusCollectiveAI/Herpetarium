@@ -67,6 +67,7 @@ export interface IStorage {
   createTeamChatter(entry: InsertTeamChatter): Promise<TeamChatter>;
   getTeamChatter(matchId: number): Promise<TeamChatter[]>;
   getTeamChatterByRound(matchId: number, roundNumber: number): Promise<TeamChatter[]>;
+  getTeamChatterForMatches(matchIds: number[]): Promise<TeamChatter[]>;
 }
 
 export class DatabaseStorage implements IStorage {
@@ -413,6 +414,13 @@ export class DatabaseStorage implements IStorage {
         eq(teamChatter.roundNumber, roundNumber),
       ))
       .orderBy(teamChatter.team, teamChatter.phase);
+  }
+
+  async getTeamChatterForMatches(matchIds: number[]): Promise<TeamChatter[]> {
+    if (matchIds.length === 0) return [];
+    return db.select().from(teamChatter)
+      .where(inArray(teamChatter.matchId, matchIds))
+      .orderBy(teamChatter.matchId, teamChatter.roundNumber, teamChatter.team, teamChatter.phase);
   }
 }
 
