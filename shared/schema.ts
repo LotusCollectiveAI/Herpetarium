@@ -185,6 +185,8 @@ export const matches = pgTable("matches", {
   blueBlackTokens: integer("blue_black_tokens").notNull().default(0),
   gameSeed: varchar("game_seed", { length: 50 }),
   ablations: jsonb("ablations"),
+  qualityStatus: varchar("quality_status", { length: 20 }).$type<MatchQualityStatus>().notNull().default("clean"),
+  qualitySummary: jsonb("quality_summary").$type<MatchQualitySummary>().notNull(),
   // Week 1: experimentId for scoped queries
   // Migration SQL:
   //   ALTER TABLE matches ADD COLUMN experiment_id VARCHAR(100);
@@ -247,9 +249,41 @@ export interface ChatterMessage {
   reasoningTokens?: number;
   estimatedCostUsd?: string;
   readySignal?: [number, number, number] | null;  // Extracted READY signal, if present
+  status?: "ok" | "timeout" | "error" | "fallback";
+  timedOut?: boolean;
+  usedFallback?: boolean;
+  error?: string | null;
 }
 
 export type ParseQuality = "clean" | "partial_recovery" | "fallback_used" | "error";
+
+export type MatchQualityStatus = "clean" | "tainted";
+
+export interface MatchQualityEvent {
+  type: "fallback_clue" | "api_error" | "deliberation_failure";
+  roundNumber: number;
+  team?: "amber" | "blue";
+  actionType: string;
+  playerName?: string;
+  provider?: AIProvider;
+  model?: string;
+  timedOut?: boolean;
+  usedFallback?: boolean;
+  error?: string | null;
+  detail?: string;
+}
+
+export interface MatchQualityTeamSummary {
+  clueCalls: number;
+  fallbackClueCalls: number;
+  fallbackRate: number;
+}
+
+export interface MatchQualitySummary {
+  clueGeneration: Record<"amber" | "blue", MatchQualityTeamSummary>;
+  taintReasons: string[];
+  taintEvents: MatchQualityEvent[];
+}
 
 export const aiCallLogs = pgTable("ai_call_logs", {
   id: serial("id").primaryKey(),

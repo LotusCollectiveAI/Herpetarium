@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -28,6 +28,17 @@ interface ClientConnection {
 
 const DEFAULT_AI_TIMEOUT_MS = 900000; // 15 min default for interactive games
 // No artificial ceiling — researchers control their own timeouts via config
+
+function createEmptyQualitySummary(): MatchQualitySummary {
+  return {
+    clueGeneration: {
+      amber: { clueCalls: 0, fallbackClueCalls: 0, fallbackRate: 0 },
+      blue: { clueCalls: 0, fallbackClueCalls: 0, fallbackRate: 0 },
+    },
+    taintReasons: [],
+    taintEvents: [],
+  };
+}
 
 function getPlayerTimeout(player: Player): number {
   if (player.aiConfig?.timeoutMs) {
@@ -261,6 +272,8 @@ async function createMatchRecord(gameId: string, game: GameState) {
       amberBlackTokens: 0,
       blueWhiteTokens: 0,
       blueBlackTokens: 0,
+      qualityStatus: "clean",
+      qualitySummary: createEmptyQualitySummary(),
     });
 
     gameMatchIds.set(gameId, match.id);

@@ -1,8 +1,9 @@
-import { TournamentConfig, HeadlessMatchConfig, AIProvider, AIPlayerConfig } from "@shared/schema";
+import { TournamentConfig, HeadlessMatchConfig, AIProvider, AIPlayerConfig, TournamentMatch } from "@shared/schema";
+import { getDefaultConfigForProvider, getModelKey } from "@shared/modelRegistry";
 import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
 import { log } from "./index";
-import { getProviderThrottleState } from "./ai";
+import { ModelHealthTracker } from "./modelHealth";
 
 // ── Round-robin config generator ──────────────────────────────────────
 
@@ -13,61 +14,78 @@ export interface RoundRobinModelSpec {
   config?: Partial<AIPlayerConfig>;
 }
 
+function buildRoundRobinMatchConfig(
+  amber: RoundRobinModelSpec,
+  blue: RoundRobinModelSpec,
+  teamSize: 2 | 3,
+): HeadlessMatchConfig {
+  const amberConfig: AIPlayerConfig = {
+    provider: amber.provider,
+    model: amber.model,
+    timeoutMs: 14400000,
+    temperature: 0.7,
+    promptStrategy: "advanced",
+    reasoningEffort: "high",
+    ...amber.config,
+  };
+
+  const blueConfig: AIPlayerConfig = {
+    provider: blue.provider,
+    model: blue.model,
+    timeoutMs: 14400000,
+    temperature: 0.7,
+    promptStrategy: "advanced",
+    reasoningEffort: "high",
+    ...blue.config,
+  };
+
+  const players: HeadlessMatchConfig["players"] = [];
+  for (let k = 1; k <= teamSize; k++) {
+    players.push({
+      name: `${amber.name} (A${k})`,
+      aiProvider: amber.provider,
+      team: "amber",
+      aiConfig: { ...amberConfig },
+    });
+  }
+  for (let k = 1; k <= teamSize; k++) {
+    players.push({
+      name: `${blue.name} (B${k})`,
+      aiProvider: blue.provider,
+      team: "blue",
+      aiConfig: { ...blueConfig },
+    });
+  }
+
+  return { players, teamSize };
+}
+
 /**
- * Generate HeadlessMatchConfig[] for all C(n,2) pairings in a round-robin.
- * Each pairing produces one config with `teamSize` players per team.
- * Player names follow the pattern "ModelName (A1)" for amber, "ModelName (B1)" for blue.
+ * Generate balanced HeadlessMatchConfig[] for all C(n,2) pairings in a round-robin.
+ * Games are expanded here so each matchup gets mirrored sides.
  */
 export function generateRoundRobinConfigs(
   models: RoundRobinModelSpec[],
   teamSize: 2 | 3 = 3,
+  gamesPerMatchup = 2,
 ): HeadlessMatchConfig[] {
+  if (gamesPerMatchup % 2 !== 0) {
+    throw new Error("gamesPerMatchup must be even for balanced round-robin fixtures");
+  }
+
   const configs: HeadlessMatchConfig[] = [];
 
   for (let i = 0; i < models.length; i++) {
     for (let j = i + 1; j < models.length; j++) {
-      const amber = models[i];
-      const blue = models[j];
+      const modelA = models[i];
+      const modelB = models[j];
+      const half = gamesPerMatchup / 2;
 
-      const amberConfig: AIPlayerConfig = {
-        provider: amber.provider,
-        model: amber.model,
-        timeoutMs: 14400000,
-        temperature: 0.7,
-        promptStrategy: "advanced",
-        reasoningEffort: "high",
-        ...amber.config,
-      };
-
-      const blueConfig: AIPlayerConfig = {
-        provider: blue.provider,
-        model: blue.model,
-        timeoutMs: 14400000,
-        temperature: 0.7,
-        promptStrategy: "advanced",
-        reasoningEffort: "high",
-        ...blue.config,
-      };
-
-      const players: HeadlessMatchConfig["players"] = [];
-      for (let k = 1; k <= teamSize; k++) {
-        players.push({
-          name: `${amber.name} (A${k})`,
-          aiProvider: amber.provider,
-          team: "amber",
-          aiConfig: { ...amberConfig },
-        });
+      for (let gameIndex = 0; gameIndex < gamesPerMatchup; gameIndex++) {
+        const amber = gameIndex < half ? modelA : modelB;
+        const blue = gameIndex < half ? modelB : modelA;
+        configs.push(buildRoundRobinMatchConfig(amber, blue, teamSize));
       }
-      for (let k = 1; k <= teamSize; k++) {
-        players.push({
-          name: `${blue.name} (B${k})`,
-          aiProvider: blue.provider,
-          team: "blue",
-          aiConfig: { ...blueConfig },
-        });
-      }
-
-      configs.push({ players, teamSize });
     }
   }
 
@@ -187,7 +205,7 @@ export async function createTournament(config: TournamentConfig, estimatedCostUs
   return tournament;
 }
 
-export async function runTournament(tournamentId: number) {
+export async function runTournament(tournamentId: number, healthTracker: ModelHealthTracker = new ModelHealthTracker()) {
   if (activeTournaments.get(tournamentId)) {
     log(`[tournament] Tournament ${tournamentId} is already running`, "tournament");
     return;
@@ -197,6 +215,9 @@ export async function runTournament(tournamentId: number) {
 
   try {
     const tournament = await storage.getTournament(tournamentId);
+    if (!tournament) {
+      throw new Error(`Tournament ${tournamentId} not found`);
+    }
     const budgetCap = tournament?.budgetCapUsd ? parseFloat(tournament.budgetCapUsd) : null;
 
     await storage.updateTournament(tournamentId, {
@@ -206,34 +227,93 @@ export async function runTournament(tournamentId: number) {
 
     const tournamentMatches = await storage.getTournamentMatches(tournamentId);
     const pendingMatches = tournamentMatches.filter(m => m.status === "pending");
+    const totalMatchCount = tournamentMatches.length;
 
     log(`[tournament] Starting tournament ${tournamentId} with ${pendingMatches.length} matches${budgetCap ? ` (budget cap: $${budgetCap})` : ""}`, "tournament");
 
-    let completed = tournamentMatches.filter(m => m.status === "completed").length;
-    const completedMatchIds: number[] = tournamentMatches
-      .filter(m => m.status === "completed" && m.matchId)
-      .map(m => m.matchId as number);
-
-    const tournamentConfig = tournament?.config as TournamentConfig | undefined;
+    const tournamentConfig = tournament.config as TournamentConfig | undefined;
     const concurrency = Math.max(1, Math.min(20, tournamentConfig?.concurrency || 1));
     const delayBetweenMatches = tournamentConfig?.delayBetweenMatchesMs || 0;
 
-    /** Extract the set of AI providers used by a match config */
-    function getMatchProviders(tm: typeof pendingMatches[0]): Set<string> {
+    const TERMINAL_STATUSES = new Set(["completed", "failed", "skipped"]);
+
+    const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+    async function getTournamentSnapshot() {
+      const currentMatches = await storage.getTournamentMatches(tournamentId);
+      const completedMatchIds = currentMatches
+        .filter(m => m.status === "completed" && m.matchId)
+        .map(m => m.matchId as number);
+      const terminalCount = currentMatches.filter(m => TERMINAL_STATUSES.has(m.status)).length;
+      const failedCount = currentMatches.filter(m => m.status === "failed").length;
+      const skippedCount = currentMatches.filter(m => m.status === "skipped").length;
+      return { currentMatches, completedMatchIds, terminalCount, failedCount, skippedCount };
+    }
+
+    async function syncTournamentProgress() {
+      const snapshot = await getTournamentSnapshot();
+      await storage.updateTournament(tournamentId, {
+        completedMatches: snapshot.terminalCount,
+      });
+      return snapshot;
+    }
+
+    async function syncActualCost() {
+      const snapshot = await getTournamentSnapshot();
+      const currentCost = snapshot.completedMatchIds.length > 0
+        ? await storage.getCumulativeCost(snapshot.completedMatchIds)
+        : 0;
+      await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
+      return { ...snapshot, currentCost };
+    }
+
+    function getMatchProviders(tm: TournamentMatch): Set<string> {
       const cfg = tm.config as HeadlessMatchConfig;
       const providers = new Set<string>();
       for (const p of cfg.players) {
-        if (p.aiProvider) providers.add(p.aiProvider);
+        providers.add(p.aiProvider);
       }
       return providers;
     }
 
-    async function runSingleMatch(tm: typeof pendingMatches[0]): Promise<void> {
+    function getMatchModelKeys(tm: TournamentMatch): string[] {
+      const cfg = tm.config as HeadlessMatchConfig;
+      const keys = new Set<string>();
+
+      for (const player of cfg.players) {
+        const provider = player.aiConfig?.provider ?? player.aiProvider;
+        const defaults = getDefaultConfigForProvider(provider);
+        const model = player.aiConfig?.model ?? defaults.model;
+        keys.add(getModelKey(provider, model));
+      }
+
+      return Array.from(keys);
+    }
+
+    function getMatchHealthState(tm: TournamentMatch) {
+      const statuses = getMatchModelKeys(tm).map((key) => healthTracker.getStatus(key));
+      const pausedUntil = statuses
+        .filter((status) => status.state === "paused" && status.pausedUntil !== null)
+        .reduce<number | null>((earliest, status) => {
+          if (status.pausedUntil === null) return earliest;
+          if (earliest === null) return status.pausedUntil;
+          return Math.min(earliest, status.pausedUntil);
+        }, null);
+
+      return {
+        statuses,
+        hasDisabled: statuses.some((status) => status.state === "disabled"),
+        pausedUntil,
+        available: statuses.every((status) => status.state === "healthy"),
+      };
+    }
+
+    async function runSingleMatch(tm: TournamentMatch): Promise<void> {
       await storage.updateTournamentMatch(tm.id, { status: "running" });
 
       try {
         const matchConfig = tm.config as HeadlessMatchConfig;
-        const result = await runHeadlessMatch(matchConfig);
+        const result = await runHeadlessMatch(matchConfig, undefined, undefined, healthTracker);
 
         await storage.updateTournamentMatch(tm.id, {
           status: "completed",
@@ -246,178 +326,209 @@ export async function runTournament(tournamentId: number) {
           completedAt: new Date(),
         });
 
-        completedMatchIds.push(result.matchId);
-        completed++;
-        await storage.updateTournament(tournamentId, {
-          completedMatches: completed,
-        });
-
-        log(`[tournament] Tournament ${tournamentId} - Match ${completed}/${tournamentMatches.length} complete`, "tournament");
+        const snapshot = await syncTournamentProgress();
+        log(`[tournament] Tournament ${tournamentId} - Match ${snapshot.terminalCount}/${totalMatchCount} complete`, "tournament");
       } catch (err) {
         log(`[tournament] Match failed in tournament ${tournamentId}: ${err}`, "tournament");
         await storage.updateTournamentMatch(tm.id, {
           status: "failed",
           result: { error: String(err) } as any,
+          completedAt: new Date(),
         });
-        completed++;
-        await storage.updateTournament(tournamentId, {
-          completedMatches: completed,
-        });
+        await syncTournamentProgress();
       }
     }
 
-    // ── Rolling concurrent pool with provider-aware scheduling ─────────
-    {
-      const queue = [...pendingMatches]; // matches still waiting to launch
-      const running = new Map<number, { promise: Promise<void>; providers: Set<string> }>(); // tm.id -> info
+    async function markMatchSkipped(tm: TournamentMatch, reason: string, details: Record<string, unknown>) {
+      await storage.updateTournamentMatch(tm.id, {
+        status: "skipped",
+        result: {
+          reason,
+          ...details,
+        } as any,
+        completedAt: new Date(),
+      });
+      await syncTournamentProgress();
+      log(`[tournament] Tournament ${tournamentId} - Skipped match index ${tm.matchIndex}: ${reason}`, "tournament");
+    }
+
+    async function runQueue(initialQueue: TournamentMatch[], maxConcurrency: number) {
+      const queue = [...initialQueue];
+      const running = new Map<number, { promise: Promise<void>; providers: Set<string> }>();
       let stopped = false;
 
-      /**
-       * Pick the best next match from `queue` given currently-running providers.
-       * Prefers matches whose providers have the least overlap with running ones.
-       * Returns the index into `queue`, or 0 if nothing scores better.
-       */
-      function pickNext(): number {
-        if (queue.length <= 1) return 0;
+      function pickNextCandidate(candidates: TournamentMatch[]): TournamentMatch {
+        if (candidates.length <= 1) return candidates[0];
 
-        // Collect all providers currently in use
         const inUse = new Set<string>();
-        for (const r of running.values()) {
-          for (const p of r.providers) inUse.add(p);
+        for (const entry of running.values()) {
+          for (const provider of entry.providers) {
+            inUse.add(provider);
+          }
         }
-        if (inUse.size === 0) return 0;
+        if (inUse.size === 0) return candidates[0];
 
-        let bestIdx = 0;
+        let bestMatch = candidates[0];
         let bestScore = -1;
-        for (let qi = 0; qi < queue.length; qi++) {
-          const providers = getMatchProviders(queue[qi]);
+        for (const candidate of candidates) {
           let score = 0;
-          for (const p of providers) {
-            if (!inUse.has(p)) score++;
+          for (const provider of getMatchProviders(candidate)) {
+            if (!inUse.has(provider)) score += 1;
           }
           if (score > bestScore) {
             bestScore = score;
-            bestIdx = qi;
+            bestMatch = candidate;
           }
         }
-        return bestIdx;
+
+        return bestMatch;
       }
 
-      /** Launch one match from the queue, applying delay and budget checks first. */
-      async function launchNext(): Promise<boolean> {
-        if (queue.length === 0 || stopped) return false;
+      async function launchNext(): Promise<{ kind: "launched" | "empty" | "wait"; waitMs?: number }> {
+        if (queue.length === 0 || stopped) {
+          return { kind: "empty" };
+        }
 
         if (!activeTournaments.get(tournamentId)) {
           log(`[tournament] Tournament ${tournamentId} was stopped`, "tournament");
           stopped = true;
-          return false;
+          return { kind: "empty" };
         }
 
-        // Budget cap check
-        if (budgetCap && completedMatchIds.length > 0) {
-          const currentCost = await storage.getCumulativeCost(completedMatchIds);
-          await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
+        if (budgetCap) {
+          const { currentCost } = await syncActualCost();
           if (currentCost >= budgetCap) {
             log(`[tournament] Tournament ${tournamentId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "tournament");
             stopped = true;
-            return false;
+            return { kind: "empty" };
           }
         }
 
-        // Provider-aware pick
-        const idx = pickNext();
-        const tm = queue.splice(idx, 1)[0];
-        const providers = getMatchProviders(tm);
+        let earliestPausedUntil: number | null = null;
+        const launchable: TournamentMatch[] = [];
 
-        const promise = runSingleMatch(tm).finally(() => {
-          running.delete(tm.id);
+        for (let idx = queue.length - 1; idx >= 0; idx--) {
+          const tm = queue[idx];
+          const health = getMatchHealthState(tm);
+
+          if (health.hasDisabled) {
+            queue.splice(idx, 1);
+            await markMatchSkipped(tm, "model_disabled", {
+              modelHealth: Object.fromEntries(health.statuses.map((status) => [status.key, status])),
+            });
+            continue;
+          }
+
+          if (!health.available) {
+            if (health.pausedUntil !== null) {
+              earliestPausedUntil = earliestPausedUntil === null
+                ? health.pausedUntil
+                : Math.min(earliestPausedUntil, health.pausedUntil);
+            }
+            continue;
+          }
+
+          launchable.push(tm);
+        }
+
+        if (launchable.length === 0) {
+          if (earliestPausedUntil !== null) {
+            return { kind: "wait", waitMs: Math.max(250, earliestPausedUntil - Date.now()) };
+          }
+          return { kind: "empty" };
+        }
+
+        const nextMatch = pickNextCandidate(launchable);
+        const queueIndex = queue.findIndex((entry) => entry.id === nextMatch.id);
+        if (queueIndex < 0) {
+          return { kind: "empty" };
+        }
+
+        queue.splice(queueIndex, 1);
+        const providers = getMatchProviders(nextMatch);
+        const promise = runSingleMatch(nextMatch).finally(() => {
+          running.delete(nextMatch.id);
         });
-        running.set(tm.id, { promise, providers });
+        running.set(nextMatch.id, { promise, providers });
 
-        // Stagger starts
         if (delayBetweenMatches > 0) {
-          await new Promise(resolve => setTimeout(resolve, delayBetweenMatches));
+          await sleep(delayBetweenMatches);
         }
 
-        return true;
+        return { kind: "launched" };
       }
 
-      // Fill initial pool up to concurrency
-      while (running.size < concurrency && queue.length > 0 && !stopped) {
-        const launched = await launchNext();
-        if (!launched) break;
-      }
+      while (queue.length > 0 || running.size > 0) {
+        if (stopped && running.size === 0) {
+          break;
+        }
 
-      // As matches complete, launch new ones to keep the pool full
-      while (running.size > 0) {
-        // Wait for any one running match to finish
-        await Promise.race(Array.from(running.values()).map(r => r.promise));
+        while (running.size < maxConcurrency && queue.length > 0 && !stopped) {
+          const launchResult = await launchNext();
+          if (launchResult.kind === "launched") continue;
+          if (launchResult.kind === "wait") {
+            if (running.size === 0 && launchResult.waitMs) {
+              await sleep(launchResult.waitMs);
+              continue;
+            }
+            break;
+          }
+          break;
+        }
 
-        // Refill slots
-        while (running.size < concurrency && queue.length > 0 && !stopped) {
-          const launched = await launchNext();
-          if (!launched) break;
+        if (running.size > 0) {
+          await Promise.race(Array.from(running.values()).map((entry) => entry.promise));
+        } else if (queue.length > 0 && !stopped) {
+          const launchResult = await launchNext();
+          if (launchResult.kind === "wait" && launchResult.waitMs) {
+            await sleep(launchResult.waitMs);
+          } else if (launchResult.kind === "empty") {
+            break;
+          }
         }
       }
     }
 
-    if (completedMatchIds.length > 0) {
-      const finalCost = await storage.getCumulativeCost(completedMatchIds);
-      await storage.updateTournament(tournamentId, { actualCostUsd: finalCost.toFixed(6) });
-    }
+    await syncTournamentProgress();
+    await runQueue(pendingMatches, concurrency);
 
-    // ── Single retry pass for failed matches ──────────────────────────
+    await syncActualCost();
+
     const matchesAfterFirstPass = await storage.getTournamentMatches(tournamentId);
     const failedAfterFirstPass = matchesAfterFirstPass.filter(m => m.status === "failed");
 
     if (failedAfterFirstPass.length > 0 && activeTournaments.get(tournamentId)) {
       log(`[tournament] Tournament ${tournamentId} — retrying ${failedAfterFirstPass.length} failed match(es)`, "tournament");
 
-      // Reset failed matches to pending
       for (const fm of failedAfterFirstPass) {
-        await storage.updateTournamentMatch(fm.id, { status: "pending", result: null as any });
+        await storage.updateTournamentMatch(fm.id, { status: "pending", result: null as any, completedAt: null });
       }
 
-      // Re-run them sequentially with delay
-      for (const fm of failedAfterFirstPass) {
-        if (!activeTournaments.get(tournamentId)) break;
-
-        // Check budget before retry
-        if (budgetCap && completedMatchIds.length > 0) {
-          const currentCost = await storage.getCumulativeCost(completedMatchIds);
-          if (currentCost >= budgetCap) {
-            log(`[tournament] Tournament ${tournamentId} — budget cap reached during retry`, "tournament");
-            break;
-          }
-        }
-
-        log(`[tournament] Retrying match index ${fm.matchIndex}`, "tournament");
-        await runSingleMatch(fm);
-
-        if (delayBetweenMatches > 0) {
-          await new Promise(resolve => setTimeout(resolve, delayBetweenMatches));
-        }
-      }
-
-      // Update cost after retries
-      if (completedMatchIds.length > 0) {
-        const retryCost = await storage.getCumulativeCost(completedMatchIds);
-        await storage.updateTournament(tournamentId, { actualCostUsd: retryCost.toFixed(6) });
-      }
+      await syncTournamentProgress();
+      const retryQueue = (await storage.getTournamentMatches(tournamentId)).filter(m => m.status === "pending");
+      await runQueue(retryQueue, 1);
+      await syncActualCost();
     }
 
-    const finalMatches = await storage.getTournamentMatches(tournamentId);
-    const failedCount = finalMatches.filter(m => m.status === "failed").length;
-    const budgetExceeded = budgetCap && completedMatchIds.length > 0 &&
-      (await storage.getCumulativeCost(completedMatchIds)) >= budgetCap;
-    const finalStatus = budgetExceeded ? "budget_exceeded" : failedCount > 0 ? "completed_with_errors" : "completed";
+    const finalSnapshot = await getTournamentSnapshot();
+    const finalCost = finalSnapshot.completedMatchIds.length > 0
+      ? await storage.getCumulativeCost(finalSnapshot.completedMatchIds)
+      : 0;
+    const budgetExceeded = budgetCap !== null && finalCost >= budgetCap;
+    const finalStatus = budgetExceeded
+      ? "budget_exceeded"
+      : finalSnapshot.failedCount + finalSnapshot.skippedCount > 0
+        ? "completed_with_errors"
+        : "completed";
 
     await storage.updateTournament(tournamentId, {
       status: finalStatus,
+      completedMatches: finalSnapshot.terminalCount,
+      actualCostUsd: finalCost.toFixed(6),
       completedAt: new Date(),
     });
 
-    log(`[tournament] Tournament ${tournamentId} ${finalStatus} (${failedCount} failures)`, "tournament");
+    log(`[tournament] Tournament ${tournamentId} ${finalStatus} (${finalSnapshot.failedCount} failures, ${finalSnapshot.skippedCount} skipped)`, "tournament");
   } catch (err) {
     log(`[tournament] Tournament ${tournamentId} error: ${err}`, "tournament");
     await storage.updateTournament(tournamentId, {

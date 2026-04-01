@@ -1,8 +1,8 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema } from "@shared/schema";
-import { getModelCost } from "@shared/modelRegistry";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig } from "@shared/schema";
+import { getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, interleaveByProvider } from "./tournament";
@@ -19,7 +19,48 @@ import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
 
-function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: any }>, totalGames: number, includeReflection = false, teamSize: number = 2): number {
+function resolvePlayerConfig(player: { aiProvider?: string; aiConfig?: Partial<AIPlayerConfig> }): AIPlayerConfig | null {
+  if (!player.aiProvider) return null;
+  const defaults = getDefaultConfig(player.aiProvider as AIProvider);
+  return {
+    ...defaults,
+    ...(player.aiConfig || {}),
+    provider: player.aiProvider as AIProvider,
+    model: player.aiConfig?.model || defaults.model,
+  };
+}
+
+function getUniqueModelCounts(players: Array<{ aiProvider?: string; aiConfig?: Partial<AIPlayerConfig> }>) {
+  const uniqueModels = new Map<string, { config: AIPlayerConfig; count: number }>();
+
+  for (const player of players) {
+    const config = resolvePlayerConfig(player);
+    if (!config) continue;
+
+    const key = getModelKey(config.provider, config.model);
+    const existing = uniqueModels.get(key);
+    if (existing) {
+      existing.count += 1;
+    } else {
+      uniqueModels.set(key, { config, count: 1 });
+    }
+  }
+
+  return uniqueModels;
+}
+
+function inferTeamSize(players: Array<{ team?: string }>): number {
+  const amberCount = players.filter((player) => player.team === "amber").length;
+  const blueCount = players.filter((player) => player.team === "blue").length;
+  return amberCount >= 3 && blueCount >= 3 ? 3 : 2;
+}
+
+function computeEstimatedCost(
+  players: Array<{ aiProvider?: string; aiConfig?: Partial<AIPlayerConfig>; team?: string }>,
+  totalGames: number,
+  includeReflection = false,
+  teamSize = inferTeamSize(players),
+): number {
   const AVG_ROUNDS_PER_GAME = 6;
   const CALL_TYPE_TOKENS: Record<string, { input: number; output: number; callsPerRound: number }> = {
     clue:        { input: 900, output: 150, callsPerRound: 1 },
@@ -31,24 +72,15 @@ function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: a
     deliberation_intercept: { input: 3000, output: 500, callsPerRound: teamSize === 3 ? 8 : 0 },
   };
   let total = 0;
-  const uniqueModels = new Map<string, { provider: string; count: number }>();
-  for (const p of players) {
-    if (!p.aiProvider) continue;
-    const config = p.aiConfig || getDefaultConfig(p.aiProvider as AIProvider);
-    const model = config.model || getDefaultConfig(p.aiProvider as AIProvider).model;
-    const key = `${p.aiProvider}:${model}`;
-    const existing = uniqueModels.get(key);
-    if (existing) existing.count++; else uniqueModels.set(key, { provider: p.aiProvider, count: 1 });
-  }
-  for (const [key, info] of uniqueModels) {
-    const [provider, model] = key.split(":");
-    const costs = getModelCost(provider as AIProvider, model);
+  const uniqueModels = getUniqueModelCounts(players);
+  for (const { config, count } of uniqueModels.values()) {
+    const costs = getModelCost(config);
     if (!costs) continue;
     for (const [callType, spec] of Object.entries(CALL_TYPE_TOKENS)) {
       if (callType === "reflection" && !includeReflection) continue;
       const callsPerGame = callType === "reflection" ? 1 : spec.callsPerRound * AVG_ROUNDS_PER_GAME;
       const costPerCall = (spec.input / 1000) * costs.input + (spec.output / 1000) * costs.output;
-      total += costPerCall * callsPerGame * info.count * totalGames;
+      total += costPerCall * callsPerGame * count * totalGames;
     }
   }
   return +total.toFixed(4);
@@ -262,6 +294,10 @@ export async function registerRoutes(
 
       const { name, models, gamesPerMatchup, concurrency, delayBetweenMatchesMs, budgetCapUsd, teamSize, skipModelValidation } = parsed.data;
 
+      if (gamesPerMatchup % 2 !== 0) {
+        return res.status(400).json({ error: "gamesPerMatchup must be even for balanced round-robin fixtures" });
+      }
+
       // Build model specs — all models get advanced strategy, per-model reasoning effort
       const modelSpecs = models.map(m => ({
         name: m.name,
@@ -274,7 +310,7 @@ export async function registerRoutes(
         },
       }));
 
-      const rawConfigs = generateRoundRobinConfigs(modelSpecs, teamSize as 2 | 3);
+      const rawConfigs = generateRoundRobinConfigs(modelSpecs, teamSize as 2 | 3, gamesPerMatchup);
       const matchConfigs = interleaveByProvider(rawConfigs);
 
       if (!skipModelValidation) {
@@ -287,7 +323,7 @@ export async function registerRoutes(
       const tournamentConfig: TournamentConfig = {
         name,
         matchConfigs,
-        gamesPerMatchup,
+        gamesPerMatchup: 1,
         concurrency,
         delayBetweenMatchesMs,
         budgetCapUsd,
@@ -296,7 +332,7 @@ export async function registerRoutes(
       // Estimate cost
       let estimatedCost = 0;
       for (const mc of matchConfigs) {
-        estimatedCost += computeEstimatedCost(mc.players, gamesPerMatchup, false, teamSize);
+        estimatedCost += computeEstimatedCost(mc.players, 1, false, teamSize);
       }
 
       const tournament = await createTournament(tournamentConfig, estimatedCost > 0 ? estimatedCost.toFixed(4) : null);
@@ -310,7 +346,7 @@ export async function registerRoutes(
         id: tournament.id,
         status: "started",
         totalMatchups,
-        totalMatches: totalMatchups * gamesPerMatchup,
+        totalMatches: matchConfigs.length,
         estimatedCostUsd: estimatedCost.toFixed(4),
       });
     } catch (error: any) {
@@ -936,22 +972,10 @@ export async function registerRoutes(
         callTypeBreakdown: Record<string, { callsPerGame: number; costPerGame: number }>;
       }> = [];
 
-      const uniqueModels = new Map<string, { provider: string; count: number }>();
-      for (const p of players) {
-        const config = p.aiConfig || getDefaultConfig(p.aiProvider);
-        const model = config.model || getDefaultConfig(p.aiProvider).model;
-        const key = `${p.aiProvider}:${model}`;
-        const existing = uniqueModels.get(key);
-        if (existing) {
-          existing.count++;
-        } else {
-          uniqueModels.set(key, { provider: p.aiProvider, count: 1 });
-        }
-      }
+      const uniqueModels = getUniqueModelCounts(players);
 
-      for (const [key, info] of uniqueModels) {
-        const [provider, model] = key.split(":");
-        const costs = getModelCost(provider as AIProvider, model);
+      for (const { config, count } of uniqueModels.values()) {
+        const costs = getModelCost(config);
         if (!costs) continue;
 
         let costPerGame = 0;
@@ -963,10 +987,10 @@ export async function registerRoutes(
             ? 1
             : spec.callsPerRound * AVG_ROUNDS_PER_GAME;
           const costPerCall = (spec.input / 1000) * costs.input + (spec.output / 1000) * costs.output;
-          const typeCostPerGame = costPerCall * callsPerGame * info.count;
+          const typeCostPerGame = costPerCall * callsPerGame * count;
           costPerGame += typeCostPerGame;
           callTypeBreakdown[callType] = {
-            callsPerGame: callsPerGame * info.count,
+            callsPerGame: callsPerGame * count,
             costPerGame: +typeCostPerGame.toFixed(6),
           };
         }
@@ -974,8 +998,8 @@ export async function registerRoutes(
         const totalCost = costPerGame * totalGames;
         totalEstimate += totalCost;
         breakdown.push({
-          model,
-          provider: info.provider,
+          model: config.model,
+          provider: config.provider,
           costPerGame: +costPerGame.toFixed(6),
           totalCost: +totalCost.toFixed(6),
           callTypeBreakdown,

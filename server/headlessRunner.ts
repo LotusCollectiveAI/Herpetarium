@@ -1,4 +1,16 @@
-import { GameState, GamePhase, Player, HeadlessMatchConfig, AIProvider, AIPlayerConfig, getDefaultConfig, AblationFlag, ChatterMessage } from "@shared/schema";
+import {
+  GameState,
+  GamePhase,
+  Player,
+  HeadlessMatchConfig,
+  AIPlayerConfig,
+  getDefaultConfig,
+  AblationFlag,
+  ChatterMessage,
+  MatchQualityEvent,
+  MatchQualityStatus,
+  MatchQualitySummary,
+} from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -35,6 +47,7 @@ import {
 import type { DeliberationOwnTemplateParams, DeliberationInterceptTemplateParams } from "./promptStrategies";
 import { storage } from "./storage";
 import { log } from "./index";
+import type { ModelHealthTracker } from "./modelHealth";
 
 // Timeout is now controlled per-player via config.timeoutMs (validated by schema: min 10s, max 1hr)
 
@@ -48,23 +61,40 @@ interface HeadlessResult {
 }
 
 function withTimeout<T>(
-  promise: Promise<AICallResult<T>>,
   timeoutMs: number,
+  promise: Promise<AICallResult<T>>,
   fallback: T,
   model: string
 ): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
-  const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
-  // Timeout controlled by config.timeoutMs — no floor override. Researchers set their own limits.
-  const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
-    setTimeout(() => resolve({
-      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
-      timedOut: true,
-    }), timeoutMs)
-  );
-  return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error", parseQuality: "error" as const },
-    timedOut: false,
-  }));
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve({
+        result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
+        timedOut: true,
+      });
+    }, timeoutMs);
+
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve({ result, timedOut: false });
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        resolve({
+          result: {
+            result: fallback,
+            prompt: "",
+            rawResponse: "",
+            model,
+            latencyMs: 0,
+            error: error instanceof Error ? error.message : String(error),
+            parseQuality: "error" as const,
+          },
+          timedOut: false,
+        });
+      });
+  });
 }
 
 function getConfigForPlayer(player: Player): AIPlayerConfig {
@@ -101,7 +131,90 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
   }
 }
 
-async function processClues(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>, ablations?: AblationFlag[], teamSystemPrompts?: Record<string, string>): Promise<GameState> {
+interface MatchQualityRuntimeState {
+  clueCalls: Record<"amber" | "blue", number>;
+  fallbackClueCalls: Record<"amber" | "blue", number>;
+  taintEvents: MatchQualityEvent[];
+}
+
+function createMatchQualityRuntimeState(): MatchQualityRuntimeState {
+  return {
+    clueCalls: { amber: 0, blue: 0 },
+    fallbackClueCalls: { amber: 0, blue: 0 },
+    taintEvents: [],
+  };
+}
+
+function recordMatchQualityEvent(state: MatchQualityRuntimeState, event: MatchQualityEvent) {
+  state.taintEvents.push(event);
+}
+
+function maybeRecordApiError(
+  state: MatchQualityRuntimeState,
+  roundNumber: number,
+  actionType: string,
+  team: "amber" | "blue",
+  player: Player,
+  config: AIPlayerConfig,
+  callResult: AICallResult<any>,
+  timedOut: boolean,
+) {
+  if (!callResult.error || timedOut) return;
+  recordMatchQualityEvent(state, {
+    type: "api_error",
+    roundNumber,
+    actionType,
+    team,
+    playerName: player.name,
+    provider: config.provider,
+    model: config.model,
+    timedOut,
+    usedFallback: false,
+    error: callResult.error,
+  });
+}
+
+function buildMatchQualitySummary(state: MatchQualityRuntimeState): { qualityStatus: MatchQualityStatus; qualitySummary: MatchQualitySummary } {
+  const clueGeneration = {
+    amber: {
+      clueCalls: state.clueCalls.amber,
+      fallbackClueCalls: state.fallbackClueCalls.amber,
+      fallbackRate: state.clueCalls.amber > 0 ? state.fallbackClueCalls.amber / state.clueCalls.amber : 0,
+    },
+    blue: {
+      clueCalls: state.clueCalls.blue,
+      fallbackClueCalls: state.fallbackClueCalls.blue,
+      fallbackRate: state.clueCalls.blue > 0 ? state.fallbackClueCalls.blue / state.clueCalls.blue : 0,
+    },
+  } satisfies MatchQualitySummary["clueGeneration"];
+
+  const taintReasons: string[] = [];
+  if (clueGeneration.amber.fallbackRate > 0.25) {
+    taintReasons.push("amber_clue_fallback_rate_exceeded");
+  }
+  if (clueGeneration.blue.fallbackRate > 0.25) {
+    taintReasons.push("blue_clue_fallback_rate_exceeded");
+  }
+
+  return {
+    qualityStatus: taintReasons.length > 0 ? "tainted" : "clean",
+    qualitySummary: {
+      clueGeneration,
+      taintReasons,
+      taintEvents: state.taintEvents,
+    },
+  };
+}
+
+async function processClues(
+  game: GameState,
+  matchId: number,
+  qualityState: MatchQualityRuntimeState,
+  scratchNotesMap?: Record<string, string>,
+  ablations?: AblationFlag[],
+  teamSystemPrompts?: Record<string, string>,
+  healthTracker?: ModelHealthTracker,
+): Promise<GameState> {
   for (const team of ["amber", "blue"] as const) {
     const clueGiverId = game.currentClueGiver[team];
     if (!clueGiverId || game.currentClues[team]) continue;
@@ -123,8 +236,8 @@ async function processClues(game: GameState, matchId: number, scratchNotesMap?: 
     const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
 
     const { result: callResult, timedOut } = await withTimeout(
-      generateClues(config, clueParams),
       config.timeoutMs,
+      generateClues(config, clueParams, { healthTracker }),
       fallbackClues,
       config.model
     );
@@ -136,13 +249,38 @@ async function processClues(game: GameState, matchId: number, scratchNotesMap?: 
       log(`[headless] WARNING: Clue parse error for ${clueGiver.name} (${config.model}) in match ${matchId} round ${game.round}. Raw: "${(callResult.rawResponse || "").slice(0, 200)}"`, "headless");
     }
     const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
+    qualityState.clueCalls[team] += 1;
+    if (usedFallback) {
+      qualityState.fallbackClueCalls[team] += 1;
+      recordMatchQualityEvent(qualityState, {
+        type: "fallback_clue",
+        roundNumber: game.round,
+        actionType: "generate_clues",
+        team,
+        playerName: clueGiver.name,
+        provider: config.provider,
+        model: config.model,
+        timedOut,
+        usedFallback,
+        error: callResult.error || null,
+      });
+    }
+    maybeRecordApiError(qualityState, game.round, "generate_clues", team, clueGiver, config, callResult, timedOut);
     await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut, usedFallback);
     game = submitClues(game, team, callResult.result);
   }
   return game;
 }
 
-async function processGuesses(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>, ablations?: AblationFlag[], teamSystemPrompts?: Record<string, string>): Promise<GameState> {
+async function processGuesses(
+  game: GameState,
+  matchId: number,
+  qualityState: MatchQualityRuntimeState,
+  scratchNotesMap?: Record<string, string>,
+  ablations?: AblationFlag[],
+  teamSystemPrompts?: Record<string, string>,
+  healthTracker?: ModelHealthTracker,
+): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
   for (const team of ["amber", "blue"] as const) {
@@ -169,8 +307,8 @@ async function processGuesses(game: GameState, matchId: number, scratchNotesMap?
     const noteKey = `${aiGuesser.aiProvider}-${team}`;
     const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
     const { result: callResult, timedOut } = await withTimeout(
-      generateGuess(config, guessParams),
       config.timeoutMs,
+      generateGuess(config, guessParams, { healthTracker }),
       fallbackGuess,
       config.model
     );
@@ -182,13 +320,22 @@ async function processGuesses(game: GameState, matchId: number, scratchNotesMap?
       log(`[headless] WARNING: Guess parse error for ${aiGuesser.name} (${config.model}) in match ${matchId} round ${game.round}. Raw: "${(callResult.rawResponse || "").slice(0, 200)}"`, "headless");
     }
     const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
+    maybeRecordApiError(qualityState, game.round, "generate_guess", team, aiGuesser, config, callResult, timedOut);
     await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, "generate_guess", callResult, timedOut, usedFallback);
     game = submitOwnTeamGuess(game, team, callResult.result);
   }
   return game;
 }
 
-async function processInterceptions(game: GameState, matchId: number, scratchNotesMap?: Record<string, string>, ablations?: AblationFlag[], teamSystemPrompts?: Record<string, string>): Promise<GameState> {
+async function processInterceptions(
+  game: GameState,
+  matchId: number,
+  qualityState: MatchQualityRuntimeState,
+  scratchNotesMap?: Record<string, string>,
+  ablations?: AblationFlag[],
+  teamSystemPrompts?: Record<string, string>,
+  healthTracker?: ModelHealthTracker,
+): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
   for (const team of ["amber", "blue"] as const) {
@@ -210,8 +357,8 @@ async function processInterceptions(game: GameState, matchId: number, scratchNot
     const noteKey = `${aiInterceptor.aiProvider}-${team}`;
     const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
     const { result: callResult, timedOut } = await withTimeout(
-      generateInterception(config, interceptParams),
       config.timeoutMs,
+      generateInterception(config, interceptParams, { healthTracker }),
       fallbackGuess,
       config.model
     );
@@ -223,6 +370,7 @@ async function processInterceptions(game: GameState, matchId: number, scratchNot
       log(`[headless] WARNING: Interception parse error for ${aiInterceptor.name} (${config.model}) in match ${matchId} round ${game.round}. Raw: "${(callResult.rawResponse || "").slice(0, 200)}"`, "headless");
     }
     const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
+    maybeRecordApiError(qualityState, game.round, "generate_interception", team, aiInterceptor, config, callResult, timedOut);
     await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, "generate_interception", callResult, timedOut, usedFallback);
     game = submitInterception(game, team, callResult.result);
   }
@@ -253,6 +401,10 @@ interface DeliberationResult {
   messages: ChatterMessage[];
   totalExchanges: number;
   consensusReached: boolean;
+  timedOut: boolean;
+  usedFallback: boolean;
+  error: string | null;
+  terminationReason: "timeout" | "phase_timeout" | "error" | "max_exchanges" | null;
 }
 
 function parseReadySignal(content: string): [number, number, number] | null {
@@ -270,12 +422,39 @@ async function processDeliberation(
   matchId: number,
   gameId: string,
   roundNumber: number,
+  qualityState: MatchQualityRuntimeState,
+  healthTracker?: ModelHealthTracker,
 ): Promise<DeliberationResult> {
   const MAX_EXCHANGES = 10; // 10 rounds = 20 messages max
   const messages: ChatterMessage[] = [];
   const readySignals: Map<string, [number, number, number]> = new Map();
   const [playerA, playerB] = context.guessers;
   const opponentTeam: "amber" | "blue" = context.team === "amber" ? "blue" : "amber";
+  const phaseStartMs = Date.now();
+  const maxPhaseDurationMs = MAX_EXCHANGES * (
+    getConfigForPlayer(playerA).timeoutMs + getConfigForPlayer(playerB).timeoutMs
+  );
+
+  const finalizeDeliberation = (
+    terminationReason: DeliberationResult["terminationReason"],
+    error: string | null,
+    timedOut: boolean,
+    usedFallback: boolean,
+  ): DeliberationResult => {
+    const readyValues = [...readySignals.values()];
+    const fallbackAnswer = readyValues.length > 0 ? readyValues[readyValues.length - 1] : [1, 2, 3] as [number, number, number];
+
+    return {
+      answer: fallbackAnswer,
+      messages,
+      totalExchanges: Math.ceil(messages.length / 2),
+      consensusReached: false,
+      timedOut,
+      usedFallback,
+      error,
+      terminationReason,
+    };
+  };
 
   for (let exchange = 0; exchange < MAX_EXCHANGES; exchange++) {
     const turnOrder: Array<[Player, Player, boolean]> = [
@@ -359,13 +538,38 @@ async function processDeliberation(
       // Get system prompt from strategy
       const systemPrompt = context.teamSystemPrompts?.[context.team] || strategy.systemPrompt;
 
-      const startTime = Date.now();
-      const callResult = await generateDeliberationMessage(config, {
-        systemPrompt,
-        userPrompt: prompt,
-        ablations: context.ablations,
-      });
-      const latencyMs = Date.now() - startTime;
+      const remainingPhaseMs = maxPhaseDurationMs - (Date.now() - phaseStartMs);
+      if (remainingPhaseMs <= 0) {
+        const error = "deliberation phase timeout";
+        recordMatchQualityEvent(qualityState, {
+          type: "deliberation_failure",
+          roundNumber,
+          actionType: context.phase === "own_guess_deliberation" ? "deliberation_own" : "deliberation_intercept",
+          team: context.team,
+          playerName: currentPlayer.name,
+          provider: config.provider,
+          model: config.model,
+          timedOut: true,
+          usedFallback: true,
+          error,
+          detail: "phase_timeout",
+        });
+        return finalizeDeliberation("phase_timeout", error, true, true);
+      }
+
+      const { result: callResult, timedOut } = await withTimeout(
+        Math.min(config.timeoutMs, remainingPhaseMs),
+        generateDeliberationMessage(config, {
+          systemPrompt,
+          userPrompt: prompt,
+          ablations: context.ablations,
+        }, {
+          healthTracker,
+        }),
+        "",
+        config.model,
+      );
+      const usedFallback = timedOut || !!callResult.error || !callResult.result.trim();
 
       const readySignal = parseReadySignal(callResult.result);
       if (readySignal) {
@@ -384,6 +588,10 @@ async function processDeliberation(
         completionTokens: callResult.completionTokens,
         estimatedCostUsd: callResult.estimatedCostUsd,
         readySignal,
+        status: timedOut ? "timeout" : callResult.error ? "error" : usedFallback ? "fallback" : "ok",
+        timedOut,
+        usedFallback,
+        error: callResult.error || null,
       };
       messages.push(message);
 
@@ -391,7 +599,30 @@ async function processDeliberation(
       const actionType = context.phase === "own_guess_deliberation"
         ? "deliberation_own"
         : "deliberation_intercept";
-      await logAiCall(matchId, gameId, roundNumber, currentPlayer.aiProvider!, actionType, callResult, false, false);
+      maybeRecordApiError(qualityState, roundNumber, actionType, context.team, currentPlayer, config, callResult, timedOut);
+      await logAiCall(matchId, gameId, roundNumber, currentPlayer.aiProvider!, actionType, callResult, timedOut, usedFallback);
+
+      if (timedOut || callResult.error || !callResult.result.trim()) {
+        recordMatchQualityEvent(qualityState, {
+          type: "deliberation_failure",
+          roundNumber,
+          actionType,
+          team: context.team,
+          playerName: currentPlayer.name,
+          provider: config.provider,
+          model: config.model,
+          timedOut,
+          usedFallback,
+          error: callResult.error || (timedOut ? "timeout" : "empty deliberation response"),
+          detail: timedOut ? "call_timeout" : callResult.error ? "call_error" : "empty_response",
+        });
+        return finalizeDeliberation(
+          timedOut ? "timeout" : "error",
+          callResult.error || (timedOut ? "timeout" : "empty deliberation response"),
+          timedOut,
+          true,
+        );
+      }
 
       // Check consensus: both players READY with same answer
       if (readySignals.size === 2) {
@@ -402,21 +633,17 @@ async function processDeliberation(
             messages,
             totalExchanges: exchange + 1,
             consensusReached: true,
+            timedOut: false,
+            usedFallback: false,
+            error: null,
+            terminationReason: null,
           };
         }
       }
     }
   }
 
-  // Safety cap reached -- extract best answer
-  const lastReady = [...readySignals.values()].pop() || [1, 2, 3] as [number, number, number];
-
-  return {
-    answer: lastReady as [number, number, number],
-    messages,
-    totalExchanges: MAX_EXCHANGES,
-    consensusReached: false,
-  };
+  return finalizeDeliberation("max_exchanges", null, false, false);
 }
 
 async function persistRoundResults(matchId: number, game: GameState) {
@@ -449,7 +676,12 @@ async function persistRoundResults(matchId: number, game: GameState) {
 
 const MAX_ROUNDS = 20;
 
-export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotesMap?: Record<string, string>, teamSystemPrompts?: Record<string, string>): Promise<HeadlessResult> {
+export async function runHeadlessMatch(
+  config: HeadlessMatchConfig,
+  scratchNotesMap?: Record<string, string>,
+  teamSystemPrompts?: Record<string, string>,
+  healthTracker?: ModelHealthTracker,
+): Promise<HeadlessResult> {
   const hostId = generatePlayerId();
   let game = createNewGame(hostId, config.players[0].name);
 
@@ -503,6 +735,8 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
   }));
 
   const teamSize = config.teamSize || 2;
+  const qualityState = createMatchQualityRuntimeState();
+  const initialQuality = buildMatchQualitySummary(qualityState);
 
   const match = await storage.createMatch({
     gameId: game.id,
@@ -516,6 +750,8 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     blueBlackTokens: 0,
     gameSeed: seed,
     ablations: config.ablations || null,
+    qualityStatus: initialQuality.qualityStatus,
+    qualitySummary: initialQuality.qualitySummary,
     experimentId: config.experimentId || null,
     teamSize,
   });
@@ -529,7 +765,7 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 
-    game = await processClues(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
+    game = await processClues(game, matchId, qualityState, scratchNotesMap, ablations, teamSystemPrompts, healthTracker);
 
     if (teamSize === 3) {
       // 3v3 mode: deliberation replaces single-shot guess/intercept
@@ -571,8 +807,8 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
 
       // Run both teams in parallel
       const [amberResult, blueResult] = await Promise.all([
-        amberCtx ? processDeliberation(amberCtx, matchId, game.id, game.round) : Promise.resolve(null),
-        blueCtx ? processDeliberation(blueCtx, matchId, game.id, game.round) : Promise.resolve(null),
+        amberCtx ? processDeliberation(amberCtx, matchId, game.id, game.round, qualityState, healthTracker) : Promise.resolve(null),
+        blueCtx ? processDeliberation(blueCtx, matchId, game.id, game.round, qualityState, healthTracker) : Promise.resolve(null),
       ]);
 
       const ownDelibResults: Record<string, DeliberationResult | null> = {
@@ -628,7 +864,7 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
           teamSystemPrompts,
           roundNumber: game.round,
           score: buildScore(),
-        }, matchId, game.id, game.round);
+        }, matchId, game.id, game.round, qualityState, healthTracker);
 
         await storage.createTeamChatter({
           matchId,
@@ -652,14 +888,14 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
         break;
       }
 
-      game = await processGuesses(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
+      game = await processGuesses(game, matchId, qualityState, scratchNotesMap, ablations, teamSystemPrompts, healthTracker);
 
       if (game.phase !== "opponent_intercepting") {
         log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
         break;
       }
 
-      game = await processInterceptions(game, matchId, scratchNotesMap, ablations, teamSystemPrompts);
+      game = await processInterceptions(game, matchId, qualityState, scratchNotesMap, ablations, teamSystemPrompts, healthTracker);
     }
 
     if (game.phase === "round_results" || game.phase === "game_over") {
@@ -676,6 +912,7 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     }
   }
 
+  const finalQuality = buildMatchQualitySummary(qualityState);
   await storage.updateMatch(matchId, {
     completedAt: new Date(),
     winner: game.winner,
@@ -684,6 +921,8 @@ export async function runHeadlessMatch(config: HeadlessMatchConfig, scratchNotes
     amberBlackTokens: game.teams.amber.blackTokens,
     blueWhiteTokens: game.teams.blue.whiteTokens,
     blueBlackTokens: game.teams.blue.blackTokens,
+    qualityStatus: finalQuality.qualityStatus,
+    qualitySummary: finalQuality.qualitySummary,
   });
 
   log(`[headless] Match ${matchId} completed - Winner: ${game.winner || "none"} in ${game.round} rounds`, "headless");

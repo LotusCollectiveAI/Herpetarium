@@ -2,9 +2,10 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
 import type { AIPlayerConfig, ParseQuality, AblationFlag } from "@shared/schema";
-import { getDefaultConfigForProvider, getModelCost, getModelEntry } from "@shared/modelRegistry";
+import { getDefaultConfigForProvider, getModelCost, getModelEntry, getModelKey } from "@shared/modelRegistry";
 import { getPromptStrategy, applyAblations } from "./promptStrategies";
 import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
+import type { ModelHealthTracker } from "./modelHealth";
 
 let openaiClient: OpenAI | null = null;
 let anthropicClient: Anthropic | null = null;
@@ -50,7 +51,13 @@ function isRateLimitError(err: unknown): { isRateLimit: boolean; retryAfterMs?: 
     return { isRateLimit: true, retryAfterMs };
   }
   const message = String(e.message || e.error || "").toLowerCase();
-  if (message.includes("rate limit") || message.includes("too many requests") || message.includes("429")) {
+  if (
+    message.includes("resource_exhausted") ||
+    message.includes("quota") ||
+    message.includes("rate limit") ||
+    message.includes("too many requests") ||
+    message.includes("429")
+  ) {
     return { isRateLimit: true };
   }
   return { isRateLimit: false };
@@ -64,6 +71,7 @@ const ADVANCED_STRATEGIES: ReadonlyArray<AIPlayerConfig["promptStrategy"]> = ["a
 export interface AICallOptions {
   maxTokens?: number;
   disableReasoning?: boolean;
+  healthTracker?: ModelHealthTracker;
 }
 
 async function callAIWithBackoff(
@@ -73,6 +81,14 @@ async function callAIWithBackoff(
   options: AICallOptions = {},
 ): Promise<RawAIResponse> {
   const state = getThrottleState(config.provider);
+  const modelKey = getModelKey(config.provider, config.model);
+  const healthTracker = options.healthTracker;
+
+  if (healthTracker && !healthTracker.isAvailable(modelKey)) {
+    const modelStatus = healthTracker.getStatus(modelKey);
+    const pausedUntil = modelStatus.pausedUntil ? ` until ${new Date(modelStatus.pausedUntil).toISOString()}` : "";
+    throw new Error(`Model ${modelKey} is currently ${modelStatus.state}${pausedUntil}`);
+  }
 
   if (state.backoffMs > 0) {
     const elapsed = Date.now() - state.lastRateLimitAt;
@@ -85,6 +101,9 @@ async function callAIWithBackoff(
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
       const result = await callAIRaw(config, systemPrompt, userPrompt, options);
+      if (healthTracker) {
+        healthTracker.recordSuccess(modelKey);
+      }
       if (state.backoffMs > 0) {
         state.backoffMs = Math.max(0, state.backoffMs * 0.5);
       }
@@ -104,10 +123,17 @@ async function callAIWithBackoff(
         await new Promise(resolve => setTimeout(resolve, backoff));
         continue;
       }
+      if (healthTracker) {
+        healthTracker.recordFailure(modelKey, err);
+      }
       throw err;
     }
   }
-  throw new Error("Max retries exceeded");
+  const error = new Error("Max retries exceeded");
+  if (healthTracker) {
+    healthTracker.recordFailure(modelKey, error);
+  }
+  throw error;
 }
 
 function getOpenAI(): OpenAI {
@@ -638,7 +664,11 @@ function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfi
   return configOrProvider;
 }
 
-export async function generateClues(configOrProvider: AIPlayerConfig | string, params: ClueTemplateParams): Promise<AICallResult<string[]>> {
+export async function generateClues(
+  configOrProvider: AIPlayerConfig | string,
+  params: ClueTemplateParams,
+  options: AICallOptions = {},
+): Promise<AICallResult<string[]>> {
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "clue");
 
@@ -656,7 +686,7 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, systemPrompt, prompt);
+    const raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCluesResponse(raw.text);
     return {
@@ -671,7 +701,11 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
   }
 }
 
-export async function generateGuess(configOrProvider: AIPlayerConfig | string, params: GuessTemplateParams): Promise<AICallResult<[number, number, number]>> {
+export async function generateGuess(
+  configOrProvider: AIPlayerConfig | string,
+  params: GuessTemplateParams,
+  options: AICallOptions = {},
+): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "guess");
   const strategy = getPromptStrategy(config.promptStrategy);
@@ -682,7 +716,7 @@ export async function generateGuess(configOrProvider: AIPlayerConfig | string, p
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, systemPrompt, prompt);
+    const raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {
@@ -805,11 +839,12 @@ export interface DeliberationParams {
 export async function generateDeliberationMessage(
   config: AIPlayerConfig,
   params: DeliberationParams,
+  options: AICallOptions = {},
 ): Promise<AICallResult<string>> {
   const fullPrompt = `${params.systemPrompt}\n\n${params.userPrompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, params.systemPrompt, params.userPrompt);
+    const raw = await callAI(config, params.systemPrompt, params.userPrompt, options);
     const latencyMs = Date.now() - startTime;
     return {
       result: raw.text,
@@ -838,7 +873,11 @@ export async function generateDeliberationMessage(
   }
 }
 
-export async function generateInterception(configOrProvider: AIPlayerConfig | string, params: InterceptionTemplateParams): Promise<AICallResult<[number, number, number]>> {
+export async function generateInterception(
+  configOrProvider: AIPlayerConfig | string,
+  params: InterceptionTemplateParams,
+  options: AICallOptions = {},
+): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "interception");
   const strategy = getPromptStrategy(config.promptStrategy);
@@ -849,7 +888,7 @@ export async function generateInterception(configOrProvider: AIPlayerConfig | st
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, systemPrompt, prompt);
+    const raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {

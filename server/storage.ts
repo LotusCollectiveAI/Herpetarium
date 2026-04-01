@@ -89,12 +89,12 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createMatch(match: InsertMatch): Promise<Match> {
-    const [created] = await db.insert(matches).values(match).returning();
+    const [created] = await db.insert(matches).values(match as typeof matches.$inferInsert).returning();
     return created;
   }
 
   async updateMatch(id: number, data: Partial<InsertMatch>): Promise<Match | undefined> {
-    const [updated] = await db.update(matches).set(data).where(eq(matches.id, id)).returning();
+    const [updated] = await db.update(matches).set(data as Partial<typeof matches.$inferInsert>).where(eq(matches.id, id)).returning();
     return updated;
   }
 
