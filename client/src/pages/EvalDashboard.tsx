@@ -12,6 +12,7 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
+import { getModelEntry } from "@shared/modelRegistry";
 import {
   Lock, ArrowLeft, BarChart3, FlaskConical, FileDown, Eye,
   TrendingUp, Shield, AlertTriangle, Target, Shuffle, BookOpen,
@@ -64,8 +65,8 @@ interface TeamCompositionMetrics {
   homogeneousTeamGames: number;
   homogeneousTeamWinRate: number;
   synergyScores: Array<{
-    provider1: string;
-    provider2: string;
+    rosterLabel: string;
+    rosterKey: string;
     wins: number;
     losses: number;
     games: number;
@@ -108,6 +109,13 @@ interface CrossModelClueAnalysis extends ClueAnalysisItem {
   clueGiverProvider: string;
   guesserProviders: string[];
   isCrossModel: boolean;
+}
+
+function getModelDisplayName(model: string, provider?: string): string {
+  if (provider === "chatgpt" || provider === "claude" || provider === "gemini" || provider === "openrouter") {
+    return getModelEntry(provider, model)?.displayName || model;
+  }
+  return model;
 }
 
 interface ParseQualityMetrics {
@@ -212,14 +220,15 @@ function WinRateChart({ metrics, btRatings }: { metrics: ModelMetrics[]; btRatin
     const winRatePct = +(m.winRate * 100).toFixed(1);
     const ciLower = m.winRateCI ? +(m.winRateCI.lower * 100).toFixed(1) : winRatePct;
     const ciUpper = m.winRateCI ? +(m.winRateCI.upper * 100).toFixed(1) : winRatePct;
+    const displayName = getModelDisplayName(m.model, m.provider);
     return {
-      name: m.model,
+      name: displayName,
       winRate: winRatePct,
       // ErrorBar uses absolute deviation from the data value
       errorLow: +(winRatePct - ciLower).toFixed(1),
       errorHigh: +(ciUpper - winRatePct).toFixed(1),
       totalGames: m.totalGames,
-      btRating: btRatings?.[m.model] ? +btRatings[m.model].toFixed(3) : undefined,
+      btRating: btRatings?.[displayName] ? +btRatings[displayName].toFixed(3) : undefined,
     };
   });
 
@@ -296,7 +305,7 @@ function ModelMetricsChart({ metrics }: { metrics: ModelMetrics[] }) {
   if (metrics.length === 0) return null;
 
   const chartData = metrics.map(m => ({
-    name: m.model,
+    name: getModelDisplayName(m.model, m.provider),
     "Win Rate": +(m.winRate * 100).toFixed(1),
     "Interception Success": +(m.interceptionSuccessRate * 100).toFixed(1),
     "Vulnerability": +(m.interceptionVulnerability * 100).toFixed(1),
@@ -365,7 +374,7 @@ function ModelDetailsTable({ metrics }: { metrics: ModelMetrics[] }) {
             <tbody>
               {metrics.map(m => (
                 <tr key={m.model} className="border-b" data-testid={`model-row-${m.model}`}>
-                  <td className="py-2 pr-4 font-medium">{m.model}</td>
+                  <td className="py-2 pr-4 font-medium">{getModelDisplayName(m.model, m.provider)}</td>
                   <td className="py-2 pr-4">{m.totalGames}</td>
                   <td className="py-2 pr-4">{m.wins}/{m.losses}</td>
                   <td className="py-2 pr-4">
@@ -757,27 +766,24 @@ function TeamCompositionSection({ data }: { data: EvalData }) {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-lg flex items-center gap-2">
-            <Target className="h-5 w-5" />
-            Synergy Scores
-          </CardTitle>
-          <CardDescription>
-            Which provider pairings work best together?
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
+        <CardTitle className="text-lg flex items-center gap-2">
+          <Target className="h-5 w-5" />
+          Roster Synergy
+        </CardTitle>
+        <CardDescription>
+          Which roster compositions work best together?
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
           {tc.synergyScores.length > 0 ? (
             <div className="space-y-3">
               {tc.synergyScores
                 .sort((a, b) => b.winRate - a.winRate)
                 .map((s, i) => {
-                  const label = s.provider1 === s.provider2
-                    ? `${s.provider1} (solo)`
-                    : `${s.provider1} + ${s.provider2}`;
                   return (
-                    <div key={i} className="border rounded-lg p-3" data-testid={`synergy-${s.provider1}-${s.provider2}`}>
+                    <div key={s.rosterKey} className="border rounded-lg p-3" data-testid={`synergy-${s.rosterKey}`}>
                       <div className="flex items-center justify-between mb-2">
-                        <span className="font-medium text-sm">{label}</span>
+                        <span className="font-medium text-sm">{s.rosterLabel}</span>
                         <div className="flex items-center gap-2">
                           <Badge variant="outline">{s.games} games</Badge>
                           <Badge variant={s.winRate >= 0.5 ? "default" : "secondary"}>

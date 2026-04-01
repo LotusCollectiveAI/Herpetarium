@@ -11,6 +11,8 @@
  */
 
 import type { Express, Request, Response } from "express";
+import type { MatchPlayerConfig } from "@shared/schema";
+import { getStoredPlayerModelId, getStoredTeamRosters } from "@shared/schema";
 import { storage } from "./storage";
 
 /**
@@ -58,15 +60,24 @@ export function registerExportRoutes(app: Express): void {
         "amber_keywords", "blue_keywords",
         "amber_white_tokens", "amber_black_tokens",
         "blue_white_tokens", "blue_black_tokens",
+        "amber_roster_id", "amber_roster_label", "amber_composition_key", "amber_models",
+        "blue_roster_id", "blue_roster_label", "blue_composition_key", "blue_models",
         "amber_model", "amber_provider", "amber_strategy", "amber_temperature",
         "blue_model", "blue_provider", "blue_strategy", "blue_temperature",
         "ablation_flags",
       ]));
 
       for (const match of matches) {
-        const configs = (match.playerConfigs as any[]) || [];
-        const amberAI = configs.find((c: any) => c.team === "amber" && (c.isAI || c.aiProvider));
-        const blueAI = configs.find((c: any) => c.team === "blue" && (c.isAI || c.aiProvider));
+        const configs = ((match.playerConfigs as MatchPlayerConfig[]) || []).filter((player) => player.isAI);
+        const rosters = getStoredTeamRosters(configs);
+        const amberModelIds = Array.from(new Set(rosters.amber.models));
+        const blueModelIds = Array.from(new Set(rosters.blue.models));
+        const amberAI = amberModelIds.length === 1
+          ? configs.find((player) => player.team === "amber" && getStoredPlayerModelId(player) === amberModelIds[0])
+          : undefined;
+        const blueAI = blueModelIds.length === 1
+          ? configs.find((player) => player.team === "blue" && getStoredPlayerModelId(player) === blueModelIds[0])
+          : undefined;
         const ablations = match.ablations as { flags?: string[] } | null;
 
         res.write(csvRow([
@@ -84,13 +95,21 @@ export function registerExportRoutes(app: Express): void {
           match.amberBlackTokens,
           match.blueWhiteTokens,
           match.blueBlackTokens,
-          amberAI?.aiConfig?.model || amberAI?.aiProvider || "",
+          rosters.amber.rosterId,
+          rosters.amber.label,
+          rosters.amber.compositionKey,
+          JSON.stringify(rosters.amber.models),
+          rosters.blue.rosterId,
+          rosters.blue.label,
+          rosters.blue.compositionKey,
+          JSON.stringify(rosters.blue.models),
+          amberModelIds.length === 1 ? amberModelIds[0] : "",
           amberAI?.aiConfig?.provider || amberAI?.aiProvider || "",
-          amberAI?.aiConfig?.promptStrategy || "default",
+          amberAI?.aiConfig?.promptStrategy || (amberModelIds.length > 1 ? "mixed" : "default"),
           amberAI?.aiConfig?.temperature ?? "",
-          blueAI?.aiConfig?.model || blueAI?.aiProvider || "",
+          blueModelIds.length === 1 ? blueModelIds[0] : "",
           blueAI?.aiConfig?.provider || blueAI?.aiProvider || "",
-          blueAI?.aiConfig?.promptStrategy || "default",
+          blueAI?.aiConfig?.promptStrategy || (blueModelIds.length > 1 ? "mixed" : "default"),
           blueAI?.aiConfig?.temperature ?? "",
           ablations?.flags?.join(";") || "",
         ]));

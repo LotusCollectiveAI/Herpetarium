@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
+import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
 
 export type AIProvider = "chatgpt" | "claude" | "gemini" | "openrouter";
@@ -15,6 +16,241 @@ export const aiPlayerConfigSchema = z.object({
 });
 
 export type AIPlayerConfig = z.infer<typeof aiPlayerConfigSchema>;
+
+export interface TeamRosterMetadata {
+  rosterId: string;
+  label: string;
+  compositionKey: string;
+  models: string[];
+}
+
+export interface TeamRosters {
+  amber: TeamRosterMetadata;
+  blue: TeamRosterMetadata;
+}
+
+export interface MatchPlayerConfig {
+  id: string;
+  name: string;
+  isAI: boolean;
+  aiProvider: string | null;
+  aiConfig?: AIPlayerConfig | null;
+  team: "amber" | "blue" | null;
+  seat?: number | null;
+  modelKey?: string | null;
+  rosterId?: string | null;
+  rosterLabel?: string | null;
+  rosterCompositionKey?: string | null;
+  rosterModels?: string[] | null;
+}
+
+type ConfigurablePlayer = {
+  name?: string;
+  isAI?: boolean;
+  aiProvider?: string | null;
+  aiConfig?: Partial<AIPlayerConfig> | AIPlayerConfig | null;
+  team: "amber" | "blue" | null;
+};
+
+function isAIProvider(provider: string | null | undefined): provider is AIProvider {
+  return provider === "chatgpt" || provider === "claude" || provider === "gemini" || provider === "openrouter";
+}
+
+function slugifyRosterId(value: string): string {
+  const slug = value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "unknown-roster";
+}
+
+function buildRosterLabel(displayNames: string[]): string {
+  if (displayNames.length === 0) return "Unknown";
+
+  const counts = new Map<string, number>();
+  for (const displayName of displayNames) {
+    counts.set(displayName, (counts.get(displayName) || 0) + 1);
+  }
+
+  return Array.from(counts.entries())
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([displayName, count]) => count > 1 ? `${count}x ${displayName}` : displayName)
+    .join(" + ");
+}
+
+export function resolveConfiguredAIPlayerConfig(player: Pick<ConfigurablePlayer, "aiProvider" | "aiConfig">): AIPlayerConfig | null {
+  const provider = isAIProvider(player.aiConfig?.provider)
+    ? player.aiConfig.provider
+    : isAIProvider(player.aiProvider)
+      ? player.aiProvider
+      : null;
+
+  if (!provider) return null;
+
+  const defaults = getDefaultConfigForProvider(provider);
+  return {
+    ...defaults,
+    ...(player.aiConfig || {}),
+    provider,
+    model: player.aiConfig?.model || defaults.model,
+  };
+}
+
+function deriveRosterMetadataFromResolvedConfigs(
+  team: "amber" | "blue",
+  resolvedConfigs: AIPlayerConfig[],
+): TeamRosterMetadata {
+  const models = resolvedConfigs.map((config) => config.model);
+  const compositionEntries = resolvedConfigs.map((config) => ({
+    model: config.model,
+    modelKey: getModelKey(config.provider, config.model),
+    displayName: getModelEntry(config.provider, config.model)?.displayName || config.model,
+  }));
+
+  compositionEntries.sort((left, right) => left.modelKey.localeCompare(right.modelKey));
+
+  const compositionKey = compositionEntries.length > 0
+    ? compositionEntries.map((entry) => entry.modelKey).join("|")
+    : `${team}:unknown`;
+
+  return {
+    rosterId: slugifyRosterId(compositionKey),
+    label: buildRosterLabel(compositionEntries.map((entry) => entry.displayName)),
+    compositionKey,
+    models: compositionEntries.map((entry) => entry.model),
+  };
+}
+
+export function deriveTeamRosterMetadata(
+  players: ConfigurablePlayer[],
+  team: "amber" | "blue",
+): TeamRosterMetadata {
+  const resolvedConfigs = players
+    .filter((player) => player.team === team && (player.isAI ?? true))
+    .map((player) => resolveConfiguredAIPlayerConfig(player))
+    .filter((config): config is AIPlayerConfig => config !== null);
+
+  return deriveRosterMetadataFromResolvedConfigs(team, resolvedConfigs);
+}
+
+export function resolveTeamRosters(
+  players: ConfigurablePlayer[],
+  teamRosters?: Partial<TeamRosters>,
+): TeamRosters {
+  return {
+    amber: teamRosters?.amber || deriveTeamRosterMetadata(players, "amber"),
+    blue: teamRosters?.blue || deriveTeamRosterMetadata(players, "blue"),
+  };
+}
+
+export function normalizeHeadlessMatchConfig(config: HeadlessMatchConfig): HeadlessMatchConfig {
+  return {
+    ...config,
+    teamRosters: resolveTeamRosters(config.players, config.teamRosters),
+  };
+}
+
+export function getStoredPlayerModelId(player: MatchPlayerConfig): string | null {
+  if (player.aiConfig?.model) return player.aiConfig.model;
+  if (player.modelKey && player.modelKey.includes(":")) {
+    return player.modelKey.slice(player.modelKey.indexOf(":") + 1);
+  }
+  return null;
+}
+
+export function getStoredPlayerModelKey(player: MatchPlayerConfig): string | null {
+  if (player.modelKey) return player.modelKey;
+  if (player.aiConfig?.provider && player.aiConfig.model) {
+    return getModelKey(player.aiConfig.provider, player.aiConfig.model);
+  }
+  return null;
+}
+
+export function getStoredPlayerModelDisplayName(player: MatchPlayerConfig): string {
+  const provider = player.aiConfig?.provider;
+  const model = getStoredPlayerModelId(player);
+  if (provider && model) {
+    return getModelEntry(provider, model)?.displayName || model;
+  }
+  return model || player.aiProvider || "unknown";
+}
+
+function deriveStoredTeamRosterMetadata(
+  playerConfigs: MatchPlayerConfig[],
+  team: "amber" | "blue",
+): TeamRosterMetadata {
+  const teamPlayers = playerConfigs.filter((player) => player.team === team && player.isAI);
+  const storedRoster = teamPlayers.find((player) =>
+    Boolean(player.rosterId || player.rosterLabel || player.rosterCompositionKey || player.rosterModels?.length),
+  );
+
+  if (storedRoster) {
+    const derivedModels = teamPlayers
+      .map((player) => getStoredPlayerModelId(player))
+      .filter((model): model is string => Boolean(model));
+    const models = storedRoster.rosterModels && storedRoster.rosterModels.length > 0
+      ? storedRoster.rosterModels
+      : derivedModels;
+    const compositionKey = storedRoster.rosterCompositionKey
+      || teamPlayers
+        .map((player) => getStoredPlayerModelKey(player))
+        .filter((modelKey): modelKey is string => Boolean(modelKey))
+        .sort((left, right) => left.localeCompare(right))
+        .join("|")
+      || `${team}:unknown`;
+
+    return {
+      rosterId: storedRoster.rosterId || slugifyRosterId(compositionKey),
+      label: storedRoster.rosterLabel || buildRosterLabel(teamPlayers.map((player) => getStoredPlayerModelDisplayName(player))),
+      compositionKey,
+      models,
+    };
+  }
+
+  const fallbackConfigs = teamPlayers
+    .map((player) => player.aiConfig || null)
+    .filter((config): config is AIPlayerConfig => config !== null);
+
+  return deriveRosterMetadataFromResolvedConfigs(team, fallbackConfigs);
+}
+
+export function getStoredTeamRosters(playerConfigs: MatchPlayerConfig[]): TeamRosters {
+  return {
+    amber: deriveStoredTeamRosterMetadata(playerConfigs, "amber"),
+    blue: deriveStoredTeamRosterMetadata(playerConfigs, "blue"),
+  };
+}
+
+export function buildMatchPlayerConfigs(
+  players: Array<Pick<Player, "id" | "name" | "isAI" | "aiProvider" | "aiConfig" | "team">>,
+  teamRosters?: Partial<TeamRosters>,
+): MatchPlayerConfig[] {
+  const resolvedTeamRosters = resolveTeamRosters(players, teamRosters);
+  const seats = { amber: 0, blue: 0 };
+
+  return players.map((player) => {
+    const team = player.team;
+    const aiConfig = player.isAI ? resolveConfiguredAIPlayerConfig(player) : null;
+    const modelKey = aiConfig ? getModelKey(aiConfig.provider, aiConfig.model) : null;
+    const seat = team ? ++seats[team] : null;
+    const roster = team ? resolvedTeamRosters[team] : null;
+
+    return {
+      id: player.id,
+      name: player.name,
+      isAI: player.isAI,
+      aiProvider: aiConfig?.provider || player.aiProvider || null,
+      aiConfig,
+      team,
+      seat,
+      modelKey,
+      rosterId: roster?.rosterId || null,
+      rosterLabel: roster?.label || null,
+      rosterCompositionKey: roster?.compositionKey || null,
+      rosterModels: roster?.models || null,
+    };
+  });
+}
 
 export const PROMPT_STRATEGY_OPTIONS = ["default", "advanced", "k-level", "enriched"] as const;
 
@@ -378,6 +614,7 @@ export interface HeadlessMatchConfig {
     team: "amber" | "blue";
     aiConfig?: AIPlayerConfig;
   }>;
+  teamRosters?: TeamRosters;
   fastMode?: boolean;
   seed?: string;
   ablations?: HeadlessMatchAblations;

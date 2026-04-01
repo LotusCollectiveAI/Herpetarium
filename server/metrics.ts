@@ -1,4 +1,5 @@
-import type { Match, MatchRound, AiCallLog } from "@shared/schema";
+import type { Match, MatchRound, AiCallLog, MatchPlayerConfig } from "@shared/schema";
+import { getStoredPlayerModelId, getStoredTeamRosters } from "@shared/schema";
 
 // --- Bootstrap CI + Cohen's d (Week 1 Statistical Foundation) ---
 
@@ -167,9 +168,14 @@ interface PlayerConfig {
   id: string;
   name: string;
   isAI: boolean;
-  aiProvider?: string;
-  aiConfig?: { provider: string; model: string; promptStrategy?: string };
-  team: string;
+  aiProvider?: string | null;
+  aiConfig?: { provider: string; model: string; promptStrategy?: string } | null;
+  team: string | null;
+  modelKey?: string | null;
+  rosterId?: string | null;
+  rosterLabel?: string | null;
+  rosterCompositionKey?: string | null;
+  rosterModels?: string[] | null;
 }
 
 function getPlayerConfigs(match: Match): PlayerConfig[] {
@@ -178,16 +184,25 @@ function getPlayerConfigs(match: Match): PlayerConfig[] {
 
 function getTeamModels(match: Match, team: string): string[] {
   const configs = getPlayerConfigs(match);
-  return configs
-    .filter(p => p.team === team && p.isAI)
-    .map(p => p.aiConfig?.model || p.aiProvider || "unknown");
+  return Array.from(new Set(
+    configs
+      .filter((player) => player.team === team && player.isAI)
+      .map((player) => getStoredPlayerModelId(player as MatchPlayerConfig))
+      .filter((model): model is string => Boolean(model)),
+  ));
 }
 
 function getTeamProviders(match: Match, team: string): string[] {
   const configs = getPlayerConfigs(match);
-  return configs
-    .filter(p => p.team === team && p.isAI)
-    .map(p => p.aiConfig?.provider || p.aiProvider || "unknown");
+  return Array.from(new Set(
+    configs
+      .filter((player) => player.team === team && player.isAI)
+      .map((player) => player.aiConfig?.provider || player.aiProvider || "unknown"),
+  ));
+}
+
+function getTeamRoster(match: Match, team: "amber" | "blue") {
+  return getStoredTeamRosters(getPlayerConfigs(match) as MatchPlayerConfig[])[team];
 }
 
 function getTeamStrategy(match: Match, team: string): string {
@@ -198,7 +213,9 @@ function getTeamStrategy(match: Match, team: string): string {
 
 function getModelProvider(match: Match, model: string): string {
   const configs = getPlayerConfigs(match);
-  const player = configs.find(p => p.isAI && (p.aiConfig?.model === model || p.aiProvider === model));
+  const player = configs.find((candidate) =>
+    candidate.isAI && getStoredPlayerModelId(candidate as MatchPlayerConfig) === model,
+  );
   return player?.aiConfig?.provider || player?.aiProvider || "unknown";
 }
 
@@ -358,26 +375,28 @@ export function computeMatchupMetrics(matches: Match[]): MatchupMetrics[] {
   matches.forEach(match => {
     if (!match.winner) return;
 
-    const amberModels = getTeamModels(match, "amber");
-    const blueModels = getTeamModels(match, "blue");
+    const amberRoster = getTeamRoster(match, "amber");
+    const blueRoster = getTeamRoster(match, "blue");
 
-    if (amberModels.length === 0 || blueModels.length === 0) return;
+    if (amberRoster.models.length === 0 || blueRoster.models.length === 0) return;
 
-    const modelA = amberModels[0];
-    const modelB = blueModels[0];
-    const key = [modelA, modelB].sort().join(" vs ");
+    const modelA = amberRoster.label;
+    const modelB = blueRoster.label;
+    const key = [amberRoster.compositionKey, blueRoster.compositionKey].sort().join(" vs ");
 
+    const amberSortedFirst = amberRoster.compositionKey <= blueRoster.compositionKey;
     if (!matchups[key]) {
-      matchups[key] = { modelA: [modelA, modelB].sort()[0], modelB: [modelA, modelB].sort()[1], aWins: 0, bWins: 0, total: 0 };
+      matchups[key] = amberSortedFirst
+        ? { modelA, modelB, aWins: 0, bWins: 0, total: 0 }
+        : { modelA: modelB, modelB: modelA, aWins: 0, bWins: 0, total: 0 };
     }
 
     matchups[key].total++;
-    const sortedFirst = [modelA, modelB].sort()[0];
     if (match.winner === "amber") {
-      if (modelA === sortedFirst) matchups[key].aWins++;
+      if (amberSortedFirst) matchups[key].aWins++;
       else matchups[key].bWins++;
     } else {
-      if (modelB === sortedFirst) matchups[key].aWins++;
+      if (!amberSortedFirst) matchups[key].aWins++;
       else matchups[key].bWins++;
     }
   });
@@ -532,8 +551,8 @@ export interface TeamCompositionMetrics {
   homogeneousTeamGames: number;
   homogeneousTeamWinRate: number;
   synergyScores: Array<{
-    provider1: string;
-    provider2: string;
+    rosterLabel: string;
+    rosterKey: string;
     wins: number;
     losses: number;
     games: number;
@@ -587,20 +606,21 @@ export function computeTeamCompositionMetrics(
   let mixedIntercepted = 0, mixedCluesGiven = 0;
   let homoIntercepted = 0, homoCluesGiven = 0;
 
-  const pairStats: Record<string, { wins: number; losses: number; games: number; intercepted: number; cluesGiven: number }> = {};
+  const pairStats: Record<string, { label: string; wins: number; losses: number; games: number; intercepted: number; cluesGiven: number }> = {};
 
   matches.forEach((match, idx) => {
     const matchRounds = rounds[idx] || [];
     const teams = ["amber", "blue"] as const;
 
     teams.forEach(team => {
-      const providers = [...new Set(getTeamProviders(match, team))];
-      const isMixed = providers.length > 1;
-      const pairKey = providers.sort().join("+");
+      const roster = getTeamRoster(match, team as "amber" | "blue");
+      const uniqueModels = Array.from(new Set(roster.models));
+      const isMixed = uniqueModels.length > 1;
+      const pairKey = roster.compositionKey;
       const teamRounds = matchRounds.filter(r => r.team === team);
 
       if (!pairStats[pairKey]) {
-        pairStats[pairKey] = { wins: 0, losses: 0, games: 0, intercepted: 0, cluesGiven: 0 };
+        pairStats[pairKey] = { label: roster.label, wins: 0, losses: 0, games: 0, intercepted: 0, cluesGiven: 0 };
       }
       pairStats[pairKey].games++;
 
@@ -627,10 +647,9 @@ export function computeTeamCompositionMetrics(
   });
 
   const synergyScores = Object.entries(pairStats).map(([key, stats]) => {
-    const parts = key.split("+");
     return {
-      provider1: parts[0],
-      provider2: parts[1] || parts[0],
+      rosterLabel: stats.label,
+      rosterKey: key,
       wins: stats.wins,
       losses: stats.losses,
       games: stats.games,
@@ -664,7 +683,8 @@ export function computeSelfPlayMetrics(
   matches: Match[],
   rounds: MatchRound[][]
 ): SelfPlayMetrics {
-  const selfPlayByModel: Record<string, {
+  const selfPlayByRoster: Record<string, {
+    label: string;
     games: number;
     amberWins: number;
     blueWins: number;
@@ -684,18 +704,25 @@ export function computeSelfPlayMetrics(
   let totalNonSelfPlayGames = 0;
 
   matches.forEach((match, idx) => {
-    const amberProviders = [...new Set(getTeamProviders(match, "amber"))];
-    const blueProviders = [...new Set(getTeamProviders(match, "blue"))];
-
-    const isSelfPlay = amberProviders.length === 1 && blueProviders.length === 1 &&
-      amberProviders[0] === blueProviders[0];
+    const amberRoster = getTeamRoster(match, "amber");
+    const blueRoster = getTeamRoster(match, "blue");
+    const isSelfPlay = amberRoster.models.length > 0 &&
+      amberRoster.compositionKey === blueRoster.compositionKey;
 
     if (isSelfPlay) {
-      const model = amberProviders[0];
-      if (!selfPlayByModel[model]) {
-        selfPlayByModel[model] = { games: 0, amberWins: 0, blueWins: 0, gameLengths: [], outcomes: [], roundData: {} };
+      const rosterKey = amberRoster.compositionKey;
+      if (!selfPlayByRoster[rosterKey]) {
+        selfPlayByRoster[rosterKey] = {
+          label: amberRoster.label,
+          games: 0,
+          amberWins: 0,
+          blueWins: 0,
+          gameLengths: [],
+          outcomes: [],
+          roundData: {},
+        };
       }
-      const stats = selfPlayByModel[model];
+      const stats = selfPlayByRoster[rosterKey];
       stats.games++;
       stats.gameLengths.push(match.totalRounds);
       totalSelfPlayLength += match.totalRounds;
@@ -735,7 +762,7 @@ export function computeSelfPlayMetrics(
     }
   });
 
-  const modelStats = Object.entries(selfPlayByModel).map(([model, stats]) => {
+  const modelStats = Object.entries(selfPlayByRoster).map(([, stats]) => {
     const winRate = stats.games > 0 ? stats.amberWins / stats.games : 0.5;
     const winRateVariance = stats.outcomes.length > 1
       ? stats.outcomes.reduce((acc, w) => acc + Math.pow(w - winRate, 2), 0) / stats.outcomes.length
@@ -758,7 +785,7 @@ export function computeSelfPlayMetrics(
       }));
 
     return {
-      model,
+      model: stats.label,
       games: stats.games,
       amberWins: stats.amberWins,
       blueWins: stats.blueWins,

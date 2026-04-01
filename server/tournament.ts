@@ -1,4 +1,4 @@
-import { TournamentConfig, HeadlessMatchConfig, AIProvider, AIPlayerConfig, TournamentMatch } from "@shared/schema";
+import { TournamentConfig, HeadlessMatchConfig, AIProvider, AIPlayerConfig, TournamentMatch, normalizeHeadlessMatchConfig } from "@shared/schema";
 import { getDefaultConfigForProvider, getModelKey } from "@shared/modelRegistry";
 import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
@@ -57,7 +57,7 @@ function buildRoundRobinMatchConfig(
     });
   }
 
-  return { players, teamSize };
+  return normalizeHeadlessMatchConfig({ players, teamSize });
 }
 
 /**
@@ -179,7 +179,8 @@ export async function createTournament(config: TournamentConfig, estimatedCostUs
       const matchWithAblations = config.ablations
         ? { ...mc, ablations: mc.ablations || config.ablations }
         : mc;
-      allMatchConfigs.push(matchWithAblations);
+      const normalizedMatchConfig = normalizeHeadlessMatchConfig(matchWithAblations);
+      allMatchConfigs.push(normalizedMatchConfig);
     }
   }
 

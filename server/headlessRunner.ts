@@ -10,6 +10,8 @@ import {
   MatchQualityEvent,
   MatchQualityStatus,
   MatchQualitySummary,
+  buildMatchPlayerConfigs,
+  normalizeHeadlessMatchConfig,
 } from "@shared/schema";
 import {
   createNewGame,
@@ -682,6 +684,7 @@ export async function runHeadlessMatch(
   teamSystemPrompts?: Record<string, string>,
   healthTracker?: ModelHealthTracker,
 ): Promise<HeadlessResult> {
+  config = normalizeHeadlessMatchConfig(config);
   const hostId = generatePlayerId();
   let game = createNewGame(hostId, config.players[0].name);
 
@@ -726,13 +729,7 @@ export async function runHeadlessMatch(
     },
   };
 
-  const playerConfigs = game.players.map(p => ({
-    id: p.id,
-    name: p.name,
-    isAI: p.isAI,
-    aiProvider: p.aiProvider || null,
-    team: p.team,
-  }));
+  const playerConfigs = buildMatchPlayerConfigs(game.players, config.teamRosters);
 
   const teamSize = config.teamSize || 2;
   const qualityState = createMatchQualityRuntimeState();

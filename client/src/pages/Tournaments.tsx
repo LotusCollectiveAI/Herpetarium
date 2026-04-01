@@ -56,6 +56,7 @@ interface TournamentMatchEntry {
 }
 
 interface ModelStats {
+  label?: string;
   wins: number;
   losses: number;
   games: number;
@@ -244,7 +245,7 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
                           <div key={model} className="flex items-center gap-3 p-3 border rounded-lg bg-background" data-testid={`model-stats-${model}`}>
                             <div className="flex items-center gap-2 flex-1 min-w-0">
                               <Bot className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                              <span className="font-medium text-sm">{getProviderLabel(model)}</span>
+                              <span className="font-medium text-sm">{stats.label || model}</span>
                             </div>
                             <div className="flex items-center gap-4 text-xs">
                               <div className="text-center">

@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig } from "@shared/schema";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig } from "@shared/schema";
 import { getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
@@ -93,6 +93,20 @@ const headlessMatchConfigSchema = z.object({
     team: z.enum(["amber", "blue"]),
     aiConfig: aiPlayerConfigSchema.optional(),
   })).min(2).max(6),
+  teamRosters: z.object({
+    amber: z.object({
+      rosterId: z.string(),
+      label: z.string(),
+      compositionKey: z.string(),
+      models: z.array(z.string()),
+    }),
+    blue: z.object({
+      rosterId: z.string(),
+      label: z.string(),
+      compositionKey: z.string(),
+      models: z.array(z.string()),
+    }),
+  }).optional(),
   fastMode: z.boolean().optional(),
   seed: z.union([z.string(), z.number().int().transform(String)]).optional(),
   teamSize: z.number().int().min(2).max(3).optional(),
@@ -185,7 +199,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid match configuration", details: parsed.error.issues });
       }
 
-      const config = parsed.data as HeadlessMatchConfig;
+      const config = normalizeHeadlessMatchConfig(parsed.data as HeadlessMatchConfig);
 
       const amberCount = config.players.filter(p => p.team === "amber").length;
       const blueCount = config.players.filter(p => p.team === "blue").length;
@@ -210,7 +224,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid match configuration", details: parsed.error.issues });
       }
 
-      const config = parsed.data as HeadlessMatchConfig;
+      const config = normalizeHeadlessMatchConfig(parsed.data as HeadlessMatchConfig);
 
       const amberCount = config.players.filter(p => p.team === "amber").length;
       const blueCount = config.players.filter(p => p.team === "blue").length;
@@ -233,7 +247,10 @@ export async function registerRoutes(
       }
 
       const { skipModelValidation, ...config } = parsed.data;
-      const tournamentConfig = config as TournamentConfig;
+      const tournamentConfig = {
+        ...(config as TournamentConfig),
+        matchConfigs: config.matchConfigs.map((matchConfig) => normalizeHeadlessMatchConfig(matchConfig as HeadlessMatchConfig)),
+      } satisfies TournamentConfig;
 
       for (const mc of tournamentConfig.matchConfigs) {
         const amberCount = mc.players.filter(p => p.team === "amber").length;
@@ -390,20 +407,7 @@ export async function registerRoutes(
       const stats = computeTournamentStats(matchDetails);
 
       // Compute Bradley-Terry ratings from tournament match results
-      const btResults: Array<{ winner: string; loser: string }> = [];
-      for (const match of matchDetails) {
-        if (!match.winner) continue;
-        const configs = match.playerConfigs as PlayerConfig[];
-        const winnerTeam = match.winner;
-        const loserTeam = winnerTeam === "amber" ? "blue" : "amber";
-        const winnerPlayer = configs.find((c) => c.team === winnerTeam && c.isAI);
-        const loserPlayer = configs.find((c) => c.team === loserTeam && c.isAI);
-        const winnerModel = winnerPlayer ? getModelLabel(winnerPlayer) : "unknown";
-        const loserModel = loserPlayer ? getModelLabel(loserPlayer) : "unknown";
-        if (winnerModel !== "unknown" && loserModel !== "unknown" && winnerModel !== loserModel) {
-          btResults.push({ winner: winnerModel, loser: loserModel });
-        }
-      }
+      const btResults = buildBradleyTerryResults(matchDetails);
 
       const btRatingsResult = bradleyTerryRatings(btResults);
       const btRatings = Object.fromEntries(btRatingsResult.ratings);
@@ -467,20 +471,7 @@ export async function registerRoutes(
       const parseQualityMetrics = computeParseQualityMetrics(allAiLogs);
 
       // Compute Bradley-Terry global strength ratings from all matches
-      const btResults: Array<{ winner: string; loser: string }> = [];
-      for (const match of allMatches) {
-        if (!match.winner) continue;
-        const configs = match.playerConfigs as PlayerConfig[];
-        const winnerTeam = match.winner;
-        const loserTeam = winnerTeam === "amber" ? "blue" : "amber";
-        const winnerPlayer = configs.find((c) => c.team === winnerTeam && c.isAI);
-        const loserPlayer = configs.find((c) => c.team === loserTeam && c.isAI);
-        const winnerModel = winnerPlayer ? getModelLabel(winnerPlayer) : "unknown";
-        const loserModel = loserPlayer ? getModelLabel(loserPlayer) : "unknown";
-        if (winnerModel !== "unknown" && loserModel !== "unknown" && winnerModel !== loserModel) {
-          btResults.push({ winner: winnerModel, loser: loserModel });
-        }
-      }
+      const btResults = buildBradleyTerryResults(allMatches);
 
       const btRatingsResult = bradleyTerryRatings(btResults);
       const btRatings = Object.fromEntries(btRatingsResult.ratings);
@@ -1156,45 +1147,85 @@ export async function registerRoutes(
   return httpServer;
 }
 
-interface PlayerConfig {
-  id: string;
-  name: string;
-  isAI: boolean;
-  aiProvider: string | null;
-  team: string;
+type TeamId = "amber" | "blue";
+
+function getUniqueTeamModelIds(playerConfigs: MatchPlayerConfig[], team: TeamId): string[] {
+  return Array.from(new Set(
+    playerConfigs
+      .filter((player) => player.team === team && player.isAI)
+      .map((player) => getStoredPlayerModelId(player))
+      .filter((modelId): modelId is string => Boolean(modelId)),
+  ));
 }
 
-function getModelLabel(player: PlayerConfig): string {
-  // Extract model label from player name, e.g. "GPT-5.4 (A1)" -> "GPT-5.4"
-  const match = player.name.match(/^(.+?)\s*\([AB]\d\)$/);
-  return match ? match[1].trim() : player.aiProvider || "unknown";
+function getTeamSingleModelDisplayName(playerConfigs: MatchPlayerConfig[], team: TeamId): string | null {
+  const roster = getStoredTeamRosters(playerConfigs)[team];
+  const uniqueModels = Array.from(new Set(roster.models));
+  if (uniqueModels.length !== 1) return null;
+
+  const matchingPlayer = playerConfigs.find((player) =>
+    player.team === team && player.isAI && getStoredPlayerModelId(player) === uniqueModels[0],
+  );
+
+  if (matchingPlayer) {
+    return getStoredPlayerModelDisplayName(matchingPlayer);
+  }
+
+  return roster.label || uniqueModels[0];
+}
+
+function buildBradleyTerryResults(matchDetails: Array<{ winner: string | null; playerConfigs: unknown }>) {
+  const btResults: Array<{ winner: string; loser: string }> = [];
+
+  for (const match of matchDetails) {
+    if (match.winner !== "amber" && match.winner !== "blue") continue;
+
+    const playerConfigs = (match.playerConfigs as MatchPlayerConfig[]) || [];
+    const winnerTeam: TeamId = match.winner;
+    const loserTeam: TeamId = winnerTeam === "amber" ? "blue" : "amber";
+    const winnerModel = getTeamSingleModelDisplayName(playerConfigs, winnerTeam);
+    const loserModel = getTeamSingleModelDisplayName(playerConfigs, loserTeam);
+
+    if (!winnerModel || !loserModel || winnerModel === loserModel) {
+      continue;
+    }
+
+    btResults.push({ winner: winnerModel, loser: loserModel });
+  }
+
+  return btResults;
 }
 
 function computeTournamentStats(matchDetails: any[]) {
-  const modelStats: Record<string, { wins: number; losses: number; games: number; interceptions: number; miscommunications: number }> = {};
+  const modelStats: Record<string, { label: string; wins: number; losses: number; games: number; interceptions: number; miscommunications: number }> = {};
 
   for (const match of matchDetails) {
     if (!match.winner) continue;
-    const players = match.playerConfigs as PlayerConfig[];
+    const players = (match.playerConfigs as MatchPlayerConfig[]) || [];
 
-    // Deduplicate by team — all players on the same team are the same model
-    const teamModels = new Map<string, string>();
-    for (const p of players) {
-      if (!p.aiProvider) continue;
-      if (!teamModels.has(p.team)) {
-        teamModels.set(p.team, getModelLabel(p));
-      }
-    }
+    const teamModels = new Map<TeamId, string[]>();
+    teamModels.set("amber", getUniqueTeamModelIds(players, "amber"));
+    teamModels.set("blue", getUniqueTeamModelIds(players, "blue"));
 
-    for (const [team, model] of teamModels) {
-      if (!modelStats[model]) {
-        modelStats[model] = { wins: 0, losses: 0, games: 0, interceptions: 0, miscommunications: 0 };
-      }
-      modelStats[model].games++;
-      if (team === match.winner) {
-        modelStats[model].wins++;
-      } else {
-        modelStats[model].losses++;
+    for (const [team, models] of teamModels) {
+      for (const model of models) {
+        if (!modelStats[model]) {
+          const player = players.find((candidate) => getStoredPlayerModelId(candidate) === model);
+          modelStats[model] = {
+            label: player ? getStoredPlayerModelDisplayName(player) : model,
+            wins: 0,
+            losses: 0,
+            games: 0,
+            interceptions: 0,
+            miscommunications: 0,
+          };
+        }
+        modelStats[model].games++;
+        if (team === match.winner) {
+          modelStats[model].wins++;
+        } else {
+          modelStats[model].losses++;
+        }
       }
     }
 
@@ -1203,13 +1234,15 @@ function computeTournamentStats(matchDetails: any[]) {
     const amberBlack = match.amberBlackTokens || 0;
     const blueBlack = match.blueBlackTokens || 0;
 
-    for (const [team, model] of teamModels) {
-      if (team === "amber") {
-        modelStats[model].miscommunications += amberWhite;
-        modelStats[model].interceptions += blueBlack;
-      } else {
-        modelStats[model].miscommunications += blueWhite;
-        modelStats[model].interceptions += amberBlack;
+    for (const [team, models] of teamModels) {
+      for (const model of models) {
+        if (team === "amber") {
+          modelStats[model].miscommunications += amberWhite;
+          modelStats[model].interceptions += blueBlack;
+        } else {
+          modelStats[model].miscommunications += blueWhite;
+          modelStats[model].interceptions += amberBlack;
+        }
       }
     }
   }

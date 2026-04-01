@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -254,13 +254,7 @@ async function persistGameCompletion(gameId: string, game: GameState) {
 
 async function createMatchRecord(gameId: string, game: GameState) {
   try {
-    const playerConfigs = game.players.map(p => ({
-      id: p.id,
-      name: p.name,
-      isAI: p.isAI,
-      aiProvider: p.aiProvider || null,
-      team: p.team,
-    }));
+    const playerConfigs = buildMatchPlayerConfigs(game.players);
 
     const match = await storage.createMatch({
       gameId,
