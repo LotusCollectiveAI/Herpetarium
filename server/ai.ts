@@ -2,6 +2,7 @@ import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
 import type { AIPlayerConfig, ParseQuality, AblationFlag } from "@shared/schema";
+import { getDefaultConfigForProvider, getModelCost, getModelEntry } from "@shared/modelRegistry";
 import { getPromptStrategy, applyAblations } from "./promptStrategies";
 import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
 
@@ -58,8 +59,19 @@ function isRateLimitError(err: unknown): { isRateLimit: boolean; retryAfterMs?: 
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
+const ADVANCED_STRATEGIES: ReadonlyArray<AIPlayerConfig["promptStrategy"]> = ["advanced", "k-level", "enriched"];
 
-async function callAIWithBackoff(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+export interface AICallOptions {
+  maxTokens?: number;
+  disableReasoning?: boolean;
+}
+
+async function callAIWithBackoff(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
   const state = getThrottleState(config.provider);
 
   if (state.backoffMs > 0) {
@@ -72,7 +84,7 @@ async function callAIWithBackoff(config: AIPlayerConfig, systemPrompt: string, u
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const result = await callAIRaw(config, systemPrompt, userPrompt);
+      const result = await callAIRaw(config, systemPrompt, userPrompt, options);
       if (state.backoffMs > 0) {
         state.backoffMs = Math.max(0, state.backoffMs * 0.5);
       }
@@ -129,27 +141,17 @@ function getGemini(): GoogleGenAI {
   return geminiClient;
 }
 
-function isOpenAIReasoningModel(model: string): boolean {
-  return model.startsWith("o1") || model.startsWith("o3") || model.startsWith("o4");
+function modelHasTag(config: AIPlayerConfig, tag: string): boolean {
+  return getModelEntry(config)?.tags?.includes(tag) ?? false;
 }
 
-function isGeminiThinkingModel(model: string): boolean {
-  return model.includes("2.5-pro") || model.includes("2.5-flash") || model.includes("3.1-pro");
+function getReasoningMode(config: AIPlayerConfig) {
+  return getModelEntry(config)?.reasoningMode ?? "none";
 }
 
-const ANTHROPIC_THINKING_BUDGET: Record<string, number> = {
-  low: 5000,
-  medium: 15000,
-  high: 30000,
-  xhigh: 50000,
-};
-
-const GEMINI_THINKING_BUDGET: Record<string, number> = {
-  low: 5000,
-  medium: 15000,
-  high: 32000,
-  xhigh: 50000,
-};
+function getThinkingBudget(config: AIPlayerConfig, fallback: number): number {
+  return getModelEntry(config)?.thinkingBudgetByEffort?.[config.reasoningEffort || "high"] ?? fallback;
+}
 
 export interface AICallResult<T> {
   result: T;
@@ -166,54 +168,21 @@ export interface AICallResult<T> {
   estimatedCostUsd?: string;
 }
 
-// Costs per 1K tokens. For reasoning/thinking models, thinking tokens are billed
-// at the output rate and should be counted as completion tokens.
-export const MODEL_COST_PER_1K: Record<string, { input: number; output: number }> = {
-  // OpenAI — current models
-  "gpt-5.4": { input: 0.0025, output: 0.015 },
-  "gpt-5.4-mini": { input: 0.0004, output: 0.0016 },
-  "codex-5.3": { input: 0.003, output: 0.015 },
-  "o3": { input: 0.002, output: 0.008 },
-  "o4-mini": { input: 0.0011, output: 0.0044 },
-  // OpenAI — legacy (kept for historical cost estimates)
-  "gpt-4o": { input: 0.0025, output: 0.01 },
-  "gpt-4o-mini": { input: 0.00015, output: 0.0006 },
-  "o1": { input: 0.015, output: 0.06 },
-  "o3-mini": { input: 0.0011, output: 0.0044 },
-  // Anthropic — current models (thinking tokens billed at output rate)
-  "claude-opus-4-6": { input: 0.005, output: 0.025 },
-  "claude-sonnet-4-6": { input: 0.003, output: 0.015 },
-  "claude-sonnet-4-20250514": { input: 0.003, output: 0.015 },
-  "claude-haiku-4-5-20251001": { input: 0.001, output: 0.005 },
-  // Anthropic — legacy
-  "claude-opus-4-20250514": { input: 0.015, output: 0.075 },
-  "claude-haiku-4-20250414": { input: 0.0008, output: 0.004 },
-  "claude-3-5-sonnet-20241022": { input: 0.003, output: 0.015 },
-  // Google Gemini — current models (thinking tokens billed at output rate for thinking models)
-  "gemini-3.1-pro-preview": { input: 0.002, output: 0.012 },
-  "gemini-3.1-flash-lite-preview": { input: 0.00025, output: 0.0015 },
-  "gemini-2.5-pro": { input: 0.0035, output: 0.021 },
-  "gemini-2.5-flash": { input: 0.0003, output: 0.0025 },
-  // Google Gemini — legacy
-  "gemini-2.0-flash": { input: 0.0001, output: 0.0004 },
-  // OpenRouter — current models
-  "deepseek/deepseek-v3.2": { input: 0.00026, output: 0.00038 },
-  "deepseek-ai/deepseek-reasoner": { input: 0.00055, output: 0.00219 },
-  "x-ai/grok-4.20-beta": { input: 0.002, output: 0.006 },
-  "qwen/qwen3.6-plus-preview": { input: 0.0005, output: 0.002 },
-  "qwen/qwen3-max-thinking": { input: 0.00039, output: 0.00234 },
-  "meta-llama/llama-4-maverick": { input: 0.0005, output: 0.0015 },
-  "moonshotai/kimi-k2.5": { input: 0.0006, output: 0.002 },
-  // OpenRouter — legacy
-  "deepseek/deepseek-r1": { input: 0.00055, output: 0.00219 },
-  "x-ai/grok-3-beta": { input: 0.003, output: 0.015 },
-  "mistralai/mistral-large-latest": { input: 0.002, output: 0.006 },
-  "qwen/qwen-2.5-72b-instruct": { input: 0.0006, output: 0.0018 },
-};
+export function estimateCost(config: Pick<AIPlayerConfig, "provider" | "model">, promptTokens?: number, completionTokens?: number): string | undefined;
+export function estimateCost(provider: AIPlayerConfig["provider"], model: string, promptTokens?: number, completionTokens?: number): string | undefined;
+export function estimateCost(
+  configOrProvider: Pick<AIPlayerConfig, "provider" | "model"> | AIPlayerConfig["provider"],
+  modelOrPromptTokens?: string | number,
+  promptTokensArg?: number,
+  completionTokensArg?: number,
+): string | undefined {
+  const provider = typeof configOrProvider === "string" ? configOrProvider : configOrProvider.provider;
+  const model = typeof configOrProvider === "string" ? modelOrPromptTokens as string : configOrProvider.model;
+  const promptTokens = typeof configOrProvider === "string" ? promptTokensArg : modelOrPromptTokens as number | undefined;
+  const completionTokens = typeof configOrProvider === "string" ? completionTokensArg : promptTokensArg;
 
-export function estimateCost(model: string, promptTokens?: number, completionTokens?: number): string | undefined {
   if (!promptTokens && !completionTokens) return undefined;
-  const costs = MODEL_COST_PER_1K[model];
+  const costs = getModelCost(provider, model);
   if (!costs) return undefined;
   const inputCost = ((promptTokens || 0) / 1000) * costs.input;
   const outputCost = ((completionTokens || 0) / 1000) * costs.output;
@@ -229,17 +198,24 @@ interface RawAIResponse {
   totalTokens?: number;
 }
 
-async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
-  const isReasoning = isOpenAIReasoningModel(config.model);
+async function callOpenAI(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
+  const reasoningMode = getReasoningMode(config);
+  const usesCombinedPrompt = modelHasTag(config, "combined_prompt");
+  const isModernOpenAIModel = getModelEntry(config)?.supportsTemperature === false;
 
-  if (isReasoning) {
+  if (reasoningMode === "openai_reasoning_effort" && usesCombinedPrompt) {
     const response = await getOpenAI().chat.completions.create({
       model: config.model,
       messages: [
         { role: "user", content: `${systemPrompt}\n\n${userPrompt}` },
       ],
-      max_completion_tokens: 100000, // Let reasoning models think as long as they need
-      reasoning_effort: config.reasoningEffort || "high",
+      max_completion_tokens: options.maxTokens ?? 100000,
+      reasoning_effort: options.disableReasoning ? "low" : (config.reasoningEffort || "high"),
     } as any);
 
     const choice = response.choices[0];
@@ -264,10 +240,6 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
     };
   }
 
-  // Modern models (GPT-5+, GPT-4.1+, Codex) require max_completion_tokens and support reasoning_effort
-  const isModernModel = config.model.startsWith("gpt-5") || config.model.startsWith("gpt-4.1") || config.model.startsWith("codex-");
-  const advancedStrategies = ["advanced", "k-level", "enriched"];
-
   const completionParams: Record<string, any> = {
     model: config.model,
     messages: [
@@ -276,17 +248,17 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
     ],
   };
 
-  if (isModernModel) {
-    // GPT-5+ with reasoning_effort only supports temperature=1 (the default)
-    // Don't set temperature at all — let the API use its default
-    completionParams.max_completion_tokens = 16384;
-    if (advancedStrategies.includes(config.promptStrategy)) {
+  if (isModernOpenAIModel) {
+    completionParams.max_completion_tokens = options.maxTokens ?? 16384;
+    if (!options.disableReasoning && reasoningMode === "openai_reasoning_effort" && ADVANCED_STRATEGIES.includes(config.promptStrategy)) {
       completionParams.reasoning_effort = config.reasoningEffort || "high";
-      completionParams.max_completion_tokens = 100000;
+      completionParams.max_completion_tokens = options.maxTokens ?? 100000;
     }
   } else {
-    completionParams.temperature = config.temperature ?? 0.7;
-    completionParams.max_tokens = 4096;
+    if (getModelEntry(config)?.supportsTemperature !== false) {
+      completionParams.temperature = config.temperature ?? getModelEntry(config)?.defaults.temperature ?? 0.7;
+    }
+    completionParams.max_tokens = options.maxTokens ?? 4096;
   }
 
   const response = await getOpenAI().chat.completions.create(completionParams as any);
@@ -305,19 +277,26 @@ async function callOpenAI(config: AIPlayerConfig, systemPrompt: string, userProm
   };
 }
 
-async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
-  const thinkingStrategies = ["advanced", "k-level", "enriched"];
-  const isExtendedThinking = config.model.includes("claude-3-7") || thinkingStrategies.includes(config.promptStrategy);
+async function callAnthropic(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
+  const canUseThinking = getReasoningMode(config) === "anthropic_thinking";
+  const useThinking = canUseThinking && !options.disableReasoning && ADVANCED_STRATEGIES.includes(config.promptStrategy);
 
-  if (isExtendedThinking && thinkingStrategies.includes(config.promptStrategy)) {
+  if (useThinking) {
     try {
+      const maxTokens = options.maxTokens ? Math.max(options.maxTokens, 2048) : 64000;
+      const budgetTokens = Math.min(getThinkingBudget(config, 30000), maxTokens - 1);
       // Use streaming to avoid timeout on long thinking operations
       const stream = getAnthropic().messages.stream({
         model: config.model,
-        max_tokens: 64000,
+        max_tokens: maxTokens,
         thinking: {
           type: "enabled",
-          budget_tokens: ANTHROPIC_THINKING_BUDGET[config.reasoningEffort || "high"] || 30000,
+          budget_tokens: budgetTokens,
         },
         temperature: 1, // Required for extended thinking
         messages: [{ role: "user", content: `${systemPrompt}\n\n${userPrompt}` }],
@@ -350,7 +329,7 @@ async function callAnthropic(config: AIPlayerConfig, systemPrompt: string, userP
 
   const response = await getAnthropic().messages.create({
     model: config.model,
-    max_tokens: 8192, // Let models write full responses
+    max_tokens: options.maxTokens ?? 8192,
     system: systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
   });
@@ -394,18 +373,28 @@ function extractGeminiUsage(response: GeminiResponseExtended): Pick<RawAIRespons
   };
 }
 
-async function callGemini(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
-  const isThinking = isGeminiThinkingModel(config.model);
+async function callGemini(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
+  const useThinking = getReasoningMode(config) === "gemini_thinking" && !options.disableReasoning;
+  const requestConfig: Record<string, unknown> = {};
 
-  if (isThinking) {
+  if (options.maxTokens !== undefined) {
+    requestConfig.maxOutputTokens = options.maxTokens;
+  }
+
+  if (useThinking) {
+    requestConfig.thinkingConfig = {
+      thinkingBudget: getThinkingBudget(config, 32000),
+    };
+
     const response = await getGemini().models.generateContent({
       model: config.model,
       contents: `${systemPrompt}\n\n${userPrompt}`,
-      config: {
-        thinkingConfig: {
-          thinkingBudget: GEMINI_THINKING_BUDGET[config.reasoningEffort || "high"] || 32000,
-        },
-      },
+      config: requestConfig,
     } as Parameters<ReturnType<typeof getGemini>['models']['generateContent']>[0]);
 
     const extResp = response as unknown as GeminiResponseExtended;
@@ -436,6 +425,7 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
   const response = await getGemini().models.generateContent({
     model: config.model,
     contents: `${systemPrompt}\n\n${userPrompt}`,
+    ...(Object.keys(requestConfig).length > 0 ? { config: requestConfig } : {}),
   });
 
   const extResp = response as unknown as GeminiResponseExtended;
@@ -445,32 +435,37 @@ async function callGemini(config: AIPlayerConfig, systemPrompt: string, userProm
   };
 }
 
-async function callOpenRouter(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+async function callOpenRouter(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) {
     throw new Error("OPENROUTER_API_KEY environment variable is not set");
   }
 
-  const isReasoning = config.model.includes("deepseek-r1") || config.model.includes("deepseek-reasoner") || config.model.includes("qwen3-max-thinking") || config.model.includes("o1") || config.model.includes("o3") || config.model.includes("o4");
+  const isReasoning = getReasoningMode(config) === "openrouter_reasoning";
+  const usesCombinedPrompt = isReasoning && modelHasTag(config, "combined_prompt");
 
   const messages: Array<{ role: string; content: string }> = [];
-  if (!isReasoning) {
+  if (!usesCombinedPrompt) {
     messages.push({ role: "system", content: systemPrompt });
   }
-  messages.push({ role: "user", content: isReasoning ? `${systemPrompt}\n\n${userPrompt}` : userPrompt });
+  messages.push({ role: "user", content: usesCombinedPrompt ? `${systemPrompt}\n\n${userPrompt}` : userPrompt });
 
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
-    max_tokens: isReasoning ? 100000 : 8192,
+    max_tokens: options.maxTokens ?? (isReasoning ? 100000 : 8192),
   };
 
-  if (!isReasoning && config.temperature !== undefined) {
+  if (!isReasoning && getModelEntry(config)?.supportsTemperature !== false && config.temperature !== undefined) {
     body.temperature = config.temperature;
   }
 
-  // Request reasoning effort for models that support it
-  if (isReasoning) {
+  if (isReasoning && !options.disableReasoning) {
     body.reasoning = { effort: config.reasoningEffort || "high" };
   }
 
@@ -506,21 +501,31 @@ async function callOpenRouter(config: AIPlayerConfig, systemPrompt: string, user
   };
 }
 
-function callAIRaw(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
+function callAIRaw(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
   switch (config.provider) {
     case "chatgpt":
-      return callOpenAI(config, systemPrompt, userPrompt);
+      return callOpenAI(config, systemPrompt, userPrompt, options);
     case "claude":
-      return callAnthropic(config, systemPrompt, userPrompt);
+      return callAnthropic(config, systemPrompt, userPrompt, options);
     case "gemini":
-      return callGemini(config, systemPrompt, userPrompt);
+      return callGemini(config, systemPrompt, userPrompt, options);
     case "openrouter":
-      return callOpenRouter(config, systemPrompt, userPrompt);
+      return callOpenRouter(config, systemPrompt, userPrompt, options);
   }
 }
 
-export async function callAI(config: AIPlayerConfig, systemPrompt: string, userPrompt: string): Promise<RawAIResponse> {
-  return callAIWithBackoff(config, systemPrompt, userPrompt);
+export async function callAI(
+  config: AIPlayerConfig,
+  systemPrompt: string,
+  userPrompt: string,
+  options: AICallOptions = {},
+): Promise<RawAIResponse> {
+  return callAIWithBackoff(config, systemPrompt, userPrompt, options);
 }
 
 interface ParseResult<T> {
@@ -611,13 +616,6 @@ function parseCluesResponse(response: string): ParseResult<string[]> {
   return { value: ["hint", "clue", "guess"], quality: "fallback_used" };
 }
 
-export const MODEL_MAP: Record<string, string> = {
-  chatgpt: "gpt-5.4",
-  claude: "claude-sonnet-4-6",
-  gemini: "gemini-3.1-pro-preview",
-  openrouter: "deepseek/deepseek-v3.2",
-};
-
 export function buildCluePrompt(params: ClueTemplateParams): string {
   const strategy = getPromptStrategy("default");
   return `${strategy.systemPrompt}\n\n${strategy.clueTemplate(params)}`;
@@ -635,15 +633,7 @@ export function buildInterceptionPrompt(params: InterceptionTemplateParams): str
 
 function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfig {
   if (typeof configOrProvider === "string") {
-    const provider = configOrProvider as AIPlayerConfig["provider"];
-    return {
-      provider,
-      model: MODEL_MAP[provider] || "gpt-5.4",
-      timeoutMs: 120000,
-      temperature: 0.7,
-      reasoningEffort: "high",
-      promptStrategy: "default",
-    };
+    return getDefaultConfigForProvider(configOrProvider as AIPlayerConfig["provider"]);
   }
   return configOrProvider;
 }
@@ -673,7 +663,7 @@ export async function generateClues(configOrProvider: AIPlayerConfig | string, p
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
-      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
+      estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -699,7 +689,7 @@ export async function generateGuess(configOrProvider: AIPlayerConfig | string, p
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
-      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
+      estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -778,7 +768,7 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
       result: notes, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: "clean",
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
-      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
+      estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -832,7 +822,7 @@ export async function generateDeliberationMessage(
       promptTokens: raw.promptTokens,
       completionTokens: raw.completionTokens,
       totalTokens: raw.totalTokens,
-      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
+      estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
@@ -866,7 +856,7 @@ export async function generateInterception(configOrProvider: AIPlayerConfig | st
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
-      estimatedCostUsd: estimateCost(config.model, raw.promptTokens, raw.completionTokens),
+      estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;

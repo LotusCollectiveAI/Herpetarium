@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
+export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
 
 export type AIProvider = "chatgpt" | "claude" | "gemini" | "openrouter";
 
@@ -15,55 +16,7 @@ export const aiPlayerConfigSchema = z.object({
 
 export type AIPlayerConfig = z.infer<typeof aiPlayerConfigSchema>;
 
-export const MODEL_OPTIONS: Record<AIProvider, Array<{ value: string; label: string; isReasoning?: boolean }>> = {
-  chatgpt: [
-    { value: "gpt-5.4", label: "GPT-5.4" },
-    { value: "gpt-5.4-mini", label: "GPT-5.4 Mini" },
-    { value: "codex-5.3", label: "Codex 5.3" },
-    { value: "o3", label: "o3 (Reasoning)", isReasoning: true },
-    { value: "o4-mini", label: "o4-mini (Reasoning)", isReasoning: true },
-  ],
-  claude: [
-    { value: "claude-opus-4-6", label: "Claude Opus 4.6" },
-    { value: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-    { value: "claude-sonnet-4-20250514", label: "Claude Sonnet 4" },
-    { value: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
-  ],
-  gemini: [
-    { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
-    { value: "gemini-3.1-flash-lite-preview", label: "Gemini 3.1 Flash Lite" },
-    { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro (Thinking)", isReasoning: true },
-    { value: "gemini-2.5-flash", label: "Gemini 2.5 Flash (Thinking)", isReasoning: true },
-  ],
-  openrouter: [
-    { value: "deepseek/deepseek-v3.2", label: "DeepSeek V3.2" },
-    { value: "deepseek-ai/deepseek-reasoner", label: "DeepSeek Reasoner", isReasoning: true },
-    { value: "x-ai/grok-4.20-beta", label: "Grok 4.20 Beta" },
-    { value: "qwen/qwen3.6-plus-preview", label: "Qwen 3.6 Plus" },
-    { value: "qwen/qwen3-max-thinking", label: "Qwen 3 Max (Thinking)", isReasoning: true },
-    { value: "meta-llama/llama-4-maverick", label: "Llama 4 Maverick" },
-    { value: "moonshotai/kimi-k2.5", label: "Kimi K2.5 (Reasoning)" },
-  ],
-};
-
 export const PROMPT_STRATEGY_OPTIONS = ["default", "advanced", "k-level", "enriched"] as const;
-
-export function getDefaultConfig(provider: AIProvider): AIPlayerConfig {
-  const defaultModels: Record<AIProvider, string> = {
-    chatgpt: "gpt-5.4",
-    claude: "claude-sonnet-4-6",
-    gemini: "gemini-3.1-pro-preview",
-    openrouter: "deepseek/deepseek-v3.2",
-  };
-  return {
-    provider,
-    model: defaultModels[provider],
-    timeoutMs: 120000,
-    temperature: 0.7,
-    promptStrategy: "default",
-    reasoningEffort: "high",
-  };
-}
 
 export const playerSchema = z.object({
   id: z.string(),

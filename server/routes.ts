@@ -2,6 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { setupWebSocket, createGame } from "./websocket";
 import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema } from "@shared/schema";
+import { getModelCost } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, interleaveByProvider } from "./tournament";
@@ -12,8 +13,9 @@ import { experimentConfigSchema } from "@shared/schema";
 import { runExperiment } from "./experimentRunner";
 import { registerExportRoutes } from "./exportRouter";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
-import { MODEL_COST_PER_1K, getProviderThrottleState } from "./ai";
+import { getProviderThrottleState } from "./ai";
 import { getDefaultConfig, type AIProvider } from "@shared/schema";
+import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
 
@@ -39,8 +41,8 @@ function computeEstimatedCost(players: Array<{ aiProvider?: string; aiConfig?: a
     if (existing) existing.count++; else uniqueModels.set(key, { provider: p.aiProvider, count: 1 });
   }
   for (const [key, info] of uniqueModels) {
-    const model = key.split(":")[1];
-    const costs = MODEL_COST_PER_1K[model];
+    const [provider, model] = key.split(":");
+    const costs = getModelCost(provider as AIProvider, model);
     if (!costs) continue;
     for (const [callType, spec] of Object.entries(CALL_TYPE_TOKENS)) {
       if (callType === "reflection" && !includeReflection) continue;
@@ -73,6 +75,7 @@ const tournamentConfigSchema = z.object({
   budgetCapUsd: z.string().optional(),
   concurrency: z.number().int().min(1).max(20).optional(),
   delayBetweenMatchesMs: z.number().int().min(0).max(60000).optional(),
+  skipModelValidation: z.boolean().optional(),
   ablations: z.object({ flags: z.array(ablationFlagSchema).min(1) }).optional(),
 });
 
@@ -197,9 +200,10 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid tournament configuration", details: parsed.error.issues });
       }
 
-      const config = parsed.data as TournamentConfig;
+      const { skipModelValidation, ...config } = parsed.data;
+      const tournamentConfig = config as TournamentConfig;
 
-      for (const mc of config.matchConfigs) {
+      for (const mc of tournamentConfig.matchConfigs) {
         const amberCount = mc.players.filter(p => p.team === "amber").length;
         const blueCount = mc.players.filter(p => p.team === "blue").length;
         if (amberCount < 2 || blueCount < 2) {
@@ -207,13 +211,20 @@ export async function registerRoutes(
         }
       }
 
-      const gamesPerMatchup = config.gamesPerMatchup || 1;
+      if (!skipModelValidation) {
+        const validation = await validateModels(tournamentConfig.matchConfigs);
+        if (!validation.ok) {
+          return res.status(400).json({ error: "Model validation failed", validation });
+        }
+      }
+
+      const gamesPerMatchup = tournamentConfig.gamesPerMatchup || 1;
       let estimatedCost = 0;
-      for (const mc of config.matchConfigs) {
+      for (const mc of tournamentConfig.matchConfigs) {
         estimatedCost += computeEstimatedCost(mc.players, gamesPerMatchup);
       }
 
-      const tournament = await createTournament(config, estimatedCost > 0 ? estimatedCost.toFixed(4) : null);
+      const tournament = await createTournament(tournamentConfig, estimatedCost > 0 ? estimatedCost.toFixed(4) : null);
 
       runTournament(tournament.id).catch(err => {
         console.error("Tournament execution failed:", err);
@@ -239,6 +250,7 @@ export async function registerRoutes(
     delayBetweenMatchesMs: z.number().int().min(0).max(60000).default(12000),
     budgetCapUsd: z.string().default("250.00"),
     teamSize: z.number().int().min(2).max(3).default(3),
+    skipModelValidation: z.boolean().optional(),
   });
 
   app.post("/api/tournaments/round-robin", async (req, res) => {
@@ -248,7 +260,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid round-robin configuration", details: parsed.error.issues });
       }
 
-      const { name, models, gamesPerMatchup, concurrency, delayBetweenMatchesMs, budgetCapUsd, teamSize } = parsed.data;
+      const { name, models, gamesPerMatchup, concurrency, delayBetweenMatchesMs, budgetCapUsd, teamSize, skipModelValidation } = parsed.data;
 
       // Build model specs — all models get advanced strategy, per-model reasoning effort
       const modelSpecs = models.map(m => ({
@@ -264,6 +276,13 @@ export async function registerRoutes(
 
       const rawConfigs = generateRoundRobinConfigs(modelSpecs, teamSize as 2 | 3);
       const matchConfigs = interleaveByProvider(rawConfigs);
+
+      if (!skipModelValidation) {
+        const validation = await validateModels(matchConfigs);
+        if (!validation.ok) {
+          return res.status(400).json({ error: "Model validation failed", validation });
+        }
+      }
 
       const tournamentConfig: TournamentConfig = {
         name,
@@ -931,8 +950,8 @@ export async function registerRoutes(
       }
 
       for (const [key, info] of uniqueModels) {
-        const model = key.split(":")[1];
-        const costs = MODEL_COST_PER_1K[model];
+        const [provider, model] = key.split(":");
+        const costs = getModelCost(provider as AIProvider, model);
         if (!costs) continue;
 
         let costPerGame = 0;
