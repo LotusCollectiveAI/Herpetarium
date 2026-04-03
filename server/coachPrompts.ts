@@ -491,9 +491,6 @@ function normalizePatchBundle(
       continue;
     }
     uniqueEdits.set(edit.targetModule, edit);
-    if (uniqueEdits.size >= 3) {
-      break;
-    }
   }
 
   if (uniqueEdits.size === 0) {
@@ -556,47 +553,26 @@ function normalizeSearchPolicyPatch(raw: unknown): SearchPolicyPatch | null {
   const partial: Partial<SearchPolicy> = {};
   let hasField = false;
 
-  if (typeof policyObj.commitThreshold === "number" && Number.isFinite(policyObj.commitThreshold)) {
-    partial.commitThreshold = Math.max(0, Math.min(1, policyObj.commitThreshold));
-    hasField = true;
-  }
-  if (typeof policyObj.rollbackWindowSprints === "number" && Number.isFinite(policyObj.rollbackWindowSprints)) {
-    partial.rollbackWindowSprints = Math.max(1, Math.round(policyObj.rollbackWindowSprints));
-    hasField = true;
-  }
-  if (typeof policyObj.noveltyWeight === "number" && Number.isFinite(policyObj.noveltyWeight)) {
-    partial.noveltyWeight = Math.max(0, Math.min(1, policyObj.noveltyWeight));
-    hasField = true;
-  }
-  if (typeof policyObj.conservationWeight === "number" && Number.isFinite(policyObj.conservationWeight)) {
-    partial.conservationWeight = Math.max(0, Math.min(1, policyObj.conservationWeight));
-    hasField = true;
-  }
-  if (typeof policyObj.evidenceHorizonSprints === "number" && Number.isFinite(policyObj.evidenceHorizonSprints)) {
-    partial.evidenceHorizonSprints = Math.max(1, Math.round(policyObj.evidenceHorizonSprints));
-    hasField = true;
-  }
-  if (typeof policyObj.explorationBias === "number" && Number.isFinite(policyObj.explorationBias)) {
-    partial.explorationBias = Math.max(0, Math.min(1, policyObj.explorationBias));
-    hasField = true;
+  const numericFields: (keyof SearchPolicy)[] = [
+    "commitThreshold", "rollbackWindowSprints", "noveltyWeight",
+    "conservationWeight", "evidenceHorizonSprints", "explorationBias",
+    "reviewStrictness", "anchorEvidenceWeight",
+  ];
+  for (const field of numericFields) {
+    if (typeof policyObj[field] === "number" && Number.isFinite(policyObj[field])) {
+      (partial as Record<string, unknown>)[field] = policyObj[field];
+      hasField = true;
+    }
   }
   if (validComplexityPrefs.includes(policyObj.proposalComplexityPreference as string)) {
     partial.proposalComplexityPreference = policyObj.proposalComplexityPreference as SearchPolicy["proposalComplexityPreference"];
-    hasField = true;
-  }
-  if (typeof policyObj.reviewStrictness === "number" && Number.isFinite(policyObj.reviewStrictness)) {
-    partial.reviewStrictness = Math.max(0, Math.min(1, policyObj.reviewStrictness));
-    hasField = true;
-  }
-  if (typeof policyObj.anchorEvidenceWeight === "number" && Number.isFinite(policyObj.anchorEvidenceWeight)) {
-    partial.anchorEvidenceWeight = Math.max(0, Math.min(1, policyObj.anchorEvidenceWeight));
     hasField = true;
   }
   if (policyObj.moduleFocusWeights && typeof policyObj.moduleFocusWeights === "object") {
     const weights: Partial<Record<GenomeModuleKey, number>> = {};
     for (const [key, val] of Object.entries(policyObj.moduleFocusWeights as Record<string, unknown>)) {
       if (isGenomeModuleKey(key) && typeof val === "number" && Number.isFinite(val)) {
-        weights[key] = Math.max(0, Math.min(1, val));
+        weights[key] = val;
         hasField = true;
       }
     }
@@ -643,13 +619,18 @@ function fallbackReview(reason = "No valid review returned."): CoachReviewResult
 
 function normalizeReview(raw: Record<string, unknown> | null): CoachReviewResult {
   if (!raw) {
-    return fallbackReview();
+    console.warn("[coach-prompts] review response was unparseable — defaulting to revert");
+    return fallbackReview("Coach response was unparseable. Defaulting to revert to preserve current genome.");
   }
 
   const decisionRaw = asTrimmedText(raw.decision).toLowerCase();
-  const decision = decisionRaw === "commit" || decisionRaw === "revert"
-    ? decisionRaw
-    : "revert";
+  let decision: "commit" | "revert";
+  if (decisionRaw === "commit" || decisionRaw === "revert") {
+    decision = decisionRaw;
+  } else {
+    console.warn(`[coach-prompts] unrecognized decision "${decisionRaw}" — defaulting to revert`);
+    decision = "revert";
+  }
   const rationale = asTrimmedText(raw.rationale) || "No rationale provided.";
   const policyResponse = asTrimmedText(raw.policyResponse) || undefined;
 
