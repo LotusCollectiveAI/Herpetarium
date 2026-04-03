@@ -236,6 +236,7 @@ function buildFallbackEvaluation(
       "Sprint evaluation fallback was used because the primary evaluator failed for this sprint.",
       `Observed sprint record ${sprintResult.record} with win rate ${sprintResult.winRate.toFixed(4)} across ${sprintResult.matchResults.length} matches.`,
     ],
+    perMatchSummaries: [],
   };
 }
 

@@ -1067,6 +1067,20 @@ export interface PatchReviewSummary {
   firedTriggers: string[];
 }
 
+export interface MatchSummary {
+  matchId: number;
+  opponentRunId?: string;
+  matchKind?: string | null;
+  focalTeam: "amber" | "blue";
+  outcome: "win" | "loss" | "draw";
+  roundsPlayed: number;
+  ownDecodeByRound: Array<{ roundNumber: number; correct: boolean }>;
+  opponentInterceptByRound: Array<{ roundNumber: number; intercepted: boolean }>;
+  maxLeakageScore: number;
+  deceptionHighlights: string[];
+  summaryLines: string[];
+}
+
 export interface SprintEvaluation {
   runId: string;
   sprintNumber: number;
@@ -1080,6 +1094,7 @@ export interface SprintEvaluation {
   pendingPatchReviews: PatchReviewSummary[];
   policyNotices: ResearcherPolicyNotice[];
   evidenceLines: string[];
+  perMatchSummaries: MatchSummary[];
 }
 
 export interface SprintEvaluationInput {
