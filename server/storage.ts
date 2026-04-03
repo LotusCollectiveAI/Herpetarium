@@ -133,6 +133,7 @@ export interface IStorage {
   getAnchorEvaluations(runId: string, sprintNumber?: number): Promise<AnchorEvaluationRecord[]>;
   createPatchIndexEntry(entry: InsertPatchIndex): Promise<PatchIndex>;
   getPatchHistory(runId: string): Promise<PatchIndex[]>;
+  updatePatchIndexReview(id: number, data: { reviewStatus: string; reviewSummary: string }): Promise<void>;
   createPatchReview(entry: InsertPatchReviewRecord): Promise<PatchReviewRecord>;
   getPatchReviews(runId: string): Promise<PatchReviewRecord[]>;
   getPendingPatchReviews(runId: string): Promise<PatchIndex[]>;
@@ -527,6 +528,15 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(patchIndex)
       .where(eq(patchIndex.runId, runId))
       .orderBy(patchIndex.sprintNumber, patchIndex.createdAt, patchIndex.id);
+  }
+
+  async updatePatchIndexReview(id: number, data: { reviewStatus: string; reviewSummary: string }): Promise<void> {
+    await db.update(patchIndex)
+      .set({
+        reviewStatus: data.reviewStatus as PatchIndex["reviewStatus"],
+        reviewSummary: data.reviewSummary,
+      })
+      .where(eq(patchIndex.id, id));
   }
 
   async createPatchReview(entry: InsertPatchReviewRecord): Promise<PatchReviewRecord> {

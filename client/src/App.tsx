@@ -12,6 +12,8 @@ import Tournaments from "@/pages/Tournaments";
 import EvalDashboard from "@/pages/EvalDashboard";
 import Series from "@/pages/Series";
 import Evolution from "@/pages/Evolution";
+import Arena from "@/pages/Arena";
+import CoachRuns from "@/pages/CoachRuns";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -24,6 +26,8 @@ function Router() {
       <Route path="/eval" component={EvalDashboard} />
       <Route path="/series" component={Series} />
       <Route path="/evolution" component={Evolution} />
+      <Route path="/arena" component={Arena} />
+      <Route path="/coach/:id" component={CoachRuns} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -7,8 +7,10 @@ import type {
   CoachConfig,
   CoachDecision,
   CoachMatchmakingNote,
+  CoachPatchBundle,
   CoachProposal,
   CoachReviewResult,
+  CoachRollbackTrigger,
   CoachRun,
   CoachSprint,
   CoachResearchMetrics,
@@ -47,6 +49,7 @@ import {
   type PairingHistory,
 } from "./matchmaking";
 import { analyzeSprintMatches } from "./researchAnalyzer";
+import { evaluatePendingPatchReviews } from "./rollbackEvaluator";
 import { evaluateSprint } from "./sprintEvaluator";
 import { storage } from "./storage";
 
@@ -698,9 +701,23 @@ async function persistArenaSprintRecord(
     patchBundle: clonePatchBundle(coachCycle.proposal.patch),
     proposalId: coachCycle.proposal.proposalId,
     reviewDueSprint: coachCycle.decision === "commit" && coachCycle.proposal.patch
-      ? sprintResult.sprintNumber + 1
+      ? sprintResult.sprintNumber + computeReviewDelay(coachCycle.proposal.patch)
       : null,
   });
+}
+
+function computeReviewDelay(patch: CoachPatchBundle): number {
+  let maxDelay = 1;
+  for (const edit of patch.edits) {
+    if (edit.delta?.rollbackTriggers) {
+      for (const trigger of edit.delta.rollbackTriggers) {
+        if (typeof trigger !== "string" && trigger.reviewAfterSprints && trigger.reviewAfterSprints > maxDelay) {
+          maxDelay = trigger.reviewAfterSprints;
+        }
+      }
+    }
+  }
+  return maxDelay;
 }
 
 function toArenaCoachSlot(slot: ArenaRuntimeSlot): ArenaCoachSlot {
@@ -955,6 +972,46 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
             `Sprint evaluation failed for run ${slot.runId} sprint ${sprintNumber}: ${error instanceof Error ? error.message : String(error)}`,
           );
           evaluation = buildFallbackEvaluation(slot.runId, sprintResult, genomeBefore, compiledPrompts);
+        }
+
+        // Run rollback evaluation on pending patches from prior sprints
+        try {
+          const historicalEvals = await storage.getSprintEvaluations(slot.runId);
+          const evalsBySprint = new Map(
+            historicalEvals.map((record) => [record.sprintNumber, record.evaluation]),
+          );
+          evalsBySprint.set(sprintNumber, evaluation);
+
+          const patchReviews = await evaluatePendingPatchReviews({
+            runId: slot.runId,
+            currentSprint: sprintNumber,
+            evaluationsBySprint: evalsBySprint,
+          });
+
+          if (patchReviews.length > 0) {
+            logArena(`Evaluated ${patchReviews.length} pending patch review(s) for run ${slot.runId}`);
+            for (const review of patchReviews) {
+              logArena(`  Patch ${review.proposalId} from sprint ${review.committedSprint}: ${review.status} — ${review.summary}`);
+            }
+
+            // Refresh pendingPatchReviews in the evaluation with updated statuses
+            const updatedPending = evaluation.pendingPatchReviews.map((pending) => {
+              const reviewed = patchReviews.find((r) => r.proposalId === pending.proposalId);
+              if (reviewed) {
+                return {
+                  ...pending,
+                  status: reviewed.status,
+                  firedTriggers: reviewed.evaluations
+                    .filter((ev) => ev.status === "fired")
+                    .map((ev) => ev.description),
+                };
+              }
+              return pending;
+            });
+            evaluation = { ...evaluation, pendingPatchReviews: updatedPending };
+          }
+        } catch (error) {
+          logArena(`Patch review evaluation failed for run ${slot.runId}: ${error instanceof Error ? error.message : String(error)}`);
         }
 
         const sprintState = applySprintResultToCoachState(slot.state, sprintResult);

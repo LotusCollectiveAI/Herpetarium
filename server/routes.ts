@@ -1388,6 +1388,73 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/coach-runs", async (_req, res) => {
+    try {
+      const runs = await storage.listCoachRuns();
+      res.json(runs);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to list coach runs" });
+    }
+  });
+
+  // --- Evaluation, Anchor, and Patch Review endpoints ---
+
+  app.get("/api/coach/:id/evaluations", async (req, res) => {
+    try {
+      const records = await storage.getSprintEvaluations(req.params.id);
+      res.json(records.map((r) => ({ runId: r.runId, sprintNumber: r.sprintNumber, evaluation: r.evaluation })));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get evaluations" });
+    }
+  });
+
+  app.get("/api/coach/:id/patch-reviews", async (req, res) => {
+    try {
+      const reviews = await storage.getPatchReviews(req.params.id);
+      res.json(reviews);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get patch reviews" });
+    }
+  });
+
+  app.get("/api/coach/:id/anchors", async (req, res) => {
+    try {
+      const sprintNumber = req.query.sprint ? Number(req.query.sprint) : undefined;
+      const anchors = await storage.getAnchorEvaluations(req.params.id, sprintNumber);
+      res.json(anchors);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get anchor evaluations" });
+    }
+  });
+
+  app.get("/api/coach/:id/patches", async (req, res) => {
+    try {
+      const patches = await storage.getPatchHistory(req.params.id);
+      res.json(patches);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get patch history" });
+    }
+  });
+
+  app.get("/api/arena/:id/evaluations", async (req, res) => {
+    try {
+      const runs = await storage.getCoachRunsByArenaId(req.params.id);
+      const allEvaluations = await Promise.all(
+        runs.map(async (run) => {
+          const records = await storage.getSprintEvaluations(run.id);
+          return records.map((r) => ({
+            runId: r.runId,
+            sprintNumber: r.sprintNumber,
+            evaluation: r.evaluation,
+          }));
+        }),
+      );
+      res.json(allEvaluations.flat());
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get arena evaluations" });
+    }
+  });
+
   app.post("/api/validation", async (req, res) => {
     try {
       const parsed = validationConfigInputSchema.safeParse(req.body);
