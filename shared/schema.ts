@@ -994,12 +994,26 @@ export interface ResearcherPolicyNotice {
   message: string;
 }
 
+export type DisclosureArtifactType =
+  | "patch_card"
+  | "exemplar_clue"
+  | "delayed_dossier";
+
+export interface DisclosureArtifact {
+  type: DisclosureArtifactType;
+  title: string;
+  body: string;
+  sourceRunId?: string;
+  sourceSprint?: number;
+}
+
 export interface CoachPromptEnvironment {
   opponentGenome?: GenomeModules;
   disclosureText?: string;
   matchmakingBucket?: string;
   researcherPolicy?: ResearcherPolicyThresholds;
   arenaId?: string;
+  arenaBriefing?: string;
 }
 
 export interface TrainingSprintMetrics {

@@ -38,7 +38,7 @@ import {
   type SprintResult,
 } from "./coachLoop";
 import { coachCommitReview, coachProposePatch } from "./coachPrompts";
-import { buildDisclosureText } from "./disclosure";
+import { buildDisclosureText, type DisclosureBuildInput } from "./disclosure";
 import { compileGenomePrompts } from "./genomeCompiler";
 import {
   createPairingHistory,
@@ -317,19 +317,226 @@ function resolveArenaGameRules(config: ArenaConfig): GameRules {
     : { ...DEFAULT_GAME_RULES };
 }
 
-function buildDisclosureBundle(opponents: SprintOpponentContext[], foiaEnabled: boolean): string | undefined {
+async function collectExemplarClues(
+  runId: string,
+  limit = 3,
+): Promise<string[]> {
+  try {
+    const sprints = await storage.getCoachSprints(runId);
+    if (sprints.length === 0) return [];
+
+    const latestSprint = sprints[sprints.length - 1];
+    const matchIds = latestSprint.matchIds || [];
+    if (matchIds.length === 0) return [];
+
+    const matchRecords = await storage.getMatchesByIds(matchIds);
+    if (matchRecords.length === 0) return [];
+
+    // Determine the opponent's focal side in each match
+    const opponentFocalTeams = new Map<number, "amber" | "blue">();
+    for (const match of matchRecords) {
+      // The opponent's focal team: if match.runId === our runId, opponent is on the other side
+      if (match.runId === runId) {
+        opponentFocalTeams.set(match.id, match.focalTeam === "amber" ? "blue" : "amber");
+      } else if (match.opponentRunId === runId) {
+        opponentFocalTeams.set(match.id, match.focalTeam || "amber");
+      } else {
+        // This run is the opponent; the opponent's focal side is focalTeam
+        opponentFocalTeams.set(match.id, match.focalTeam === "amber" ? "blue" : "amber");
+      }
+    }
+
+    const rounds = await storage.getMatchRoundsForMatches(matchIds);
+    const exemplars: string[] = [];
+
+    // Prefer recent rounds, collect from opponent's team side
+    const sortedRounds = [...rounds].sort((a, b) => b.roundNumber - a.roundNumber);
+
+    for (const round of sortedRounds) {
+      if (exemplars.length >= limit) break;
+
+      const opponentTeam = opponentFocalTeams.get(round.matchId);
+      if (!opponentTeam || round.team !== opponentTeam) continue;
+
+      const clues = round.clues;
+      if (!Array.isArray(clues) || clues.length === 0) continue;
+
+      const decoded = round.ownCorrect ? "decoded" : "failed decode";
+      const intercepted = round.intercepted ? "intercepted" : "not intercepted";
+      exemplars.push(`R${round.roundNumber}: clues [${clues.join(", ")}] — ${decoded}, ${intercepted}`);
+    }
+
+    return exemplars;
+  } catch (error) {
+    logArena(`collectExemplarClues failed for run ${runId}: ${error instanceof Error ? error.message : String(error)}`);
+    return [];
+  }
+}
+
+async function buildDisclosureBundle(
+  opponents: SprintOpponentContext[],
+  foiaEnabled: boolean,
+  foiaDelaySprints: number,
+  currentSprint: number,
+): Promise<string | undefined> {
   if (!foiaEnabled || opponents.length === 0) {
     return undefined;
   }
 
-  const uniqueGenomes = Array.from(
-    new Map(opponents.map((opponent) => [JSON.stringify(opponent.genome), opponent.genome])).values(),
+  // Deduplicate by opponent runId
+  const uniqueOpponents = Array.from(
+    new Map(opponents.map((opponent) => [opponent.runId, opponent])).values(),
   );
 
-  return uniqueGenomes.map((genome, index) => {
-    const prefix = uniqueGenomes.length > 1 ? `Opponent ${index + 1}\n` : "";
-    return `${prefix}${buildDisclosureText(genome)}`;
-  }).join("\n\n");
+  const sections: string[] = [];
+
+  for (const [index, opponent] of uniqueOpponents.entries()) {
+    let latestOpponentSprint: CoachSprint | undefined;
+    try {
+      const opponentSprints = await storage.getCoachSprints(opponent.runId);
+      if (opponentSprints.length > 0) {
+        latestOpponentSprint = opponentSprints[opponentSprints.length - 1];
+      }
+    } catch {
+      // Continue without opponent sprint data
+    }
+
+    const exemplarClues = await collectExemplarClues(opponent.runId);
+
+    const input: DisclosureBuildInput = {
+      opponentRunId: opponent.runId,
+      currentSprint,
+      foiaEnabled,
+      foiaDelaySprints,
+      latestOpponentSprint,
+      exemplarClues,
+      currentGenome: opponent.genome,
+    };
+
+    const text = buildDisclosureText(input);
+    if (!text) continue;
+
+    const prefix = uniqueOpponents.length > 1 ? `Opponent ${index + 1}\n` : "";
+    sections.push(`${prefix}${text}`);
+  }
+
+  return sections.length > 0 ? sections.join("\n\n") : undefined;
+}
+
+async function buildArenaBriefing(
+  slots: ArenaRuntimeSlot[],
+  sprintNumber: number,
+): Promise<string> {
+  const lines: string[] = [];
+
+  // Section 1: Module mutation frequency
+  const moduleCounts = new Map<string, number>();
+  for (const slot of slots) {
+    try {
+      const sprints = await storage.getCoachSprints(slot.runId);
+      const currentSprint = sprints.find((s) => s.sprintNumber === sprintNumber);
+      if (currentSprint?.patchBundle && currentSprint.decision === "commit") {
+        const bundle = currentSprint.patchBundle;
+        for (const edit of bundle.edits) {
+          moduleCounts.set(edit.targetModule, (moduleCounts.get(edit.targetModule) || 0) + 1);
+        }
+      }
+    } catch {
+      // Continue
+    }
+  }
+
+  if (moduleCounts.size > 0) {
+    const sorted = Array.from(moduleCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 3);
+    lines.push("Module edits this sprint: " + sorted.map(([mod, count]) => `${mod} (${count})`).join(", "));
+  }
+
+  // Section 2: Biggest movers (compare win rates sprint-over-sprint)
+  const movers: Array<{ label: string; delta: number }> = [];
+  for (const slot of slots) {
+    try {
+      const evals = await storage.getSprintEvaluations(slot.runId);
+      const current = evals.find((e) => e.sprintNumber === sprintNumber);
+      const previous = evals.find((e) => e.sprintNumber === sprintNumber - 1);
+      if (current && previous) {
+        const currentWinRate = current.evaluation.training.winRate;
+        const previousWinRate = previous.evaluation.training.winRate;
+        const delta = currentWinRate - previousWinRate;
+        movers.push({ label: `slot${slot.slotIndex}`, delta });
+      }
+    } catch {
+      // Continue
+    }
+  }
+
+  if (movers.length > 0) {
+    movers.sort((a, b) => b.delta - a.delta);
+    const topImprover = movers[0];
+    const topDecliner = movers[movers.length - 1];
+    if (topImprover.delta > 0) {
+      lines.push(`Biggest improver: ${topImprover.label} (+${topImprover.delta.toFixed(3)} win rate)`);
+    }
+    if (topDecliner.delta < 0) {
+      lines.push(`Biggest decliner: ${topDecliner.label} (${topDecliner.delta.toFixed(3)} win rate)`);
+    }
+  }
+
+  // Section 3: Rollback trigger patterns
+  const triggerCounts = new Map<string, number>();
+  for (const slot of slots) {
+    try {
+      const patches = await storage.getPatchHistory(slot.runId);
+      for (const patch of patches) {
+        if (patch.sprintNumber !== sprintNumber) continue;
+        if (patch.delta?.rollbackTriggers) {
+          for (const trigger of patch.delta.rollbackTriggers) {
+            const desc = typeof trigger === "string" ? trigger : trigger.description || "unnamed trigger";
+            triggerCounts.set(desc, (triggerCounts.get(desc) || 0) + 1);
+          }
+        }
+      }
+    } catch {
+      // Continue
+    }
+  }
+
+  if (triggerCounts.size > 0) {
+    const topTriggers = Array.from(triggerCounts.entries()).sort((a, b) => b[1] - a[1]).slice(0, 2);
+    lines.push("Active rollback triggers: " + topTriggers.map(([desc, count]) => `"${desc}" (${count})`).join(", "));
+  }
+
+  // Section 4: Delayed successful patch summaries from other slots (1-sprint delay)
+  if (sprintNumber >= 2) {
+    const delayedHighlights: string[] = [];
+    for (const slot of slots) {
+      try {
+        const sprints = await storage.getCoachSprints(slot.runId);
+        const priorSprint = sprints.find((s) => s.sprintNumber === sprintNumber - 1);
+        if (priorSprint?.decision === "commit" && priorSprint.patchBundle) {
+          // Check if the patch was reviewed as clear, or no trigger fired
+          const reviews = await storage.getPatchReviews(slot.runId);
+          const patchReview = reviews.find((r) =>
+            r.committedSprint === sprintNumber - 1 &&
+            r.proposalId === priorSprint.proposal?.proposalId
+          );
+          const isSuccess = patchReview?.status === "clear" || !patchReview;
+          if (isSuccess && priorSprint.patchBundle.summary) {
+            delayedHighlights.push(`slot${slot.slotIndex}: ${priorSprint.patchBundle.summary}`);
+          }
+        }
+      } catch {
+        // Continue
+      }
+    }
+    if (delayedHighlights.length > 0) {
+      lines.push("Successful patches last sprint:");
+      for (const highlight of delayedHighlights.slice(0, 3)) {
+        lines.push(`  ${highlight}`);
+      }
+    }
+  }
+
+  return lines.length > 0 ? lines.join("\n") : "";
 }
 
 function summarizeMatchmakingNotes(opponents: SprintOpponentContext[]): CoachMatchmakingNote[] | undefined {
@@ -846,6 +1053,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
   const pairingHistory = createPairingHistory();
   let sprintsCompleted = 0;
   let totalGamesPlayed = 0;
+  let priorArenaBriefing: string | undefined;
 
   try {
     for (const [slotIndex, seedGenome] of config.seedGenomes.entries()) {
@@ -950,11 +1158,18 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
         const genomeBefore = cloneGenome(slot.state.genome);
         const compiledPrompts = compileGenomePrompts(genomeBefore);
         const primaryOpponentGenome = (opponentsBySlot.get(slot.slotIndex) || [])[0]?.genome;
+        const disclosureText = await buildDisclosureBundle(
+          opponentsBySlot.get(slot.slotIndex) || [],
+          foiaActive,
+          foiaDelaySprints,
+          sprintNumber,
+        );
         const promptEnv = {
           arenaId: config.arenaId,
-          disclosureText: buildDisclosureBundle(opponentsBySlot.get(slot.slotIndex) || [], foiaActive),
+          disclosureText,
           matchmakingBucket: (opponentsBySlot.get(slot.slotIndex) || [])[0]?.bucket,
           opponentGenome: primaryOpponentGenome ? cloneGenome(primaryOpponentGenome) : undefined,
+          arenaBriefing: priorArenaBriefing,
         };
         let evaluation: SprintEvaluation;
 
@@ -1015,7 +1230,6 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
         }
 
         const sprintState = applySprintResultToCoachState(slot.state, sprintResult);
-        const disclosureText = promptEnv.disclosureText;
         const coachConfig = buildAutopsyCoachConfig(
           config,
           primaryOpponentGenome,
@@ -1097,6 +1311,14 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
 
       logArena(`Arena sprint ${sprintNumber} complete: [${progress}]`);
       logArena(`Arena sprint ${sprintNumber} matchmaking: ${formatBucketDistribution(pairings)}`);
+
+      // Compute arena briefing for the next sprint (1-sprint delay)
+      try {
+        const briefing = await buildArenaBriefing(slots, sprintNumber);
+        priorArenaBriefing = briefing || undefined;
+      } catch (error) {
+        logArena(`Arena briefing failed for sprint ${sprintNumber}: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
     await finalizeArenaRuns(slots, "completed", new Date());

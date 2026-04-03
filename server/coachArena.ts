@@ -203,11 +203,25 @@ export async function runEcology(config: EcologyConfig): Promise<EcologyResult> 
       const foiaActive = config.foiaEnabled && shouldInjectFoia(left.state.currentSprint, foiaDelaySprints);
       const leftEnv = buildSprintEnvironment(
         right,
-        foiaActive ? buildDisclosureText(right.state.genome) : undefined,
+        foiaActive ? buildDisclosureText({
+          opponentRunId: right.runId,
+          currentSprint: sprintIndex + 1,
+          foiaEnabled: config.foiaEnabled,
+          foiaDelaySprints,
+          exemplarClues: [],
+          currentGenome: right.state.genome,
+        }) : undefined,
       );
       const rightEnv = buildSprintEnvironment(
         left,
-        foiaActive ? buildDisclosureText(left.state.genome) : undefined,
+        foiaActive ? buildDisclosureText({
+          opponentRunId: left.runId,
+          currentSprint: sprintIndex + 1,
+          foiaEnabled: config.foiaEnabled,
+          foiaDelaySprints,
+          exemplarClues: [],
+          currentGenome: left.state.genome,
+        }) : undefined,
       );
       const leftGenomeBefore = cloneGenome(left.state.genome);
       const rightGenomeBefore = cloneGenome(right.state.genome);
