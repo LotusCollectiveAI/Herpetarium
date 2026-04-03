@@ -27,6 +27,10 @@ import {
   type InsertCoachRun,
   type CoachSprint,
   type InsertCoachSprint,
+  type PatchIndex,
+  type InsertPatchIndex,
+  type MetricYield,
+  type InsertMetricYield,
   type TeamChatter,
   type InsertTeamChatter,
   matches,
@@ -42,6 +46,8 @@ import {
   generations,
   coachRuns,
   coachSprints,
+  patchIndex,
+  metricYield,
   teamChatter,
 } from "@shared/schema";
 import { db } from "./db";
@@ -107,9 +113,14 @@ export interface IStorage {
   updateCoachRun(id: string, fields: Partial<InsertCoachRun>): Promise<CoachRun | undefined>;
   getCoachRun(id: string): Promise<CoachRun | undefined>;
   listCoachRuns(): Promise<CoachRun[]>;
+  getCoachRunsByArenaId(arenaId: string): Promise<CoachRun[]>;
 
   createCoachSprint(sprint: InsertCoachSprint): Promise<CoachSprint>;
   getCoachSprints(runId: string): Promise<CoachSprint[]>;
+  createPatchIndexEntry(entry: InsertPatchIndex): Promise<PatchIndex>;
+  getPatchHistory(runId: string): Promise<PatchIndex[]>;
+  upsertMetricYield(entry: InsertMetricYield): Promise<MetricYield>;
+  getMetricYields(arenaId: string): Promise<MetricYield[]>;
 
   createStrategyGenome(data: InsertStrategyGenome): Promise<StrategyGenome>;
   updateStrategyGenome(id: number, data: Partial<InsertStrategyGenome>): Promise<StrategyGenome | undefined>;
@@ -436,6 +447,12 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(coachRuns).orderBy(desc(coachRuns.createdAt));
   }
 
+  async getCoachRunsByArenaId(arenaId: string): Promise<CoachRun[]> {
+    return db.select().from(coachRuns)
+      .where(eq(coachRuns.arenaId, arenaId))
+      .orderBy(coachRuns.createdAt, coachRuns.id);
+  }
+
   async createCoachSprint(sprint: InsertCoachSprint): Promise<CoachSprint> {
     const [created] = await db.insert(coachSprints).values(sprint as typeof coachSprints.$inferInsert).returning();
     return created;
@@ -445,6 +462,48 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(coachSprints)
       .where(eq(coachSprints.runId, runId))
       .orderBy(coachSprints.sprintNumber);
+  }
+
+  async createPatchIndexEntry(entry: InsertPatchIndex): Promise<PatchIndex> {
+    const [created] = await db.insert(patchIndex).values(entry as typeof patchIndex.$inferInsert).returning();
+    return created;
+  }
+
+  async getPatchHistory(runId: string): Promise<PatchIndex[]> {
+    return db.select().from(patchIndex)
+      .where(eq(patchIndex.runId, runId))
+      .orderBy(patchIndex.sprintNumber, patchIndex.createdAt, patchIndex.id);
+  }
+
+  async upsertMetricYield(entry: InsertMetricYield): Promise<MetricYield> {
+    const [existing] = await db.select().from(metricYield)
+      .where(and(
+        eq(metricYield.arenaId, entry.arenaId),
+        eq(metricYield.metricKey, entry.metricKey),
+      ))
+      .limit(1);
+
+    if (!existing) {
+      const [created] = await db.insert(metricYield)
+        .values(entry as typeof metricYield.$inferInsert)
+        .returning();
+      return created;
+    }
+
+    const [updated] = await db.update(metricYield)
+      .set({
+        ...entry,
+        updatedAt: new Date(),
+      } as Partial<typeof metricYield.$inferInsert>)
+      .where(eq(metricYield.id, existing.id))
+      .returning();
+    return updated;
+  }
+
+  async getMetricYields(arenaId: string): Promise<MetricYield[]> {
+    return db.select().from(metricYield)
+      .where(eq(metricYield.arenaId, arenaId))
+      .orderBy(metricYield.metricKey, metricYield.id);
   }
 
   async createStrategyGenome(data: InsertStrategyGenome): Promise<StrategyGenome> {

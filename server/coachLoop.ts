@@ -2,14 +2,19 @@ import { randomUUID } from "crypto";
 import type {
   AIPlayerConfig,
   AIProvider,
+  CoachDeltaOp,
+  CoachEvidenceRef,
   CoachResearchMetrics,
   CoachRun as PersistedCoachRun,
+  CoachSemanticDelta,
   CoachSprint as PersistedCoachSprint,
   GenomeModules,
   HeadlessMatchConfig,
   MatchRound,
+  PatchMeasuredOutcome,
+  SearchPolicy,
 } from "@shared/schema";
-import { getDefaultConfig } from "@shared/schema";
+import { DEFAULT_SEARCH_POLICY, getDefaultConfig } from "@shared/schema";
 import { callAI, estimateCost } from "./ai";
 import { runBoundedSettledPool } from "./boundedPool";
 import { runHeadlessMatch } from "./headlessRunner";
@@ -107,6 +112,10 @@ export interface CoachPatch {
   expectedEffect: string;
 }
 
+export interface CoachStructuredPatch extends CoachPatch {
+  delta?: CoachSemanticDelta;
+}
+
 export interface SprintResult {
   sprintNumber: number;
   matchResults: Array<{
@@ -128,7 +137,7 @@ export interface CoachState {
   teamId: string;
   genome: GenomeModules;
   beliefs: CoachBelief[];
-  patchHistory: Array<CoachPatch & { sprintApplied: number; decision: "commit" | "revert"; postCommitWinRate?: number }>;
+  patchHistory: Array<CoachStructuredPatch & { sprintApplied: number; decision: "commit" | "revert"; postCommitWinRate?: number }>;
   sprintHistory: SprintResult[];
   currentSprint: number;
 }
@@ -156,6 +165,7 @@ export interface CoachSprintEnvironment {
 export interface CoachRunRecord {
   id: string;
   config: CoachConfig;
+  searchPolicy: SearchPolicy;
   status: CoachRunStatus;
   createdAt: string;
   startedAt?: string;
@@ -189,6 +199,23 @@ interface RawCoachPatch {
   newValue?: unknown;
   rationale?: unknown;
   expectedEffect?: unknown;
+  delta?: unknown;
+}
+
+interface RawCoachEvidenceRef {
+  sprintNumber?: unknown;
+  matchId?: unknown;
+  observation?: unknown;
+}
+
+interface RawCoachSemanticDelta {
+  op?: unknown;
+  module?: unknown;
+  oldText?: unknown;
+  newText?: unknown;
+  rationale?: unknown;
+  evidenceChain?: unknown;
+  rollbackTriggers?: unknown;
 }
 
 interface RawCoachResponse {
@@ -211,7 +238,7 @@ export interface CoachSprintRecord {
   genomeAfter: GenomeModules;
   beliefsAfter: CoachBelief[];
   decision: CoachDecision;
-  patch: CoachPatch | null;
+  patch: CoachStructuredPatch | null;
   disclosureText?: string;
   researchMetrics: CoachResearchMetrics;
   createdAt: string;
@@ -299,6 +326,10 @@ function isCoachBeliefUpdateOp(value: unknown): value is CoachBeliefUpdateOp {
   return value === "assert" || value === "revise" || value === "retract";
 }
 
+function isCoachDeltaOp(value: unknown): value is CoachDeltaOp {
+  return value === "add_rule" || value === "modify_rule" || value === "retire_rule";
+}
+
 function asTeam(value: unknown): Team | null {
   return value === "amber" || value === "blue" ? value : null;
 }
@@ -306,6 +337,18 @@ function asTeam(value: unknown): Team | null {
 function clampConfidence(value: unknown): number {
   if (typeof value !== "number" || !Number.isFinite(value)) return 0.5;
   return Math.max(0, Math.min(1, value));
+}
+
+function asTrimmedText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function asPositiveIntegerOrUndefined(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : undefined;
 }
 
 function formatError(error: unknown): string {
@@ -483,7 +526,9 @@ How Decrypto works: Each team has 4 secret keywords in fixed positions (1-4). Ea
 
 Win conditions: 2 interception tokens (successful intercepts) or forcing opponent into 2 white tokens (miscommunication — team fails to decode own clues).
 
-You are the intelligence. The code just executes your decisions. Patch value is measured after the fact, not pre-screened. You have complete freedom in what you propose.`;
+You are the intelligence. The code just executes your decisions. Patch value is measured after the fact, not pre-screened. You have complete freedom in what you propose.
+
+When you propose a patch, keep the module text itself as full freeform narrative prose. Also include a structured semantic delta as metadata about the change. The structured delta must describe the semantic rule change, not replace the freeform module narrative.`;
 
   const userPrompt = [
     "## Your Team's Current Strategy",
@@ -514,7 +559,10 @@ You are the intelligence. The code just executes your decisions. Patch value is 
     "   - Return an empty array if no belief changes are needed this sprint.",
     "   - Keep evidence specific and grounded in this sprint's round summaries.",
     "2. DECISION: Either propose ONE strategic patch or revert (keep current strategy unchanged).",
-    "   - If proposing a patch: specify which module to change, the new value, your rationale, and what you expect to happen.",
+    "   - If proposing a patch: specify which module to change, the new freeform narrative value, your rationale, what you expect to happen, and a structured delta in patch.delta.",
+    "   - patch.delta must include: op, module, rationale, evidenceChain, rollbackTriggers, plus oldText/newText when appropriate.",
+    "   - Use evidenceChain entries grounded in this sprint. Each entry needs sprintNumber, optional matchId, and observation.",
+    "   - Keep patch.delta.module aligned with patch.targetModule.",
     "   - If reverting: explain why the current strategy should be kept.",
     "",
     "Respond in valid JSON with double quotes and no markdown fences. Use one of these two shapes exactly:",
@@ -527,9 +575,20 @@ You are the intelligence. The code just executes your decisions. Patch value is 
     '  "decision": "commit",',
     '  "patch": {',
     '    "targetModule": "cluePhilosophy",',
-    '    "newValue": "...",',
+    '    "newValue": "Full freeform narrative text for the entire module after the change.",',
     '    "rationale": "...",',
-    '    "expectedEffect": "..."',
+    '    "expectedEffect": "...",',
+    '    "delta": {',
+    '      "op": "modify_rule",',
+    '      "module": "cluePhilosophy",',
+    '      "oldText": "...",',
+    '      "newText": "...",',
+    '      "rationale": "...",',
+    '      "evidenceChain": [',
+    '        { "sprintNumber": 3, "matchId": 42, "observation": "..." }',
+    "      ],",
+    '      "rollbackTriggers": ["..."]',
+    "    }",
     "  }",
     "}",
     "or",
@@ -701,7 +760,79 @@ function mergeBeliefUpdates(
   return mergedBeliefs;
 }
 
-function normalizePatch(rawPatch: unknown, genome: GenomeModules): CoachPatch | null {
+function normalizeEvidenceRef(rawEvidenceRef: unknown): CoachEvidenceRef | null {
+  if (!rawEvidenceRef || typeof rawEvidenceRef !== "object") return null;
+
+  const evidenceRef = rawEvidenceRef as RawCoachEvidenceRef;
+  const sprintNumber = asPositiveIntegerOrUndefined(evidenceRef.sprintNumber);
+  const observation = asTrimmedText(evidenceRef.observation);
+
+  if (!sprintNumber || !observation) {
+    return null;
+  }
+
+  const matchId = asPositiveIntegerOrUndefined(evidenceRef.matchId);
+
+  return {
+    sprintNumber,
+    matchId,
+    observation,
+  };
+}
+
+function normalizeSemanticDelta(
+  rawDelta: unknown,
+  patch: CoachPatch,
+): CoachSemanticDelta | undefined {
+  if (!rawDelta || typeof rawDelta !== "object") return undefined;
+
+  const delta = rawDelta as RawCoachSemanticDelta;
+  if (!isCoachDeltaOp(delta.op) || !isGenomeModuleKey(delta.module) || delta.module !== patch.targetModule) {
+    return undefined;
+  }
+
+  if (!Array.isArray(delta.evidenceChain) || !Array.isArray(delta.rollbackTriggers)) {
+    return undefined;
+  }
+
+  const evidenceChain = delta.evidenceChain
+    .map((entry) => normalizeEvidenceRef(entry))
+    .filter((entry): entry is CoachEvidenceRef => entry !== null);
+  const rollbackTriggers = delta.rollbackTriggers
+    .map((entry) => asTrimmedText(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  const rationale = asTrimmedText(delta.rationale) || patch.rationale;
+  const oldText = asTrimmedText(delta.oldText) || (delta.op === "add_rule" ? undefined : patch.oldValue);
+  const newText = asTrimmedText(delta.newText) || (delta.op === "retire_rule" ? undefined : patch.newValue);
+
+  if (!rationale || evidenceChain.length === 0) {
+    return undefined;
+  }
+
+  if (delta.op === "add_rule" && !newText) {
+    return undefined;
+  }
+
+  if (delta.op === "modify_rule" && (!oldText || !newText)) {
+    return undefined;
+  }
+
+  if (delta.op === "retire_rule" && !oldText) {
+    return undefined;
+  }
+
+  return {
+    op: delta.op,
+    module: delta.module,
+    oldText,
+    newText,
+    rationale,
+    evidenceChain,
+    rollbackTriggers,
+  };
+}
+
+function normalizePatch(rawPatch: unknown, genome: GenomeModules): CoachStructuredPatch | null {
   if (!rawPatch || typeof rawPatch !== "object") return null;
 
   const patch = rawPatch as RawCoachPatch;
@@ -715,13 +846,20 @@ function normalizePatch(rawPatch: unknown, genome: GenomeModules): CoachPatch | 
     return null;
   }
 
-  return {
+  const normalizedPatch: CoachStructuredPatch = {
     targetModule: patch.targetModule,
     oldValue: genome[patch.targetModule],
     newValue,
     rationale,
     expectedEffect,
   };
+
+  const delta = normalizeSemanticDelta(patch.delta, normalizedPatch);
+  if (delta) {
+    normalizedPatch.delta = delta;
+  }
+
+  return normalizedPatch;
 }
 
 function normalizeDecision(rawDecision: unknown): CoachDecision | null {
@@ -797,7 +935,7 @@ export function applySprintResultToCoachState(state: CoachState, sprintResult: S
 export function applyCoachAutopsyResult(
   state: CoachState,
   sprintResult: SprintResult,
-  autopsy: { beliefs: CoachBelief[]; patch: CoachPatch | null; decision: CoachDecision },
+  autopsy: { beliefs: CoachBelief[]; patch: CoachStructuredPatch | null; decision: CoachDecision },
 ): CoachState {
   const nextState: CoachState = {
     ...state,
@@ -846,6 +984,40 @@ function summarizeSprintResearchMetrics(sprintResult: SprintResult): CoachResear
   };
 }
 
+function summarizePatchMeasuredOutcome(sprintResult: SprintResult): PatchMeasuredOutcome {
+  const metrics = summarizeSprintResearchMetrics(sprintResult);
+
+  return {
+    wins: metrics.wins ?? 0,
+    losses: metrics.losses ?? 0,
+    draws: metrics.draws ?? 0,
+  };
+}
+
+function getPatchIndexModule(autopsy: { patch: CoachStructuredPatch | null }): string {
+  // Reverts do not carry a module-specific patch payload, but patch_index.module is required.
+  return autopsy.patch?.targetModule ?? "none";
+}
+
+export async function persistPatchIndexRecord(
+  runId: string,
+  sprintResult: SprintResult,
+  genomeBefore: GenomeModules,
+  state: CoachState,
+  autopsy: { decision: CoachDecision; patch: CoachStructuredPatch | null },
+): Promise<void> {
+  await storage.createPatchIndexEntry({
+    runId,
+    sprintNumber: sprintResult.sprintNumber,
+    module: getPatchIndexModule(autopsy),
+    decision: autopsy.decision === "commit" && autopsy.patch ? "committed" : "reverted",
+    delta: autopsy.patch?.delta ?? null,
+    genomeBefore: cloneGenome(genomeBefore),
+    genomeAfter: autopsy.decision === "commit" && autopsy.patch ? cloneGenome(state.genome) : null,
+    measuredOutcome: summarizePatchMeasuredOutcome(sprintResult),
+  });
+}
+
 function toCoachSprintRecord(sprint: PersistedCoachSprint): CoachSprintRecord {
   return {
     id: sprint.id,
@@ -870,6 +1042,7 @@ function toCoachRunRecord(run: PersistedCoachRun, sprints: PersistedCoachSprint[
   return {
     id: run.id,
     config: defaultCoachConfig(run.config),
+    searchPolicy: run.searchPolicy ?? DEFAULT_SEARCH_POLICY,
     status: run.status,
     createdAt: run.createdAt.toISOString(),
     startedAt: toIsoString(run.startedAt),
@@ -906,7 +1079,7 @@ export async function persistCoachSprintRecord(
   sprintResult: SprintResult,
   genomeBefore: GenomeModules,
   state: CoachState,
-  autopsy: { decision: CoachDecision; patch: CoachPatch | null },
+  autopsy: { decision: CoachDecision; patch: CoachStructuredPatch | null },
 ): Promise<void> {
   await storage.createCoachSprint({
     runId,
@@ -923,6 +1096,8 @@ export async function persistCoachSprintRecord(
     disclosureText: env.disclosureText || null,
     researchMetrics: summarizeSprintResearchMetrics(sprintResult),
   });
+
+  await persistPatchIndexRecord(runId, sprintResult, genomeBefore, state, autopsy);
 }
 
 export function defaultCoachConfig(overrides: Partial<CoachConfig> = {}): CoachConfig {
@@ -1037,7 +1212,9 @@ export async function runCoachSprint(
       const result = await runHeadlessMatch({
         players: buildHeadlessPlayers(config, sprintNumber, matchIndex),
         fastMode: true,
-        seed: `${state.teamId}-s${sprintNumber}-m${matchIndex + 1}`,
+        seed: env.matchmakingBucket
+          ? `${state.teamId}-s${sprintNumber}-${env.matchmakingBucket}-m${matchIndex + 1}`
+          : `${state.teamId}-s${sprintNumber}-m${matchIndex + 1}`,
         experimentId: `coach-${state.teamId}`,
         teamSize: config.teamSize,
       }, undefined, teamSystemPrompts);
@@ -1095,7 +1272,7 @@ export async function coachAutopsy(
   sprintResult: SprintResult,
   config: CoachConfig,
   env?: Pick<CoachSprintEnvironment, "disclosureText">,
-): Promise<{ beliefs: CoachBelief[]; patch: CoachPatch | null; decision: "commit" | "revert" }> {
+): Promise<{ beliefs: CoachBelief[]; patch: CoachStructuredPatch | null; decision: "commit" | "revert" }> {
   const aiConfig = buildAIConfig(config.coachProvider, config.coachModel);
   const { systemPrompt, userPrompt } = buildCoachPrompt(state, sprintResult, env);
   const fullPrompt = `${systemPrompt}\n\n${userPrompt}`;
@@ -1274,7 +1451,11 @@ export async function runCoachLoop(config: CoachConfig): Promise<CoachState> {
   return runCoachRun(run.id);
 }
 
-export async function createCoachRunWithInitialState(config: CoachConfig, initialState: CoachState): Promise<CoachRunRecord> {
+export async function createCoachRunWithInitialState(
+  config: CoachConfig,
+  initialState: CoachState,
+  arenaId?: string,
+): Promise<CoachRunRecord> {
   const normalizedConfig = defaultCoachConfig(config);
   if (!normalizedConfig.opponentGenome) {
     normalizedConfig.opponentGenome = cloneGenome(DEFAULT_OPPONENT_GENOME);
@@ -1288,7 +1469,8 @@ export async function createCoachRunWithInitialState(config: CoachConfig, initia
     currentGenome: cloneGenome(initialState.genome),
     currentBeliefs: [],
     currentSprint: 0,
-    arenaId: initialState.teamId,
+    arenaId: arenaId ?? initialState.teamId,
+    searchPolicy: DEFAULT_SEARCH_POLICY,
     budgetCapUsd: normalizedConfig.budgetCapUsd?.toFixed(2) ?? null,
     actualCostUsd: null,
   });
@@ -1300,9 +1482,17 @@ export async function createCoachRunWithInitialState(config: CoachConfig, initia
   return toCoachRunRecord(persistedRun, []);
 }
 
-export async function createCoachRun(config: CoachConfig): Promise<CoachRunRecord> {
+export async function createCoachRun(
+  config: CoachConfig,
+  initialState?: CoachState,
+  arenaId?: string,
+): Promise<CoachRunRecord> {
   const normalizedConfig = defaultCoachConfig(config);
-  return createCoachRunWithInitialState(normalizedConfig, createInitialCoachState(normalizedConfig));
+  return createCoachRunWithInitialState(
+    normalizedConfig,
+    initialState ?? createInitialCoachState(normalizedConfig),
+    arenaId,
+  );
 }
 
 export async function runCoachRun(id: string): Promise<CoachState> {

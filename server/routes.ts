@@ -1,5 +1,6 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import { randomUUID } from "crypto";
 import { setupWebSocket, createGame } from "./websocket";
 import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig } from "@shared/schema";
 import { MODEL_REGISTRY, getModelCost, getModelKey } from "@shared/modelRegistry";
@@ -124,6 +125,68 @@ const tournamentConfigSchema = z.object({
   delayBetweenMatchesMs: z.number().int().min(0).max(60000).optional(),
   skipModelValidation: z.boolean().optional(),
   ablations: z.object({ flags: z.array(ablationFlagSchema).min(1) }).optional(),
+});
+
+const genomeModulesSchema = z.object({
+  cluePhilosophy: z.string().min(1),
+  opponentModeling: z.string().min(1),
+  riskTolerance: z.string().min(1),
+  memoryPolicy: z.string().min(1),
+});
+
+const arenaCoachConfigSchema = z.object({
+  coachProvider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
+  coachModel: z.string().min(1),
+  playerProvider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
+  playerModel: z.string().min(1),
+  matchesPerSprint: z.number().int().min(1),
+  sprintConcurrency: z.number().int().min(1),
+  totalSprints: z.number().int().min(1),
+  teamSize: z.union([z.literal(2), z.literal(3)]),
+  budgetCapUsd: z.number().positive().optional(),
+});
+
+const arenaConfigInputSchema = z.object({
+  seedGenomes: z.array(genomeModulesSchema).length(8),
+  coachConfig: arenaCoachConfigSchema,
+  totalSprints: z.number().int().min(1),
+  matchesPerSprint: z.number().int().min(1),
+  globalMatchConcurrency: z.number().int().min(1),
+  matchmaking: z.object({
+    nearPeer: z.number(),
+    diagnostic: z.number(),
+    mirror: z.number(),
+    novelty: z.number(),
+    baseline: z.number(),
+  }),
+  foiaEnabled: z.boolean(),
+  foiaDelaySprints: z.number().int().min(0).optional(),
+});
+
+const validationGateSchema = z.object({
+  label: z.enum(["g10", "g30", "g100"]),
+  totalGames: z.number().int().min(1),
+});
+
+const validationCoachConfigSchema = arenaCoachConfigSchema.omit({
+  matchesPerSprint: true,
+  totalSprints: true,
+});
+
+const validationConfigInputSchema = z.object({
+  seedGenomes: z.array(genomeModulesSchema).length(8),
+  coachConfig: validationCoachConfigSchema,
+  globalMatchConcurrency: z.number().int().min(1),
+  matchmaking: z.object({
+    nearPeer: z.number(),
+    diagnostic: z.number(),
+    mirror: z.number(),
+    novelty: z.number(),
+    baseline: z.number(),
+  }),
+  foiaEnabled: z.boolean(),
+  foiaDelaySprints: z.number().int().min(0).optional(),
+  gates: z.array(validationGateSchema).min(1).optional(),
 });
 
 export async function registerRoutes(
@@ -1279,6 +1342,97 @@ export async function registerRoutes(
       res.json(run);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to get coach run" });
+    }
+  });
+
+  app.post("/api/arena", async (req, res) => {
+    try {
+      const parsed = arenaConfigInputSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid arena configuration", details: parsed.error.issues });
+      }
+
+      const arenaId = randomUUID().slice(0, 8);
+      const arenaConfig = {
+        ...parsed.data,
+        arenaId,
+      };
+
+      const { runArena } = await import("./arena");
+      runArena(arenaConfig).catch((error) => {
+        console.error(`[arena] Arena ${arenaId} failed:`, error);
+      });
+
+      res.json({ arenaId });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to start arena" });
+    }
+  });
+
+  app.get("/api/arena/:id", async (req, res) => {
+    try {
+      const { getArenaResult } = await import("./arena");
+      const result = await getArenaResult(req.params.id);
+      if (!result) {
+        return res.status(404).json({ error: "Arena not found" });
+      }
+
+      res.json(result);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get arena" });
+    }
+  });
+
+  app.post("/api/validation", async (req, res) => {
+    try {
+      const parsed = validationConfigInputSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ error: "Invalid validation configuration", details: parsed.error.issues });
+      }
+
+      const gates = parsed.data.gates;
+      const validationPrefix = `validation-${randomUUID().slice(0, 8)}`;
+      const { buildValidationArenaId, runValidationWithPrefix, VALIDATION_GATES } = await import("./validationHarness");
+      const firstGate = (gates && gates.length > 0 ? gates : VALIDATION_GATES)[0];
+      const validationId = buildValidationArenaId(validationPrefix, firstGate.label);
+
+      runValidationWithPrefix(
+        {
+          seedGenomes: parsed.data.seedGenomes,
+          coachConfig: {
+            ...parsed.data.coachConfig,
+            matchesPerSprint: 2,
+            totalSprints: 1,
+          },
+          globalMatchConcurrency: parsed.data.globalMatchConcurrency,
+          matchmaking: parsed.data.matchmaking,
+          foiaEnabled: parsed.data.foiaEnabled,
+          foiaDelaySprints: parsed.data.foiaDelaySprints,
+        },
+        validationPrefix,
+        gates,
+      ).catch((error) => {
+        console.error(`[validation] Validation ${validationId} failed:`, error);
+      });
+
+      res.json({ validationId });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to start validation" });
+    }
+  });
+
+  app.get("/api/pareto/:arenaId", async (req, res) => {
+    try {
+      const runs = await storage.getCoachRunsByArenaId(req.params.arenaId);
+      if (runs.length === 0) {
+        return res.status(404).json({ error: "Arena not found" });
+      }
+
+      const { computeArenaPareto } = await import("./pareto");
+      const frontier = await computeArenaPareto(req.params.arenaId);
+      res.json(frontier);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to compute Pareto frontier" });
     }
   });
 

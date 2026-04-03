@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
@@ -419,7 +419,7 @@ export const matches = pgTable("matches", {
   amberBlackTokens: integer("amber_black_tokens").notNull().default(0),
   blueWhiteTokens: integer("blue_white_tokens").notNull().default(0),
   blueBlackTokens: integer("blue_black_tokens").notNull().default(0),
-  gameSeed: varchar("game_seed", { length: 50 }),
+  gameSeed: varchar("game_seed", { length: 200 }),
   ablations: jsonb("ablations"),
   qualityStatus: varchar("quality_status", { length: 20 }).$type<MatchQualityStatus>().notNull().default("clean"),
   qualitySummary: jsonb("quality_summary").$type<MatchQualitySummary>().notNull(),
@@ -701,6 +701,24 @@ export interface GenomeModules {
   memoryPolicy: string;
 }
 
+export type CoachDeltaOp = "add_rule" | "modify_rule" | "retire_rule";
+
+export interface CoachEvidenceRef {
+  sprintNumber: number;
+  matchId?: number;
+  observation: string;
+}
+
+export interface CoachSemanticDelta {
+  op: CoachDeltaOp;
+  module: keyof GenomeModules;
+  oldText?: string;
+  newText?: string;
+  rationale: string;
+  evidenceChain: CoachEvidenceRef[];
+  rollbackTriggers: string[];
+}
+
 export const strategyGenomes = pgTable("strategy_genomes", {
   id: serial("id").primaryKey(),
   evolutionRunId: integer("evolution_run_id").notNull(),
@@ -818,9 +836,31 @@ export interface CoachPatch {
   expectedEffect: string;
 }
 
+export interface CoachStructuredPatch extends CoachPatch {
+  delta?: CoachSemanticDelta;
+}
+
 export type CoachDecision = "commit" | "revert";
 
 export type CoachRunStatus = "pending" | "running" | "completed" | "failed" | "stopped" | "budget_exceeded";
+
+export interface SearchPolicy {
+  policyId: string;
+  commitThreshold: number;
+  rollbackWindowSprints: number;
+  noveltyWeight: number;
+  conservationWeight: number;
+  evidenceHorizonSprints: number;
+}
+
+export const DEFAULT_SEARCH_POLICY: SearchPolicy = {
+  policyId: "fixed_v1",
+  commitThreshold: 0.5,
+  rollbackWindowSprints: 3,
+  noveltyWeight: 0.1,
+  conservationWeight: 0.9,
+  evidenceHorizonSprints: 5,
+};
 
 export interface CoachConfig {
   coachProvider: AIProvider;
@@ -835,11 +875,80 @@ export interface CoachConfig {
   budgetCapUsd?: number;
 }
 
+export interface MatchmakingWeights {
+  nearPeer: number;
+  diagnostic: number;
+  mirror: number;
+  novelty: number;
+  baseline: number;
+}
+
+export interface ArenaConfig {
+  arenaId: string;
+  seedGenomes: GenomeModules[];
+  coachConfig: Omit<CoachConfig, "opponentGenome">;
+  totalSprints: number;
+  matchesPerSprint: number;
+  globalMatchConcurrency: number;
+  matchmaking: MatchmakingWeights;
+  foiaEnabled: boolean;
+  foiaDelaySprints?: number;
+}
+
+export interface ArenaCoachSlot {
+  slotIndex: number;
+  runId: string;
+  seedGenome: GenomeModules;
+  currentGenome: GenomeModules;
+  wins: number;
+  losses: number;
+  draws: number;
+}
+
+export interface ArenaResult {
+  arenaId: string;
+  slots: ArenaCoachSlot[];
+  totalGamesPlayed: number;
+  sprintsCompleted: number;
+}
+
+export interface CoachMatchmakingNote {
+  bucket: string;
+  reason: string;
+  opponentRunId?: string;
+  opponentSlotIndex: number;
+  appearanceCount: number;
+}
+
+export type DeceptionCategory =
+  | "behavior_rationale_divergence"
+  | "selective_omission"
+  | "observation_sensitivity";
+
+export interface DeliberationPatternVector {
+  meanMessageLength: number;
+  hedgeRate: number;
+  disagreementRate: number;
+  revisionRate: number;
+  phraseOverlap: number;
+}
+
 export interface CoachResearchMetrics {
   completedMatches?: number;
   wins?: number;
   losses?: number;
   draws?: number;
+  matchmaking?: CoachMatchmakingNote[];
+  deception?: Record<DeceptionCategory, { meanScore: number; maxScore: number; totalFindings: number }>;
+  deliberationPatterns?: DeliberationPatternVector;
+}
+
+export type PatchIndexDecision = "committed" | "reverted" | "invalid" | "rolled_back";
+
+export interface PatchMeasuredOutcome {
+  wins: number;
+  losses: number;
+  draws: number;
 }
 
 export const coachRuns = pgTable("coach_runs", {
@@ -851,6 +960,7 @@ export const coachRuns = pgTable("coach_runs", {
   currentBeliefs: jsonb("current_beliefs").$type<CoachBelief[]>().default([]),
   currentSprint: integer("current_sprint").notNull().default(0),
   arenaId: varchar("arena_id", { length: 64 }),
+  searchPolicy: jsonb("search_policy").$type<SearchPolicy>().notNull().default(DEFAULT_SEARCH_POLICY),
   budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
   actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -874,7 +984,7 @@ export const coachSprints = pgTable("coach_sprints", {
   genomeAfter: jsonb("genome_after").$type<GenomeModules>().notNull(),
   beliefsAfter: jsonb("beliefs_after").$type<CoachBelief[]>().default([]),
   decision: varchar("decision", { length: 10 }).$type<CoachDecision>().notNull(),
-  patch: jsonb("patch").$type<CoachPatch | null>(),
+  patch: jsonb("patch").$type<CoachStructuredPatch | null>(),
   disclosureText: text("disclosure_text"),
   researchMetrics: jsonb("research_metrics").$type<CoachResearchMetrics>().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -883,6 +993,39 @@ export const coachSprints = pgTable("coach_sprints", {
 export const insertCoachSprintSchema = createInsertSchema(coachSprints).omit({ id: true, createdAt: true });
 export type InsertCoachSprint = z.infer<typeof insertCoachSprintSchema>;
 export type CoachSprint = typeof coachSprints.$inferSelect;
+
+export const patchIndex = pgTable("patch_index", {
+  id: serial("id").primaryKey(),
+  runId: varchar("run_id", { length: 64 }).notNull(),
+  sprintNumber: integer("sprint_number").notNull(),
+  module: varchar("module", { length: 32 }).notNull(),
+  decision: varchar("decision", { length: 16 }).$type<PatchIndexDecision>().notNull(),
+  delta: jsonb("delta").$type<CoachSemanticDelta | null>(),
+  genomeBefore: jsonb("genome_before").$type<GenomeModules | null>(),
+  genomeAfter: jsonb("genome_after").$type<GenomeModules | null>(),
+  measuredOutcome: jsonb("measured_outcome").$type<PatchMeasuredOutcome | null>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPatchIndexSchema = createInsertSchema(patchIndex).omit({ id: true, createdAt: true });
+export type InsertPatchIndex = z.infer<typeof insertPatchIndexSchema>;
+export type PatchIndex = typeof patchIndex.$inferSelect;
+
+export const metricYield = pgTable("metric_yield", {
+  id: serial("id").primaryKey(),
+  arenaId: varchar("arena_id", { length: 64 }).notNull(),
+  metricKey: varchar("metric_key", { length: 100 }).notNull(),
+  sampleSize: integer("sample_size").notNull().default(0),
+  coverage: real("coverage").notNull().default(0),
+  variance: real("variance"),
+  correlationWithNextSprintWinRate: real("correlation_with_next_sprint_win_rate"),
+  correlationWithCommitDecision: real("correlation_with_commit_decision"),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const insertMetricYieldSchema = createInsertSchema(metricYield).omit({ id: true, updatedAt: true });
+export type InsertMetricYield = z.infer<typeof insertMetricYieldSchema>;
+export type MetricYield = typeof metricYield.$inferSelect;
 
 // Experiment config schema for reproducible experiments (Week 3)
 
