@@ -251,6 +251,11 @@ function formatEnvironment(env?: CoachPromptEnvironment): string {
     lines.push(`Researcher policy: ${JSON.stringify(env.researcherPolicy)}`);
   }
 
+  if (env.scratchNotes) {
+    lines.push("Scratch Notes:");
+    lines.push(env.scratchNotes);
+  }
+
   return lines.length > 0 ? lines.join("\n") : "No extra environment context.";
 }
 

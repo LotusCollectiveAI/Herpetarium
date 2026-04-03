@@ -10,6 +10,7 @@ import {
   MatchQualityEvent,
   MatchQualityStatus,
   MatchQualitySummary,
+  ScratchNotesSnapshot,
   buildMatchPlayerConfigs,
   normalizeHeadlessMatchConfig,
   DEFAULT_GAME_RULES,
@@ -39,6 +40,7 @@ import {
   generateGuess,
   generateInterception,
   generateDeliberationMessage,
+  generateReflection,
   estimateCost,
   AICallResult,
 } from "./ai";
@@ -64,6 +66,7 @@ interface HeadlessResult {
   totalRounds: number;
   teams: GameState["teams"];
   players: Player[];
+  updatedScratchNotes?: Partial<Record<"amber" | "blue", ScratchNotesSnapshot>>;
 }
 
 function withTimeout<T>(
@@ -252,6 +255,7 @@ async function processClues(
   ablations?: AblationFlag[],
   promptOverrides?: HeadlessPromptOverrides,
   healthTracker?: ModelHealthTracker,
+  matchConfig?: HeadlessMatchConfig,
 ): Promise<GameState> {
   for (const team of ["amber", "blue"] as const) {
     const clueGiverId = game.currentClueGiver[team];
@@ -271,7 +275,8 @@ async function processClues(
     const noteKey = `${clueGiver.aiProvider}-${team}`;
     const GENERIC_FALLBACK_POOL = ["signal", "trace", "mark", "pulse", "drift", "bloom", "frost", "ridge", "shore", "vault"];
     const fallbackClues = Array.from({ length: 3 }, () => GENERIC_FALLBACK_POOL[Math.floor(Math.random() * GENERIC_FALLBACK_POOL.length)]);
-    const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "cluegiver") };
+    const teamNotesClue = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
+    const clueParams = { keywords, targetCode: code, history, scratchNotes: teamNotesClue, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "cluegiver") };
 
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
@@ -318,6 +323,7 @@ async function processGuesses(
   ablations?: AblationFlag[],
   promptOverrides?: HeadlessPromptOverrides,
   healthTracker?: ModelHealthTracker,
+  matchConfig?: HeadlessMatchConfig,
 ): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
@@ -343,7 +349,8 @@ async function processGuesses(
     }));
 
     const noteKey = `${aiGuesser.aiProvider}-${team}`;
-    const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "own_guesser") };
+    const teamNotesGuess = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
+    const guessParams = { keywords, clues, history, scratchNotes: teamNotesGuess, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "own_guesser") };
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
       generateGuess(config, guessParams, { healthTracker }),
@@ -373,6 +380,7 @@ async function processInterceptions(
   ablations?: AblationFlag[],
   promptOverrides?: HeadlessPromptOverrides,
   healthTracker?: ModelHealthTracker,
+  matchConfig?: HeadlessMatchConfig,
 ): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
 
@@ -393,7 +401,8 @@ async function processInterceptions(
     }));
 
     const noteKey = `${aiInterceptor.aiProvider}-${team}`;
-    const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "interceptor") };
+    const teamNotesIntercept = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
+    const interceptParams = { clues, history, scratchNotes: teamNotesIntercept, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "interceptor") };
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
       generateInterception(config, interceptParams, { healthTracker }),
@@ -428,6 +437,7 @@ interface DeliberationContext {
   clueGiverName: string;
   guessers: [Player, Player];
   scratchNotes?: Record<string, string>;
+  scratchNotesByTeam?: Partial<Record<"amber" | "blue", string>>;
   ablations?: AblationFlag[];
   promptOverrides?: HeadlessPromptOverrides;
   roundNumber: number;
@@ -567,10 +577,15 @@ async function processDeliberation(
         }
       }
 
-      // Append scratch notes
-      const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
-      if (context.scratchNotes?.[noteKey]) {
-        prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+      // Append scratch notes (prefer scratchNotesByTeam, fall back to legacy map)
+      const teamNote = context.scratchNotesByTeam?.[context.team];
+      if (teamNote) {
+        prompt += formatScratchNotes(teamNote);
+      } else {
+        const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
+        if (context.scratchNotes?.[noteKey]) {
+          prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+        }
       }
 
       // Get system prompt from strategy
@@ -712,6 +727,125 @@ async function persistRoundResults(matchId: number, game: GameState) {
   });
 }
 
+const DEFAULT_REFLECTION_TOKEN_BUDGET = 1500;
+const CONSOLIDATION_THRESHOLD_RATIO = 0.8;
+
+async function logReflectionCall(matchId: number, gameId: string, provider: string, callResult: AICallResult<string>) {
+  try {
+    await storage.createAiCallLog({
+      matchId,
+      gameId,
+      roundNumber: 0,
+      provider,
+      model: callResult.model,
+      actionType: "reflection",
+      prompt: callResult.prompt,
+      rawResponse: callResult.rawResponse || null,
+      parsedResult: { notes: callResult.result.slice(0, 500) },
+      latencyMs: callResult.latencyMs,
+      timedOut: false,
+      error: callResult.error || null,
+      parseQuality: callResult.parseQuality || null,
+      usedFallback: false,
+      promptTokens: callResult.promptTokens || null,
+      completionTokens: callResult.completionTokens || null,
+      totalTokens: callResult.totalTokens || null,
+      estimatedCostUsd: callResult.estimatedCostUsd || null,
+      reasoningTrace: callResult.reasoningTrace || null,
+    });
+  } catch (err) {
+    log(`[headless] Failed to log reflection AI call: ${err}`, "headless");
+  }
+}
+
+async function buildUpdatedScratchNotes(
+  game: GameState,
+  matchId: number,
+  gameId: string,
+  config: HeadlessMatchConfig,
+): Promise<Partial<Record<"amber" | "blue", ScratchNotesSnapshot>>> {
+  if (!config.enablePostMatchReflection) {
+    return {};
+  }
+
+  const tokenBudget = config.reflectionTokenBudget ?? DEFAULT_REFLECTION_TOKEN_BUDGET;
+  const consolidationThreshold = Math.floor(tokenBudget * CONSOLIDATION_THRESHOLD_RATIO);
+  const result: Partial<Record<"amber" | "blue", ScratchNotesSnapshot>> = {};
+
+  for (const team of ["amber", "blue"] as const) {
+    const teamPlayers = game.players.filter(p => p.team === team && p.isAI);
+    if (teamPlayers.length === 0) continue;
+
+    const reflectionPlayer = teamPlayers[0];
+    const playerConfig = getConfigForPlayer(reflectionPlayer);
+    const opponentTeam: "amber" | "blue" = team === "amber" ? "blue" : "amber";
+    const currentNotes = config.scratchNotesByTeam?.[team] || "";
+    const currentTokenEstimate = Math.ceil(currentNotes.length / 4);
+
+    let effectiveTokenBudget = tokenBudget;
+    let consolidationHint = "";
+    if (currentTokenEstimate > consolidationThreshold) {
+      consolidationHint = "Consolidate your existing notes into the most essential strategic insights before adding new observations. Stay under " + tokenBudget + " tokens total.";
+    }
+
+    try {
+      const reflectionResult = await generateReflection(playerConfig, {
+        teamKeywords: game.teams[team].keywords,
+        teamHistory: game.teams[team].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
+        opponentHistory: game.teams[opponentTeam].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
+        winner: game.winner,
+        myTeam: team,
+        whiteTokens: game.teams[team].whiteTokens,
+        blackTokens: game.teams[team].blackTokens,
+        opponentWhiteTokens: game.teams[opponentTeam].whiteTokens,
+        opponentBlackTokens: game.teams[opponentTeam].blackTokens,
+        currentNotes: consolidationHint ? `${consolidationHint}\n\n${currentNotes}` : currentNotes,
+        tokenBudget: effectiveTokenBudget,
+      });
+
+      await logReflectionCall(matchId, gameId, playerConfig.provider, reflectionResult);
+
+      if (reflectionResult.error) {
+        log(`[headless] Reflection failed for team ${team} in match ${matchId}, keeping previous notes`, "headless");
+        // On failure, keep previous notes unchanged
+        if (currentNotes) {
+          result[team] = {
+            notesText: currentNotes,
+            tokenCount: currentTokenEstimate,
+            lastUpdatedMatchId: matchId,
+          };
+        }
+        continue;
+      }
+
+      let notesText = reflectionResult.result;
+      // Enforce token budget: truncate if exceeding budget
+      const approxTokens = Math.ceil(notesText.length / 4);
+      if (approxTokens > tokenBudget) {
+        notesText = notesText.slice(0, tokenBudget * 4);
+      }
+
+      result[team] = {
+        notesText,
+        tokenCount: Math.ceil(notesText.length / 4),
+        lastUpdatedMatchId: matchId,
+      };
+    } catch (err) {
+      log(`[headless] Reflection exception for team ${team} in match ${matchId}: ${err}`, "headless");
+      // On failure, keep previous notes unchanged
+      if (currentNotes) {
+        result[team] = {
+          notesText: currentNotes,
+          tokenCount: currentTokenEstimate,
+          lastUpdatedMatchId: matchId,
+        };
+      }
+    }
+  }
+
+  return result;
+}
+
 export async function runHeadlessMatch(
   config: HeadlessMatchConfig,
   scratchNotesMap?: Record<string, string>,
@@ -807,7 +941,7 @@ export async function runHeadlessMatch(
     game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 
-    game = await processClues(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker);
+    game = await processClues(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker, config);
 
     if (teamSize === 3) {
       // 3v3 mode: deliberation replaces single-shot guess/intercept
@@ -837,6 +971,7 @@ export async function runHeadlessMatch(
           clueGiverName: teamPlayers.find(p => p.id === clueGiverId)!.name,
           guessers: [guessers[0], guessers[1]] as [Player, Player],
           scratchNotes: scratchNotesMap,
+          scratchNotesByTeam: config.scratchNotesByTeam,
           ablations,
           promptOverrides,
           roundNumber: game.round,
@@ -902,6 +1037,7 @@ export async function runHeadlessMatch(
           clueGiverName: game.players.find(p => p.id === game.currentClueGiver[opponentTeam]!)!.name,
           guessers: [guessers[0], guessers[1]] as [Player, Player],
           scratchNotes: scratchNotesMap,
+          scratchNotesByTeam: config.scratchNotesByTeam,
           ablations,
           promptOverrides,
           roundNumber: game.round,
@@ -930,14 +1066,14 @@ export async function runHeadlessMatch(
         break;
       }
 
-      game = await processGuesses(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker);
+      game = await processGuesses(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker, config);
 
       if (game.phase !== "opponent_intercepting") {
         log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
         break;
       }
 
-      game = await processInterceptions(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker);
+      game = await processInterceptions(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker, config);
     }
 
     if (game.phase === "round_results" || game.phase === "game_over") {
@@ -969,6 +1105,9 @@ export async function runHeadlessMatch(
 
   log(`[headless] Match ${matchId} completed - Winner: ${game.winner || "none"} in ${game.round} rounds`, "headless");
 
+  // Post-match reflection for scratch notes
+  const updatedScratchNotes = await buildUpdatedScratchNotes(game, matchId, game.id, config);
+
   return {
     matchId,
     gameId: game.id,
@@ -976,5 +1115,6 @@ export async function runHeadlessMatch(
     totalRounds: game.round,
     teams: game.teams,
     players: game.players,
+    updatedScratchNotes: Object.keys(updatedScratchNotes).length > 0 ? updatedScratchNotes : undefined,
   };
 }

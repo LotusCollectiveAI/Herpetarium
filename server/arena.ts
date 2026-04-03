@@ -18,6 +18,7 @@ import type {
   DeceptionCategory,
   DeliberationPatternVector,
   GenomeModules,
+  ScratchNotesSnapshot,
   SprintEvaluation,
 } from "@shared/schema";
 import { DEFAULT_GAME_RULES, LONGFORM_ARENA_RULES, type GameRules } from "@shared/schema";
@@ -70,6 +71,7 @@ interface ArenaRuntimeSlot {
   runId: string;
   seedGenome: GenomeModules;
   state: CoachState;
+  scratchNotes: ScratchNotesSnapshot | null;
   wins: number;
   losses: number;
   draws: number;
@@ -97,6 +99,8 @@ interface PairingResult {
   opponentGenomeForB: GenomeModules;
   opponentRunIdForA: string;
   opponentRunIdForB: string;
+  scratchNotesAfterA?: ScratchNotesSnapshot | null;
+  scratchNotesAfterB?: ScratchNotesSnapshot | null;
 }
 
 type ProposalPatchEdit = NonNullable<CoachProposal["patch"]>["edits"][number];
@@ -553,6 +557,12 @@ export async function runPairedCoachMatches(
   const coachConfig = buildPerMatchCoachConfig(config, right.state.genome);
   const baseSeedPrefix = `${left.state.teamId}-s${sprintNumber}-${pairingIndex + 1}`;
 
+  // Track scratch notes per slot across both games.
+  // Notes follow the slot, not the color.
+  let leftNotes = left.scratchNotes?.notesText || undefined;
+  let rightNotes = right.scratchNotes?.notesText || undefined;
+
+  // Game 1: left plays amber, right plays blue
   const firstResult = await runCoachSprint(
     left.state,
     coachConfig,
@@ -561,6 +571,11 @@ export async function runPairedCoachMatches(
       opponentGenome: cloneGenome(right.state.genome),
       seedTag: `${pairingIndex + 1}-${baseSeedPrefix}-amber`,
       teamSequence: ["amber"],
+      enablePostMatchReflection: true,
+      teamScratchNotes: {
+        ...(leftNotes ? { amber: leftNotes } : {}),
+        ...(rightNotes ? { blue: rightNotes } : {}),
+      },
       matchConfigOverrides: [{
         seed: `${baseSeedPrefix}-g1`,
         arenaId: config.arenaId,
@@ -575,6 +590,15 @@ export async function runPairedCoachMatches(
     },
   );
 
+  // After game 1: capture updated notes. Left was amber, right was blue.
+  if (firstResult.finalScratchNotesByTeam?.amber) {
+    leftNotes = firstResult.finalScratchNotesByTeam.amber.notesText;
+  }
+  if (firstResult.finalScratchNotesByTeam?.blue) {
+    rightNotes = firstResult.finalScratchNotesByTeam.blue.notesText;
+  }
+
+  // Game 2: left plays blue, right plays amber (sides swap, notes follow slots)
   const secondResult = await runCoachSprint(
     left.state,
     coachConfig,
@@ -583,6 +607,11 @@ export async function runPairedCoachMatches(
       opponentGenome: cloneGenome(right.state.genome),
       seedTag: `${pairingIndex + 1}-${baseSeedPrefix}-blue`,
       teamSequence: ["blue"],
+      enablePostMatchReflection: true,
+      teamScratchNotes: {
+        ...(rightNotes ? { amber: rightNotes } : {}),
+        ...(leftNotes ? { blue: leftNotes } : {}),
+      },
       matchConfigOverrides: [{
         seed: `${baseSeedPrefix}-g2`,
         arenaId: config.arenaId,
@@ -596,6 +625,14 @@ export async function runPairedCoachMatches(
       }],
     },
   );
+
+  // After game 2: left was blue, right was amber
+  const leftFinalSnapshot = secondResult.finalScratchNotesByTeam?.blue
+    ?? firstResult.finalScratchNotesByTeam?.amber
+    ?? null;
+  const rightFinalSnapshot = secondResult.finalScratchNotesByTeam?.amber
+    ?? firstResult.finalScratchNotesByTeam?.blue
+    ?? null;
 
   const resultA = combineSprintResults(sprintNumber, [firstResult, secondResult]);
   const resultB = combineSprintResults(sprintNumber, [
@@ -616,6 +653,8 @@ export async function runPairedCoachMatches(
     opponentGenomeForB: cloneGenome(left.state.genome),
     opponentRunIdForA: right.runId,
     opponentRunIdForB: left.runId,
+    scratchNotesAfterA: leftFinalSnapshot,
+    scratchNotesAfterB: rightFinalSnapshot,
   };
 }
 
@@ -654,6 +693,7 @@ async function persistArenaRunProgress(slot: ArenaRuntimeSlot): Promise<string |
     currentGenome: cloneGenome(slot.state.genome),
     currentBeliefs: cloneBeliefs(slot.state),
     currentSprint: slot.state.currentSprint,
+    currentScratchNotes: slot.scratchNotes,
     actualCostUsd,
   });
 
@@ -701,6 +741,7 @@ async function persistArenaSprintRecord(
     patchBundle: clonePatchBundle(coachCycle.proposal.patch),
     disclosureText: disclosureText || null,
     researchMetrics,
+    scratchNotesSnapshot: slot.scratchNotes,
   });
 
   await persistPatchIndexRecord(slot.runId, sprintResult, genomeBefore, slot.state, {
@@ -818,6 +859,7 @@ async function finalizeArenaRuns(
       currentGenome: cloneGenome(slot.state.genome),
       currentBeliefs: cloneBeliefs(slot.state),
       currentSprint: slot.state.currentSprint,
+      currentScratchNotes: slot.scratchNotes,
       actualCostUsd,
       completedAt,
     });
@@ -877,6 +919,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
         runId: run.id,
         seedGenome: cloneGenome(seedGenome),
         state,
+        scratchNotes: null,
         wins: 0,
         losses: 0,
         draws: 0,
@@ -920,6 +963,15 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
 
         const result = settlement.value;
         recordPairing(pairingHistory, result.slotA, result.slotB);
+
+        // Update slot scratch notes from pairing results
+        if (result.scratchNotesAfterA !== undefined) {
+          slots[result.slotA].scratchNotes = result.scratchNotesAfterA;
+        }
+        if (result.scratchNotesAfterB !== undefined) {
+          slots[result.slotB].scratchNotes = result.scratchNotesAfterB;
+        }
+
         resultsBySlot.set(result.slotA, [...(resultsBySlot.get(result.slotA) || []), result.resultA]);
         resultsBySlot.set(result.slotB, [...(resultsBySlot.get(result.slotB) || []), result.resultB]);
         if (result.resultA.matchResults.length > 0) {
@@ -963,6 +1015,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           disclosureText: buildDisclosureBundle(opponentsBySlot.get(slot.slotIndex) || [], foiaActive),
           matchmakingBucket: (opponentsBySlot.get(slot.slotIndex) || [])[0]?.bucket,
           opponentGenome: primaryOpponentGenome ? cloneGenome(primaryOpponentGenome) : undefined,
+          scratchNotes: slot.scratchNotes?.notesText,
         };
         let evaluation: SprintEvaluation;
 
