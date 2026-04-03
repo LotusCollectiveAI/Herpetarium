@@ -27,8 +27,14 @@ import {
   type InsertCoachRun,
   type CoachSprint,
   type InsertCoachSprint,
+  type SprintEvaluationRecord,
+  type InsertSprintEvaluationRecord,
+  type AnchorEvaluationRecord,
+  type InsertAnchorEvaluationRecord,
   type PatchIndex,
   type InsertPatchIndex,
+  type PatchReviewRecord,
+  type InsertPatchReviewRecord,
   type MetricYield,
   type InsertMetricYield,
   type TeamChatter,
@@ -46,7 +52,10 @@ import {
   generations,
   coachRuns,
   coachSprints,
+  sprintEvaluations,
+  anchorEvaluations,
   patchIndex,
+  patchReviews,
   metricYield,
   teamChatter,
 } from "@shared/schema";
@@ -117,8 +126,16 @@ export interface IStorage {
 
   createCoachSprint(sprint: InsertCoachSprint): Promise<CoachSprint>;
   getCoachSprints(runId: string): Promise<CoachSprint[]>;
+  createSprintEvaluation(entry: InsertSprintEvaluationRecord): Promise<SprintEvaluationRecord>;
+  getSprintEvaluation(runId: string, sprintNumber: number): Promise<SprintEvaluationRecord | undefined>;
+  getSprintEvaluations(runId: string): Promise<SprintEvaluationRecord[]>;
+  createAnchorEvaluation(entry: InsertAnchorEvaluationRecord): Promise<AnchorEvaluationRecord>;
+  getAnchorEvaluations(runId: string, sprintNumber?: number): Promise<AnchorEvaluationRecord[]>;
   createPatchIndexEntry(entry: InsertPatchIndex): Promise<PatchIndex>;
   getPatchHistory(runId: string): Promise<PatchIndex[]>;
+  createPatchReview(entry: InsertPatchReviewRecord): Promise<PatchReviewRecord>;
+  getPatchReviews(runId: string): Promise<PatchReviewRecord[]>;
+  getPendingPatchReviews(runId: string): Promise<PatchIndex[]>;
   upsertMetricYield(entry: InsertMetricYield): Promise<MetricYield>;
   getMetricYields(arenaId: string): Promise<MetricYield[]>;
 
@@ -464,6 +481,43 @@ export class DatabaseStorage implements IStorage {
       .orderBy(coachSprints.sprintNumber);
   }
 
+  async createSprintEvaluation(entry: InsertSprintEvaluationRecord): Promise<SprintEvaluationRecord> {
+    const [created] = await db.insert(sprintEvaluations).values(entry as typeof sprintEvaluations.$inferInsert).returning();
+    return created;
+  }
+
+  async getSprintEvaluation(runId: string, sprintNumber: number): Promise<SprintEvaluationRecord | undefined> {
+    const [evaluation] = await db.select().from(sprintEvaluations)
+      .where(and(
+        eq(sprintEvaluations.runId, runId),
+        eq(sprintEvaluations.sprintNumber, sprintNumber),
+      ))
+      .limit(1);
+    return evaluation;
+  }
+
+  async getSprintEvaluations(runId: string): Promise<SprintEvaluationRecord[]> {
+    return db.select().from(sprintEvaluations)
+      .where(eq(sprintEvaluations.runId, runId))
+      .orderBy(sprintEvaluations.sprintNumber, sprintEvaluations.createdAt, sprintEvaluations.id);
+  }
+
+  async createAnchorEvaluation(entry: InsertAnchorEvaluationRecord): Promise<AnchorEvaluationRecord> {
+    const [created] = await db.insert(anchorEvaluations).values(entry as typeof anchorEvaluations.$inferInsert).returning();
+    return created;
+  }
+
+  async getAnchorEvaluations(runId: string, sprintNumber?: number): Promise<AnchorEvaluationRecord[]> {
+    const conditions = [eq(anchorEvaluations.runId, runId)];
+    if (sprintNumber !== undefined) {
+      conditions.push(eq(anchorEvaluations.sprintNumber, sprintNumber));
+    }
+
+    return db.select().from(anchorEvaluations)
+      .where(and(...conditions))
+      .orderBy(anchorEvaluations.sprintNumber, anchorEvaluations.anchorLabel, anchorEvaluations.variant, anchorEvaluations.createdAt, anchorEvaluations.id);
+  }
+
   async createPatchIndexEntry(entry: InsertPatchIndex): Promise<PatchIndex> {
     const [created] = await db.insert(patchIndex).values(entry as typeof patchIndex.$inferInsert).returning();
     return created;
@@ -473,6 +527,27 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(patchIndex)
       .where(eq(patchIndex.runId, runId))
       .orderBy(patchIndex.sprintNumber, patchIndex.createdAt, patchIndex.id);
+  }
+
+  async createPatchReview(entry: InsertPatchReviewRecord): Promise<PatchReviewRecord> {
+    const [created] = await db.insert(patchReviews).values(entry as typeof patchReviews.$inferInsert).returning();
+    return created;
+  }
+
+  async getPatchReviews(runId: string): Promise<PatchReviewRecord[]> {
+    return db.select().from(patchReviews)
+      .where(eq(patchReviews.runId, runId))
+      .orderBy(patchReviews.reviewSprint, patchReviews.committedSprint, patchReviews.createdAt, patchReviews.id);
+  }
+
+  async getPendingPatchReviews(runId: string): Promise<PatchIndex[]> {
+    return db.select().from(patchIndex)
+      .where(and(
+        eq(patchIndex.runId, runId),
+        sql`${patchIndex.reviewDueSprint} IS NOT NULL`,
+        sql`${patchIndex.reviewStatus} IS NULL`,
+      ))
+      .orderBy(patchIndex.reviewDueSprint, patchIndex.sprintNumber, patchIndex.createdAt, patchIndex.id);
   }
 
   async upsertMetricYield(entry: InsertMetricYield): Promise<MetricYield> {

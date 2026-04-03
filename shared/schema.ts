@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
@@ -315,6 +315,27 @@ export const teamStateSchema = z.object({
 
 export type TeamState = z.infer<typeof teamStateSchema>;
 
+export interface GameRules {
+  whiteTokenLimit: number;
+  blackTokenLimit: number;
+  minRoundsBeforeWin: number;
+  maxRounds: number;
+}
+
+export const DEFAULT_GAME_RULES: GameRules = {
+  whiteTokenLimit: 2,
+  blackTokenLimit: 2,
+  minRoundsBeforeWin: 0,
+  maxRounds: 20,
+};
+
+export const LONGFORM_ARENA_RULES: GameRules = {
+  whiteTokenLimit: 3,
+  blackTokenLimit: 3,
+  minRoundsBeforeWin: 3,
+  maxRounds: 12,
+};
+
 export const gameStateSchema = z.object({
   id: z.string(),
   phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]),
@@ -429,6 +450,15 @@ export const matches = pgTable("matches", {
   //   CREATE INDEX idx_matches_experiment_id ON matches (experiment_id) WHERE experiment_id IS NOT NULL;
   experimentId: varchar("experiment_id", { length: 100 }),
   teamSize: integer("team_size").notNull().default(3),
+  arenaId: varchar("arena_id", { length: 64 }),
+  runId: varchar("run_id", { length: 64 }),
+  opponentRunId: varchar("opponent_run_id", { length: 64 }),
+  sprintNumber: integer("sprint_number"),
+  matchKind: varchar("match_kind", { length: 24 }),
+  anchorLabel: varchar("anchor_label", { length: 64 }),
+  roleSwapGroupId: varchar("role_swap_group_id", { length: 64 }),
+  focalTeam: varchar("focal_team", { length: 10 }).$type<"amber" | "blue" | null>(),
+  gameRules: jsonb("game_rules").$type<GameRules | null>(),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
@@ -620,6 +650,7 @@ export interface HeadlessMatchConfig {
   ablations?: HeadlessMatchAblations;
   experimentId?: string;
   teamSize?: 2 | 3;
+  gameRules?: GameRules;
 }
 
 export interface TournamentConfig {
@@ -701,6 +732,13 @@ export interface GenomeModules {
   memoryPolicy: string;
 }
 
+export interface GenomeModulesV2 extends GenomeModules {
+  executionGuidance: string;
+  deliberationScaffold: string;
+}
+
+export type GenomeModuleKey = keyof GenomeModulesV2;
+
 export type CoachDeltaOp = "add_rule" | "modify_rule" | "retire_rule";
 
 export interface CoachEvidenceRef {
@@ -709,14 +747,22 @@ export interface CoachEvidenceRef {
   observation: string;
 }
 
+export interface CoachRollbackTrigger {
+  description: string;
+  metricHint?: string;
+  comparatorHint?: "gt" | "lt" | "delta_gt" | "delta_lt";
+  threshold?: number;
+  reviewAfterSprints?: number;
+}
+
 export interface CoachSemanticDelta {
   op: CoachDeltaOp;
-  module: keyof GenomeModules;
+  module: GenomeModuleKey;
   oldText?: string;
   newText?: string;
   rationale: string;
   evidenceChain: CoachEvidenceRef[];
-  rollbackTriggers: string[];
+  rollbackTriggers: Array<string | CoachRollbackTrigger>;
 }
 
 export const strategyGenomes = pgTable("strategy_genomes", {
@@ -828,6 +874,16 @@ export interface CoachBelief {
 
 export type CoachBeliefStatus = "active" | "superseded" | "retracted";
 
+export type CoachBeliefUpdateOp = "assert" | "revise" | "retract";
+
+export interface CoachBeliefUpdate {
+  op: CoachBeliefUpdateOp;
+  proposition?: string;
+  confidence?: number;
+  evidence: string;
+  revisionOf?: string;
+}
+
 export interface CoachPatch {
   targetModule: keyof GenomeModules;
   oldValue: string;
@@ -838,6 +894,23 @@ export interface CoachPatch {
 
 export interface CoachStructuredPatch extends CoachPatch {
   delta?: CoachSemanticDelta;
+}
+
+export interface CoachModuleEdit {
+  targetModule: GenomeModuleKey;
+  oldValue: string;
+  newValue: string;
+  rationale: string;
+  expectedEffect: string;
+  delta?: CoachSemanticDelta;
+}
+
+export interface CoachPatchBundle {
+  proposalId: string;
+  summary: string;
+  expectedEffect: string;
+  edits: CoachModuleEdit[];
+  complexityIntent: "increase" | "decrease" | "neutral";
 }
 
 export type CoachDecision = "commit" | "revert";
@@ -861,6 +934,179 @@ export const DEFAULT_SEARCH_POLICY: SearchPolicy = {
   conservationWeight: 0.9,
   evidenceHorizonSprints: 5,
 };
+
+export type PromptRole =
+  | "cluegiver"
+  | "own_guesser"
+  | "interceptor"
+  | "own_deliberator"
+  | "intercept_deliberator"
+  | "coach";
+
+export interface CompiledPromptArtifact {
+  role: PromptRole;
+  systemPrompt: string;
+  tokenEstimate: number;
+  charCount: number;
+}
+
+export interface CompiledGenomePrompts {
+  genomeHash: string;
+  compilerVersion: string;
+  prompts: Record<PromptRole, CompiledPromptArtifact>;
+}
+
+export interface ComplexityMetrics {
+  genomeCharCount: number;
+  genomeSentenceCount: number;
+  compiledPromptChars: Record<PromptRole, number>;
+  compiledPromptTotalChars: number;
+  deltaGenomeChars: number | null;
+  deltaCompiledPromptChars: number | null;
+}
+
+export interface ResearcherPolicyThresholds {
+  minAnchorDelta?: number;
+  maxDecodeDrop?: number;
+  maxSideGap?: number;
+  maxComplexityGrowthWithoutGain?: number;
+}
+
+export interface ResearcherPolicyNotice {
+  code: string;
+  severity: "info" | "warning";
+  message: string;
+}
+
+export interface CoachPromptEnvironment {
+  opponentGenome?: GenomeModules;
+  disclosureText?: string;
+  matchmakingBucket?: string;
+  researcherPolicy?: ResearcherPolicyThresholds;
+  arenaId?: string;
+}
+
+export interface TrainingSprintMetrics {
+  matchIds: number[];
+  wins: number;
+  losses: number;
+  draws: number;
+  winRate: number;
+  meanRoundsPerMatch: number;
+}
+
+export interface ExecutionMetrics {
+  ownDecodeRate: number;
+  opponentInterceptRateAgainstUs: number;
+  ourInterceptRate: number;
+  miscommunicationRate: number;
+  catastrophicAsymmetryRate: number;
+}
+
+export interface DeliberationExecutionMetrics {
+  ownConsensusRate: number;
+  interceptConsensusRate: number;
+  timeoutRate: number;
+  fallbackRate: number;
+  meanDeliberationExchanges: number;
+}
+
+export interface LeakageMetrics {
+  meanLeakageScore: number;
+  maxLeakageScore: number;
+  keywordMentionRate: number;
+  codePatternRate: number;
+}
+
+export interface SideBalanceMetrics {
+  amberWinRate: number;
+  blueWinRate: number;
+  sideGap: number;
+  amberMatchCount: number;
+  blueMatchCount: number;
+}
+
+export interface AnchorABReport {
+  incomplete: boolean;
+  anchorsUsed: string[];
+  incumbentWinRate: number;
+  candidateWinRate: number;
+  delta: number;
+  incumbentMatchIds: number[];
+  candidateMatchIds: number[];
+  perAnchor: Array<{
+    label: string;
+    incumbentWins: number;
+    candidateWins: number;
+    total: number;
+  }>;
+}
+
+export type PatchReviewStatus = "clear" | "trigger_fired" | "mixed" | "insufficient_data";
+
+export interface PatchReviewSummary {
+  proposalId: string;
+  committedSprint: number;
+  status: PatchReviewStatus;
+  firedTriggers: string[];
+}
+
+export interface SprintEvaluation {
+  runId: string;
+  sprintNumber: number;
+  training: TrainingSprintMetrics;
+  execution: ExecutionMetrics;
+  deliberation: DeliberationExecutionMetrics;
+  leakage: LeakageMetrics;
+  sideBalance: SideBalanceMetrics;
+  complexity: ComplexityMetrics;
+  anchor?: AnchorABReport;
+  pendingPatchReviews: PatchReviewSummary[];
+  policyNotices: ResearcherPolicyNotice[];
+  evidenceLines: string[];
+}
+
+export interface SprintEvaluationInput {
+  runId: string;
+  sprintNumber: number;
+  matchIds: number[];
+  focalTeam: "amber" | "blue";
+  currentGenome: GenomeModules;
+  previousGenome?: GenomeModules;
+  compiledPrompts?: CompiledGenomePrompts;
+}
+
+export interface CoachProposal {
+  proposalId: string;
+  beliefUpdates: CoachBeliefUpdate[];
+  summary: string;
+  hypothesis: string;
+  patch: CoachPatchBundle | null;
+}
+
+export interface CoachReviewResult {
+  decision: CoachDecision;
+  rationale: string;
+  confidence: number;
+  policyResponse?: string;
+}
+
+export interface RollbackTriggerEvaluation {
+  description: string;
+  status: "clear" | "fired" | "insufficient_data";
+  evidenceLines: string[];
+  supportingMetrics: Record<string, number | null>;
+}
+
+export interface PatchReview {
+  runId: string;
+  proposalId: string;
+  committedSprint: number;
+  reviewSprint: number;
+  status: PatchReviewStatus;
+  evaluations: RollbackTriggerEvaluation[];
+  summary: string;
+}
 
 export interface CoachConfig {
   coachProvider: AIProvider;
@@ -985,6 +1231,9 @@ export const coachSprints = pgTable("coach_sprints", {
   beliefsAfter: jsonb("beliefs_after").$type<CoachBelief[]>().default([]),
   decision: varchar("decision", { length: 10 }).$type<CoachDecision>().notNull(),
   patch: jsonb("patch").$type<CoachStructuredPatch | null>(),
+  proposal: jsonb("proposal").$type<CoachProposal | null>(),
+  anchorSummary: jsonb("anchor_summary").$type<AnchorABReport | null>(),
+  patchBundle: jsonb("patch_bundle").$type<CoachPatchBundle | null>(),
   disclosureText: text("disclosure_text"),
   researchMetrics: jsonb("research_metrics").$type<CoachResearchMetrics>().default({}),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -994,22 +1243,75 @@ export const insertCoachSprintSchema = createInsertSchema(coachSprints).omit({ i
 export type InsertCoachSprint = z.infer<typeof insertCoachSprintSchema>;
 export type CoachSprint = typeof coachSprints.$inferSelect;
 
+export const sprintEvaluations = pgTable("sprint_evaluations", {
+  id: serial("id").primaryKey(),
+  runId: varchar("run_id", { length: 64 }).notNull(),
+  sprintNumber: integer("sprint_number").notNull(),
+  evaluation: jsonb("evaluation").$type<SprintEvaluation>().notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  runSprintUnique: uniqueIndex("sprint_evaluations_run_id_sprint_number_unique").on(table.runId, table.sprintNumber),
+}));
+
+export const insertSprintEvaluationRecordSchema = createInsertSchema(sprintEvaluations).omit({ id: true, createdAt: true });
+export type InsertSprintEvaluationRecord = z.infer<typeof insertSprintEvaluationRecordSchema>;
+export type SprintEvaluationRecord = typeof sprintEvaluations.$inferSelect;
+
+export type AnchorEvaluationVariant = "incumbent" | "candidate";
+export type AnchorEvaluationSummary = Record<string, unknown>;
+
+export const anchorEvaluations = pgTable("anchor_evaluations", {
+  id: serial("id").primaryKey(),
+  runId: varchar("run_id", { length: 64 }).notNull(),
+  sprintNumber: integer("sprint_number").notNull(),
+  proposalId: varchar("proposal_id", { length: 64 }),
+  variant: varchar("variant", { length: 16 }).$type<AnchorEvaluationVariant>().notNull(),
+  anchorLabel: varchar("anchor_label", { length: 64 }).notNull(),
+  matchIds: jsonb("match_ids").$type<number[] | null>(),
+  summary: jsonb("summary").$type<AnchorEvaluationSummary | null>(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertAnchorEvaluationRecordSchema = createInsertSchema(anchorEvaluations).omit({ id: true, createdAt: true });
+export type InsertAnchorEvaluationRecord = z.infer<typeof insertAnchorEvaluationRecordSchema>;
+export type AnchorEvaluationRecord = typeof anchorEvaluations.$inferSelect;
+
 export const patchIndex = pgTable("patch_index", {
   id: serial("id").primaryKey(),
   runId: varchar("run_id", { length: 64 }).notNull(),
   sprintNumber: integer("sprint_number").notNull(),
   module: varchar("module", { length: 32 }).notNull(),
   decision: varchar("decision", { length: 16 }).$type<PatchIndexDecision>().notNull(),
+  proposalId: varchar("proposal_id", { length: 64 }),
   delta: jsonb("delta").$type<CoachSemanticDelta | null>(),
   genomeBefore: jsonb("genome_before").$type<GenomeModules | null>(),
   genomeAfter: jsonb("genome_after").$type<GenomeModules | null>(),
   measuredOutcome: jsonb("measured_outcome").$type<PatchMeasuredOutcome | null>(),
+  reviewDueSprint: integer("review_due_sprint"),
+  reviewStatus: varchar("review_status", { length: 24 }).$type<PatchReviewStatus | null>(),
+  reviewSummary: text("review_summary"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertPatchIndexSchema = createInsertSchema(patchIndex).omit({ id: true, createdAt: true });
 export type InsertPatchIndex = z.infer<typeof insertPatchIndexSchema>;
 export type PatchIndex = typeof patchIndex.$inferSelect;
+
+export const patchReviews = pgTable("patch_reviews", {
+  id: serial("id").primaryKey(),
+  runId: varchar("run_id", { length: 64 }).notNull(),
+  proposalId: varchar("proposal_id", { length: 64 }).notNull(),
+  committedSprint: integer("committed_sprint").notNull(),
+  reviewSprint: integer("review_sprint").notNull(),
+  status: varchar("status", { length: 24 }).$type<PatchReviewStatus>().notNull(),
+  evaluations: jsonb("evaluations").$type<RollbackTriggerEvaluation[] | null>(),
+  summary: text("summary"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertPatchReviewRecordSchema = createInsertSchema(patchReviews).omit({ id: true, createdAt: true });
+export type InsertPatchReviewRecord = z.infer<typeof insertPatchReviewRecordSchema>;
+export type PatchReviewRecord = typeof patchReviews.$inferSelect;
 
 export const metricYield = pgTable("metric_yield", {
   id: serial("id").primaryKey(),
