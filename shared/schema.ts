@@ -668,6 +668,9 @@ export interface HeadlessMatchConfig {
   roleSwapGroupId?: string;
   focalTeam?: "amber" | "blue";
   gameRules?: GameRules;
+  scratchNotesByTeam?: Partial<Record<"amber" | "blue", string>>;
+  enablePostMatchReflection?: boolean;
+  reflectionTokenBudget?: number;
 }
 
 export interface TournamentConfig {
@@ -994,12 +997,20 @@ export interface ResearcherPolicyNotice {
   message: string;
 }
 
+export interface ScratchNotesSnapshot {
+  notesText: string;
+  tokenCount: number;
+  lastUpdatedMatchId?: number;
+  lastUpdatedSprint?: number;
+}
+
 export interface CoachPromptEnvironment {
   opponentGenome?: GenomeModules;
   disclosureText?: string;
   matchmakingBucket?: string;
   researcherPolicy?: ResearcherPolicyThresholds;
   arenaId?: string;
+  scratchNotes?: string;
 }
 
 export interface TrainingSprintMetrics {
@@ -1225,6 +1236,7 @@ export const coachRuns = pgTable("coach_runs", {
   currentSprint: integer("current_sprint").notNull().default(0),
   arenaId: varchar("arena_id", { length: 64 }),
   searchPolicy: jsonb("search_policy").$type<SearchPolicy>().notNull().default(DEFAULT_SEARCH_POLICY),
+  currentScratchNotes: jsonb("current_scratch_notes").$type<ScratchNotesSnapshot | null>(),
   budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
   actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
@@ -1254,6 +1266,7 @@ export const coachSprints = pgTable("coach_sprints", {
   patchBundle: jsonb("patch_bundle").$type<CoachPatchBundle | null>(),
   disclosureText: text("disclosure_text"),
   researchMetrics: jsonb("research_metrics").$type<CoachResearchMetrics>().default({}),
+  scratchNotesSnapshot: jsonb("scratch_notes_snapshot").$type<ScratchNotesSnapshot | null>(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

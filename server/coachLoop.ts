@@ -13,6 +13,7 @@ import type {
   HeadlessMatchConfig,
   MatchRound,
   PatchMeasuredOutcome,
+  ScratchNotesSnapshot,
   SearchPolicy,
 } from "@shared/schema";
 import { DEFAULT_SEARCH_POLICY, getDefaultConfig } from "@shared/schema";
@@ -153,6 +154,7 @@ export interface SprintResult {
   }>;
   winRate: number;
   record: string;
+  finalScratchNotesByTeam?: Partial<Record<Team, ScratchNotesSnapshot>>;
 }
 
 export interface CoachState {
@@ -184,6 +186,9 @@ export interface CoachSprintEnvironment {
   matchmakingBucket?: string;
   teamSequence?: Team[];
   matchConfigOverrides?: Array<Partial<HeadlessMatchConfig>>;
+  teamScratchNotes?: Partial<Record<Team, string>>;
+  enablePostMatchReflection?: boolean;
+  reflectionTokenBudget?: number;
 }
 
 export interface CoachRunRecord {
@@ -201,6 +206,7 @@ export interface CoachRunRecord {
   currentGenome: GenomeModules;
   currentBeliefs: CoachBelief[];
   currentSprint: number;
+  currentScratchNotes?: ScratchNotesSnapshot | null;
   sprints: CoachSprintRecord[];
   isActive: boolean;
 }
@@ -265,6 +271,7 @@ export interface CoachSprintRecord {
   patch: CoachStructuredPatch | null;
   disclosureText?: string;
   researchMetrics: CoachResearchMetrics;
+  scratchNotesSnapshot?: ScratchNotesSnapshot | null;
   createdAt: string;
 }
 
@@ -1118,6 +1125,7 @@ function toCoachSprintRecord(sprint: PersistedCoachSprint): CoachSprintRecord {
     patch: sprint.patch ? { ...sprint.patch } : null,
     disclosureText: sprint.disclosureText || undefined,
     researchMetrics: sprint.researchMetrics ?? {},
+    scratchNotesSnapshot: sprint.scratchNotesSnapshot ?? null,
     createdAt: sprint.createdAt.toISOString(),
   };
 }
@@ -1138,6 +1146,7 @@ function toCoachRunRecord(run: PersistedCoachRun, sprints: PersistedCoachSprint[
     currentGenome: cloneGenome(run.currentGenome),
     currentBeliefs: cloneCoachBeliefs((run.currentBeliefs ?? []) as CoachBelief[]),
     currentSprint: run.currentSprint,
+    currentScratchNotes: run.currentScratchNotes ?? null,
     sprints: sprints.map(toCoachSprintRecord),
     isActive: activeCoachRuns.get(run.id) === true,
   };
@@ -1280,6 +1289,9 @@ export async function runCoachSprint(
 
   log(`[coach] Sprint ${sprintNumber} starting with ${config.matchesPerSprint} scheduled matches`, COACH_SOURCE);
 
+  // Track accumulated scratch notes across sprint matches
+  const sprintScratchNotes: Partial<Record<Team, ScratchNotesSnapshot>> = {};
+
   const scheduledMatches = Array.from({ length: config.matchesPerSprint }, (_, matchIndex) => async () => {
     const ourTeam: Team = env.teamSequence?.[matchIndex] || (matchIndex % 2 === 0 ? "amber" : "blue");
     const teamSystemPrompts = ourTeam === "amber"
@@ -1292,6 +1304,11 @@ export async function runCoachSprint(
           blue: buildGenomeSystemPrompt(state.genome),
         };
 
+    // Build scratch notes config for this match
+    const scratchNotesByTeam: Partial<Record<Team, string>> | undefined = env.teamScratchNotes
+      ? { ...env.teamScratchNotes }
+      : undefined;
+
     try {
       const matchConfigOverride = env.matchConfigOverrides?.[matchIndex] || {};
       const result = await runHeadlessMatch({
@@ -1302,8 +1319,20 @@ export async function runCoachSprint(
           : `${state.teamId}-s${sprintNumber}-m${matchIndex + 1}`,
         experimentId: `coach-${state.teamId}`,
         teamSize: config.teamSize,
+        ...(scratchNotesByTeam ? { scratchNotesByTeam } : {}),
+        ...(env.enablePostMatchReflection != null ? { enablePostMatchReflection: env.enablePostMatchReflection } : {}),
+        ...(env.reflectionTokenBudget != null ? { reflectionTokenBudget: env.reflectionTokenBudget } : {}),
         ...matchConfigOverride,
       }, undefined, teamSystemPrompts);
+
+      // Capture updated scratch notes for the sprint result
+      if (result.updatedScratchNotes) {
+        for (const [team, snapshot] of Object.entries(result.updatedScratchNotes) as Array<[Team, ScratchNotesSnapshot]>) {
+          if (snapshot) {
+            sprintScratchNotes[team] = snapshot;
+          }
+        }
+      }
 
       const opposingTeam: Team = ourTeam === "amber" ? "blue" : "amber";
       const ourScore = result.teams[ourTeam];
@@ -1350,6 +1379,7 @@ export async function runCoachSprint(
     matchResults,
     winRate,
     record,
+    finalScratchNotesByTeam: Object.keys(sprintScratchNotes).length > 0 ? sprintScratchNotes : undefined,
   };
 }
 
