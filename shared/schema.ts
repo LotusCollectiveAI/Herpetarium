@@ -747,14 +747,13 @@ export interface GenomeModules {
   opponentModeling: string;
   riskTolerance: string;
   memoryPolicy: string;
-}
-
-export interface GenomeModulesV2 extends GenomeModules {
   executionGuidance: string;
   deliberationScaffold: string;
 }
 
-export type GenomeModuleKey = keyof GenomeModulesV2;
+export type GenomeModulesV2 = GenomeModules;
+
+export type GenomeModuleKey = keyof GenomeModules;
 
 export type CoachDeltaOp = "add_rule" | "modify_rule" | "retire_rule";
 
@@ -1099,6 +1098,7 @@ export interface CoachProposal {
   summary: string;
   hypothesis: string;
   patch: CoachPatchBundle | null;
+  review?: CoachReviewResult;
 }
 
 export interface CoachReviewResult {

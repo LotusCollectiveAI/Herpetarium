@@ -133,6 +133,8 @@ const genomeModulesSchema = z.object({
   opponentModeling: z.string().min(1),
   riskTolerance: z.string().min(1),
   memoryPolicy: z.string().min(1),
+  executionGuidance: z.string().min(1),
+  deliberationScaffold: z.string().min(1),
 });
 
 const arenaCoachConfigSchema = z.object({

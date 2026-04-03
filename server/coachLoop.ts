@@ -4,6 +4,7 @@ import type {
   AIProvider,
   CoachDeltaOp,
   CoachEvidenceRef,
+  CoachPatchBundle,
   CoachResearchMetrics,
   CoachRun as PersistedCoachRun,
   CoachSemanticDelta,
@@ -27,7 +28,20 @@ type CoachRunStatus = "pending" | "running" | "completed" | "failed" | "stopped"
 
 const COACH_SOURCE = "coach";
 const COACH_ACTION_TYPE = "coach_autopsy";
-const GENOME_MODULE_KEYS: Array<keyof GenomeModules> = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
+const DEFAULT_EXECUTION_GUIDANCE = "Focus on clear, unambiguous clues that your teammates can decode reliably. When uncertain, prefer simpler associations over clever ones.";
+const DEFAULT_DELIBERATION_SCAFFOLD = "Discuss openly with your teammates. Share your reasoning, consider alternatives, and reach consensus before committing to an answer.";
+const DEFAULT_GENOME_EXTENSION_FIELDS: Pick<GenomeModules, "executionGuidance" | "deliberationScaffold"> = {
+  executionGuidance: DEFAULT_EXECUTION_GUIDANCE,
+  deliberationScaffold: DEFAULT_DELIBERATION_SCAFFOLD,
+};
+const GENOME_MODULE_KEYS: Array<keyof GenomeModules> = [
+  "cluePhilosophy",
+  "opponentModeling",
+  "riskTolerance",
+  "memoryPolicy",
+  "executionGuidance",
+  "deliberationScaffold",
+];
 
 export const SEED_GENOME_TEMPLATES: GenomeModules[] = [
   {
@@ -35,48 +49,56 @@ export const SEED_GENOME_TEMPLATES: GenomeModules[] = [
     opponentModeling: "Assume opponents are tracking patterns. Vary your clue style each round to prevent pattern recognition. Occasionally sacrifice clarity for unpredictability.",
     riskTolerance: "Moderate risk. Prefer clues your team will likely understand even if they're not perfectly obscure. Avoid overly clever clues that might confuse teammates.",
     memoryPolicy: "Track which clue styles have been intercepted in past rounds. Avoid repeating approaches that led to interceptions. Build on successful patterns from earlier rounds.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use concrete, sensory-based associations. Think about what the keyword looks like, sounds like, or feels like. Ground clues in physical experience.",
     opponentModeling: "Aggressive interception focus. Study opponent clue patterns closely and try to decode their keyword mapping. Prioritize breaking their code over protecting your own.",
     riskTolerance: "High risk tolerance. Willing to use obscure clues that only deep teammates would catch. Accept some miscommunication for better security against interception.",
     memoryPolicy: "Maintain a mental map of opponent keyword-clue associations. Each round, refine your model of what their keywords might be based on accumulated evidence.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use functional and relational associations. Think about what the keyword does, what category it belongs to, or what it relates to in everyday use.",
     opponentModeling: "Defensive posture. Focus primarily on making your own clues clear to teammates rather than trying to intercept. Only attempt interception when very confident.",
     riskTolerance: "Low risk. Prioritize team communication clarity above all else. Use straightforward associations that minimize miscommunication risk.",
     memoryPolicy: "Focus on consistency. Establish clue patterns early and maintain them so teammates can predict your style. Consistency builds team trust and accuracy.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use cultural and contextual references. Draw from shared cultural knowledge—movies, books, common expressions. Assume your teammates share similar cultural context.",
     opponentModeling: "Balanced approach. Split attention equally between making good clues and attempting interceptions. Adapt based on the score—more aggressive when behind, more defensive when ahead.",
     riskTolerance: "Adaptive risk. Take bigger risks early in the game to establish advantages, then become more conservative as token counts accumulate.",
     memoryPolicy: "Learn from mistakes. If a clue was too obvious (intercepted), shift to more obscure associations next round. If too obscure (miscommunicated), shift to clearer ones.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use oppositional and negative space associations. Think about what the keyword is NOT, or what contrasts with it. Clue by exclusion and contrast rather than similarity.",
     opponentModeling: "Theory of mind focused. Try to think about what opponents think you're thinking. Use second and third-order reasoning to stay ahead of their interception attempts.",
     riskTolerance: "Variable risk based on game state. Very conservative when close to losing (2 white tokens), very aggressive when opponent is close to losing.",
     memoryPolicy: "Build a comprehensive game model. Track all clues, codes, and outcomes for both teams. Use this complete history to make increasingly informed decisions.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use phonetic and linguistic associations. Think about how words sound, rhyme, or share etymological roots. Wordplay and language structure over meaning.",
     opponentModeling: "Minimal opponent modeling. Focus entirely on your own team's communication efficiency. Assume opponents will sometimes intercept and plan around it.",
     riskTolerance: "Extremely high risk. Use creative, unusual associations that require lateral thinking. Accept higher miscommunication rates for near-zero interception vulnerability.",
     memoryPolicy: "Short memory. Treat each round relatively fresh. Don't over-anchor on past patterns—stay flexible and responsive to the current situation.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use hierarchical category associations. Place the keyword in taxonomic categories (genus, species, family). Think like a classifier or encyclopedia.",
     opponentModeling: "Pattern-breaking focus. Actively change your clue strategy every 2-3 rounds to keep opponents off-balance. Use unpredictability as a weapon.",
     riskTolerance: "Medium-low risk. Slightly favor clarity over security but maintain enough variety to avoid being fully predictable.",
     memoryPolicy: "Selective memory. Remember only the most important events—interceptions and miscommunications. Ignore neutral rounds to avoid information overload.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use emotional and psychological associations. Connect keywords to feelings, moods, or psychological states they evoke. Tap into shared emotional understanding.",
     opponentModeling: "Exploit-focused. Look for weaknesses in opponent patterns. If they consistently struggle with certain types of clues, exploit those patterns aggressively.",
     riskTolerance: "Calculated risk. Assign rough probabilities to whether teammates and opponents will decode each clue. Choose the option with the best expected value.",
     memoryPolicy: "Strategic note-taking. Keep running notes on what works and what doesn't. Refine strategy between rounds based on accumulated intelligence.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
 ];
 
@@ -246,6 +268,14 @@ export interface CoachSprintRecord {
   createdAt: string;
 }
 
+type PersistedPatchDecision = {
+  decision: CoachDecision;
+  patch: CoachStructuredPatch | null;
+  patchBundle?: CoachPatchBundle | null;
+  proposalId?: string | null;
+  reviewDueSprint?: number | null;
+};
+
 function isAIProvider(value: unknown): value is AIProvider {
   return value === "chatgpt" || value === "claude" || value === "gemini" || value === "openrouter";
 }
@@ -264,7 +294,23 @@ function coerceGenomeModules(value: unknown): GenomeModules | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Partial<Record<keyof GenomeModules, unknown>>;
   const modules = GENOME_MODULE_KEYS.reduce<Partial<GenomeModules>>((acc, key) => {
-    acc[key] = typeof candidate[key] === "string" ? candidate[key] : "";
+    const normalized = typeof candidate[key] === "string" ? candidate[key].trim() : "";
+    if (normalized.length > 0) {
+      acc[key] = normalized;
+      return acc;
+    }
+
+    if (key === "executionGuidance") {
+      acc[key] = DEFAULT_EXECUTION_GUIDANCE;
+      return acc;
+    }
+
+    if (key === "deliberationScaffold") {
+      acc[key] = DEFAULT_DELIBERATION_SCAFFOLD;
+      return acc;
+    }
+
+    acc[key] = "";
     return acc;
   }, {});
 
@@ -288,7 +334,11 @@ RISK TOLERANCE: ${modules.riskTolerance}
 
 MEMORY POLICY: ${modules.memoryPolicy}
 
-Apply these strategic principles when generating clues, making guesses, and attempting interceptions. Your goal is to win the game by getting your team 2 interception tokens or forcing the opponent into 2 miscommunication tokens.`;
+EXECUTION GUIDANCE: ${modules.executionGuidance}
+
+DELIBERATION SCAFFOLD: ${modules.deliberationScaffold}
+
+Apply these strategic principles when generating clues, making guesses, attempting interceptions, and coordinating with teammates. Your goal is to win the game by getting your team 2 interception tokens or forcing the opponent into 2 miscommunication tokens.`;
 }
 
 function buildAIConfig(provider: AIProvider, model: string): AIPlayerConfig {
@@ -425,6 +475,16 @@ export function applyCoachPatch(genome: GenomeModules, patch: CoachPatch): Genom
     ...genome,
     [patch.targetModule]: patch.newValue,
   };
+}
+
+export function applyCoachPatchBundle(genome: GenomeModules, patch: CoachPatchBundle): GenomeModules {
+  const updatedGenome = cloneGenome(genome);
+
+  for (const edit of patch.edits) {
+    updatedGenome[edit.targetModule] = edit.newValue;
+  }
+
+  return updatedGenome;
 }
 
 export function hydrateMeasuredPatchOutcome(
@@ -700,7 +760,7 @@ function normalizeBeliefUpdates(rawBeliefUpdates: unknown): CoachBeliefUpdate[] 
   });
 }
 
-function mergeBeliefUpdates(
+export function mergeBeliefUpdates(
   previousBeliefs: CoachBelief[],
   updates: CoachBeliefUpdate[],
   sprintNumber: number,
@@ -996,28 +1056,50 @@ function summarizePatchMeasuredOutcome(sprintResult: SprintResult): PatchMeasure
   };
 }
 
-function getPatchIndexModule(autopsy: { patch: CoachStructuredPatch | null }): string {
-  // Reverts do not carry a module-specific patch payload, but patch_index.module is required.
-  return autopsy.patch?.targetModule ?? "none";
-}
-
 export async function persistPatchIndexRecord(
   runId: string,
   sprintResult: SprintResult,
   genomeBefore: GenomeModules,
   state: CoachState,
-  autopsy: { decision: CoachDecision; patch: CoachStructuredPatch | null },
+  autopsy: PersistedPatchDecision,
 ): Promise<void> {
-  await storage.createPatchIndexEntry({
-    runId,
-    sprintNumber: sprintResult.sprintNumber,
-    module: getPatchIndexModule(autopsy),
-    decision: autopsy.decision === "commit" && autopsy.patch ? "committed" : "reverted",
-    delta: autopsy.patch?.delta ?? null,
-    genomeBefore: cloneGenome(genomeBefore),
-    genomeAfter: autopsy.decision === "commit" && autopsy.patch ? cloneGenome(state.genome) : null,
-    measuredOutcome: summarizePatchMeasuredOutcome(sprintResult),
-  });
+  const committedEdits = autopsy.decision === "commit"
+    ? autopsy.patchBundle?.edits.length
+      ? autopsy.patchBundle.edits
+      : autopsy.patch
+        ? [autopsy.patch]
+        : []
+    : [];
+
+  if (committedEdits.length === 0) {
+    await storage.createPatchIndexEntry({
+      runId,
+      sprintNumber: sprintResult.sprintNumber,
+      module: autopsy.patch?.targetModule ?? "none",
+      decision: "reverted",
+      proposalId: autopsy.proposalId ?? null,
+      delta: autopsy.patch?.delta ?? null,
+      genomeBefore: cloneGenome(genomeBefore),
+      genomeAfter: null,
+      measuredOutcome: summarizePatchMeasuredOutcome(sprintResult),
+    });
+    return;
+  }
+
+  await Promise.all(committedEdits.map((edit) =>
+    storage.createPatchIndexEntry({
+      runId,
+      sprintNumber: sprintResult.sprintNumber,
+      module: edit.targetModule,
+      decision: "committed",
+      proposalId: autopsy.proposalId ?? autopsy.patchBundle?.proposalId ?? null,
+      delta: edit.delta ?? null,
+      genomeBefore: cloneGenome(genomeBefore),
+      genomeAfter: cloneGenome(state.genome),
+      measuredOutcome: summarizePatchMeasuredOutcome(sprintResult),
+      reviewDueSprint: autopsy.reviewDueSprint ?? null,
+    }),
+  ));
 }
 
 function toCoachSprintRecord(sprint: PersistedCoachSprint): CoachSprintRecord {

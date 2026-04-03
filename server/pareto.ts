@@ -37,7 +37,9 @@ function countGenomeComplexity(genome: GenomeModules): number {
   return genome.cluePhilosophy.length
     + genome.opponentModeling.length
     + genome.riskTolerance.length
-    + genome.memoryPolicy.length;
+    + genome.memoryPolicy.length
+    + genome.executionGuidance.length
+    + genome.deliberationScaffold.length;
 }
 
 function parseSprintMetrics(sprint: CoachSprint): SprintMetrics {

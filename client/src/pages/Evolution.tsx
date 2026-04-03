@@ -14,7 +14,7 @@ import { ArrowLeft, ArrowDown, Dna, Play, Bot, BarChart3, Loader2, ChevronDown, 
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
-import type { MODEL_OPTIONS, AIProvider } from "@shared/schema";
+import type { MODEL_OPTIONS, AIProvider, GenomeModules } from "@shared/schema";
 
 interface EvolutionRun {
   id: number;
@@ -48,13 +48,6 @@ interface Generation {
   maxElo: number | null;
   diversityScore: string | null;
   matchIds: number[];
-}
-
-interface GenomeModules {
-  cluePhilosophy: string;
-  opponentModeling: string;
-  riskTolerance: string;
-  memoryPolicy: string;
 }
 
 interface StrategyGenome {
@@ -405,6 +398,8 @@ function GenomeCard({ genome, rank }: { genome: StrategyGenome; rank: number }) 
     opponentModeling: Crosshair,
     riskTolerance: Shield,
     memoryPolicy: BookOpen,
+    executionGuidance: Play,
+    deliberationScaffold: Bot,
   };
 
   const moduleLabels: Record<keyof GenomeModules, string> = {
@@ -412,6 +407,8 @@ function GenomeCard({ genome, rank }: { genome: StrategyGenome; rank: number }) 
     opponentModeling: "Opponent Modeling",
     riskTolerance: "Risk Tolerance",
     memoryPolicy: "Memory Policy",
+    executionGuidance: "Execution Guidance",
+    deliberationScaffold: "Deliberation Scaffold",
   };
 
   return (

@@ -1,27 +1,33 @@
 import { randomUUID } from "crypto";
 import type {
+  AnchorABReport,
   ArenaCoachSlot,
   ArenaConfig,
   ArenaResult,
   CoachConfig,
   CoachDecision,
   CoachMatchmakingNote,
+  CoachProposal,
+  CoachReviewResult,
   CoachRun,
   CoachSprint,
   CoachResearchMetrics,
+  CompiledGenomePrompts,
   DeceptionCategory,
   DeliberationPatternVector,
   GenomeModules,
+  SprintEvaluation,
 } from "@shared/schema";
 import { DEFAULT_GAME_RULES, LONGFORM_ARENA_RULES, type GameRules } from "@shared/schema";
 import { runBoundedSettledPool } from "./boundedPool";
 import {
-  applyCoachPatch,
+  applyCoachPatchBundle,
   applySprintResultToCoachState,
   cloneGenome,
   coachAutopsy,
   createCoachRun,
   createCoachState,
+  mergeBeliefUpdates,
   persistPatchIndexRecord,
   runCoachSprint,
   SEED_GENOME_TEMPLATES,
@@ -29,7 +35,9 @@ import {
   type CoachStructuredPatch,
   type SprintResult,
 } from "./coachLoop";
+import { coachCommitReview, coachProposePatch } from "./coachPrompts";
 import { buildDisclosureText } from "./disclosure";
+import { compileGenomePrompts } from "./genomeCompiler";
 import {
   createPairingHistory,
   recordPairing,
@@ -50,6 +58,8 @@ const DECEPTION_CATEGORIES: DeceptionCategory[] = [
   "observation_sensitivity",
 ];
 const ARENA_LONGFORM_RULES_ENABLED = /^(1|true|yes|on)$/i.test(process.env.ARENA_LONGFORM_RULES_ENABLED || "");
+
+void coachAutopsy;
 
 interface ArenaRuntimeSlot {
   slotIndex: number;
@@ -85,6 +95,8 @@ interface PairingResult {
   opponentRunIdForB: string;
 }
 
+type ProposalPatchEdit = NonNullable<CoachProposal["patch"]>["edits"][number];
+
 function logArena(message: string) {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
@@ -94,6 +106,134 @@ function logArena(message: string) {
   });
 
   console.log(`${formattedTime} [${ARENA_SOURCE}] ${message}`);
+}
+
+function countSentences(text: string): number {
+  return text
+    .split(/[.!?]+/)
+    .map((fragment) => fragment.trim())
+    .filter(Boolean)
+    .length;
+}
+
+function computeGenomeCharCount(genome: GenomeModules): number {
+  return Object.values(genome).reduce((total, value) => total + value.length, 0);
+}
+
+function computeGenomeSentenceCount(genome: GenomeModules): number {
+  return Object.values(genome).reduce((total, value) => total + countSentences(value), 0);
+}
+
+function createIncompleteAnchorReport(): AnchorABReport {
+  return {
+    incomplete: true,
+    anchorsUsed: [],
+    incumbentWinRate: 0,
+    candidateWinRate: 0,
+    delta: 0,
+    incumbentMatchIds: [],
+    candidateMatchIds: [],
+    perAnchor: [],
+  };
+}
+
+function toStructuredPatch(edit: ProposalPatchEdit): CoachStructuredPatch {
+  return {
+    targetModule: edit.targetModule,
+    oldValue: edit.oldValue,
+    newValue: edit.newValue,
+    rationale: edit.rationale,
+    expectedEffect: edit.expectedEffect,
+    ...(edit.delta ? { delta: edit.delta } : {}),
+  };
+}
+
+function clonePatchBundle(patchBundle: CoachProposal["patch"]): CoachProposal["patch"] {
+  if (!patchBundle) {
+    return null;
+  }
+
+  return {
+    ...patchBundle,
+    edits: patchBundle.edits.map((edit) => ({
+      ...edit,
+      ...(edit.delta ? { delta: { ...edit.delta } } : {}),
+    })),
+  };
+}
+
+function buildFallbackEvaluation(
+  runId: string,
+  sprintResult: SprintResult,
+  genome: GenomeModules,
+  compiledPrompts: CompiledGenomePrompts,
+): SprintEvaluation {
+  const wins = sprintResult.matchResults.filter((match) => match.winner === match.ourTeam).length;
+  const losses = sprintResult.matchResults.filter((match) => match.winner !== null && match.winner !== match.ourTeam).length;
+  const draws = sprintResult.matchResults.filter((match) => match.winner === null).length;
+  const totalRounds = sprintResult.matchResults.reduce((sum, match) => sum + match.totalRounds, 0);
+  const compiledPromptChars = {
+    cluegiver: compiledPrompts.prompts.cluegiver.charCount,
+    own_guesser: compiledPrompts.prompts.own_guesser.charCount,
+    interceptor: compiledPrompts.prompts.interceptor.charCount,
+    own_deliberator: compiledPrompts.prompts.own_deliberator.charCount,
+    intercept_deliberator: compiledPrompts.prompts.intercept_deliberator.charCount,
+    coach: compiledPrompts.prompts.coach.charCount,
+  };
+
+  return {
+    runId,
+    sprintNumber: sprintResult.sprintNumber,
+    training: {
+      matchIds: sprintResult.matchResults.map((match) => match.matchId),
+      wins,
+      losses,
+      draws,
+      winRate: sprintResult.winRate,
+      meanRoundsPerMatch: sprintResult.matchResults.length > 0 ? Number((totalRounds / sprintResult.matchResults.length).toFixed(2)) : 0,
+    },
+    execution: {
+      ownDecodeRate: 0,
+      opponentInterceptRateAgainstUs: 0,
+      ourInterceptRate: 0,
+      miscommunicationRate: 0,
+      catastrophicAsymmetryRate: 0,
+    },
+    deliberation: {
+      ownConsensusRate: 0,
+      interceptConsensusRate: 0,
+      timeoutRate: 0,
+      fallbackRate: 0,
+      meanDeliberationExchanges: 0,
+    },
+    leakage: {
+      meanLeakageScore: 0,
+      maxLeakageScore: 0,
+      keywordMentionRate: 0,
+      codePatternRate: 0,
+    },
+    sideBalance: {
+      amberWinRate: 0,
+      blueWinRate: 0,
+      sideGap: 0,
+      amberMatchCount: sprintResult.matchResults.filter((match) => match.ourTeam === "amber").length,
+      blueMatchCount: sprintResult.matchResults.filter((match) => match.ourTeam === "blue").length,
+    },
+    complexity: {
+      genomeCharCount: computeGenomeCharCount(genome),
+      genomeSentenceCount: computeGenomeSentenceCount(genome),
+      compiledPromptChars,
+      compiledPromptTotalChars: Object.values(compiledPromptChars).reduce((sum, value) => sum + value, 0),
+      deltaGenomeChars: null,
+      deltaCompiledPromptChars: null,
+    },
+    pendingPatchReviews: [],
+    policyNotices: [],
+    evidenceLines: [
+      "Sprint evaluation fallback was used because the primary evaluator failed for this sprint.",
+      `Observed sprint record ${sprintResult.record} with win rate ${sprintResult.winRate.toFixed(4)} across ${sprintResult.matchResults.length} matches.`,
+    ],
+  };
 }
 
 function cloneBeliefs(state: CoachState): CoachState["beliefs"] {
@@ -513,12 +653,20 @@ async function persistArenaSprintRecord(
   slot: ArenaRuntimeSlot,
   sprintResult: SprintResult,
   genomeBefore: GenomeModules,
-  autopsy: { decision: CoachDecision; patch: CoachStructuredPatch | null },
+  coachCycle: {
+    decision: CoachDecision;
+    proposal: CoachProposal;
+    review: CoachReviewResult;
+    anchorSummary: AnchorABReport | null;
+  },
   disclosureText: string | undefined,
   opponents: SprintOpponentContext[],
 ): Promise<void> {
   const uniqueOpponentRunIds = Array.from(new Set(opponents.map((opponent) => opponent.runId)));
   const researchMetrics = await buildResearchMetrics(sprintResult, opponents);
+  const legacyPatch = coachCycle.proposal.patch?.edits.length === 1
+    ? toStructuredPatch(coachCycle.proposal.patch.edits[0])
+    : null;
 
   await storage.createCoachSprint({
     runId: slot.runId,
@@ -530,13 +678,29 @@ async function persistArenaSprintRecord(
     genomeBefore: cloneGenome(genomeBefore),
     genomeAfter: cloneGenome(slot.state.genome),
     beliefsAfter: cloneBeliefs(slot.state),
-    decision: autopsy.decision,
-    patch: autopsy.patch ? { ...autopsy.patch } : null,
+    decision: coachCycle.decision,
+    patch: legacyPatch,
+    proposal: {
+      ...coachCycle.proposal,
+      review: { ...coachCycle.review },
+      beliefUpdates: coachCycle.proposal.beliefUpdates.map((update) => ({ ...update })),
+      patch: clonePatchBundle(coachCycle.proposal.patch),
+    },
+    anchorSummary: coachCycle.anchorSummary,
+    patchBundle: clonePatchBundle(coachCycle.proposal.patch),
     disclosureText: disclosureText || null,
     researchMetrics,
   });
 
-  await persistPatchIndexRecord(slot.runId, sprintResult, genomeBefore, slot.state, autopsy);
+  await persistPatchIndexRecord(slot.runId, sprintResult, genomeBefore, slot.state, {
+    decision: coachCycle.decision,
+    patch: legacyPatch,
+    patchBundle: clonePatchBundle(coachCycle.proposal.patch),
+    proposalId: coachCycle.proposal.proposalId,
+    reviewDueSprint: coachCycle.decision === "commit" && coachCycle.proposal.patch
+      ? sprintResult.sprintNumber + 1
+      : null,
+  });
 }
 
 function toArenaCoachSlot(slot: ArenaRuntimeSlot): ArenaCoachSlot {
@@ -767,49 +931,76 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           resultsBySlot.get(slot.slotIndex) || [],
         );
         const genomeBefore = cloneGenome(slot.state.genome);
+        const compiledPrompts = compileGenomePrompts(genomeBefore);
+        const primaryOpponentGenome = (opponentsBySlot.get(slot.slotIndex) || [])[0]?.genome;
+        const promptEnv = {
+          arenaId: config.arenaId,
+          disclosureText: buildDisclosureBundle(opponentsBySlot.get(slot.slotIndex) || [], foiaActive),
+          matchmakingBucket: (opponentsBySlot.get(slot.slotIndex) || [])[0]?.bucket,
+          opponentGenome: primaryOpponentGenome ? cloneGenome(primaryOpponentGenome) : undefined,
+        };
+        let evaluation: SprintEvaluation;
 
         try {
-          await evaluateSprint({
+          evaluation = await evaluateSprint({
             runId: slot.runId,
             sprintNumber,
             matchIds: sprintResult.matchResults.map((match) => match.matchId),
             focalTeam: sprintResult.matchResults[0]?.ourTeam || "amber",
             currentGenome: genomeBefore,
+            compiledPrompts,
           });
         } catch (error) {
           logArena(
             `Sprint evaluation failed for run ${slot.runId} sprint ${sprintNumber}: ${error instanceof Error ? error.message : String(error)}`,
           );
+          evaluation = buildFallbackEvaluation(slot.runId, sprintResult, genomeBefore, compiledPrompts);
         }
 
         const sprintState = applySprintResultToCoachState(slot.state, sprintResult);
-        const disclosureText = buildDisclosureBundle(opponentsBySlot.get(slot.slotIndex) || [], foiaActive);
-        const autopsy = await coachAutopsy(
+        const disclosureText = promptEnv.disclosureText;
+        const coachConfig = buildAutopsyCoachConfig(
+          config,
+          primaryOpponentGenome,
+        );
+        const proposal = await coachProposePatch(
           sprintState,
           sprintResult,
-          buildAutopsyCoachConfig(
-            config,
-            (opponentsBySlot.get(slot.slotIndex) || [])[0]?.genome,
-          ),
-          disclosureText ? { disclosureText } : undefined,
+          evaluation,
+          coachConfig,
+          promptEnv,
         );
+        const anchorSummary = proposal.patch ? createIncompleteAnchorReport() : null;
+        const review = await coachCommitReview(
+          sprintState,
+          proposal,
+          evaluation,
+          anchorSummary || undefined,
+          evaluation.pendingPatchReviews,
+          coachConfig,
+          promptEnv,
+        );
+        const finalDecision: CoachDecision = review.decision === "commit" && proposal.patch ? "commit" : "revert";
+
+        logArena(`Coach proposed: ${proposal.summary}`);
+        logArena(`Coach decided: ${finalDecision}`);
 
         let nextState: CoachState = {
           ...sprintState,
-          beliefs: autopsy.beliefs,
+          beliefs: mergeBeliefUpdates(sprintState.beliefs, proposal.beliefUpdates, sprintResult.sprintNumber),
         };
 
-        if (autopsy.decision === "commit" && autopsy.patch) {
+        if (finalDecision === "commit" && proposal.patch) {
           nextState = {
             ...nextState,
-            genome: applyCoachPatch(nextState.genome, autopsy.patch),
+            genome: applyCoachPatchBundle(nextState.genome, proposal.patch),
             patchHistory: [
               ...nextState.patchHistory,
-              {
-                ...autopsy.patch,
+              ...proposal.patch.edits.map((edit) => ({
+                ...edit,
                 sprintApplied: sprintResult.sprintNumber,
-                decision: "commit",
-              },
+                decision: "commit" as const,
+              })),
             ],
           };
         }
@@ -821,7 +1012,12 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           slot,
           sprintResult,
           genomeBefore,
-          autopsy,
+          {
+            decision: finalDecision,
+            proposal,
+            review,
+            anchorSummary,
+          },
           disclosureText,
           opponentsBySlot.get(slot.slotIndex) || [],
         );

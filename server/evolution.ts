@@ -5,6 +5,20 @@ import { callAI } from "./ai";
 import { log } from "./index";
 
 const activeRuns = new Map<number, boolean>();
+const DEFAULT_EXECUTION_GUIDANCE = "Focus on clear, unambiguous clues that your teammates can decode reliably. When uncertain, prefer simpler associations over clever ones.";
+const DEFAULT_DELIBERATION_SCAFFOLD = "Discuss openly with your teammates. Share your reasoning, consider alternatives, and reach consensus before committing to an answer.";
+const DEFAULT_GENOME_EXTENSION_FIELDS: Pick<GenomeModules, "executionGuidance" | "deliberationScaffold"> = {
+  executionGuidance: DEFAULT_EXECUTION_GUIDANCE,
+  deliberationScaffold: DEFAULT_DELIBERATION_SCAFFOLD,
+};
+const GENOME_MODULE_KEYS: Array<keyof GenomeModules> = [
+  "cluePhilosophy",
+  "opponentModeling",
+  "riskTolerance",
+  "memoryPolicy",
+  "executionGuidance",
+  "deliberationScaffold",
+];
 
 export function isEvolutionRunning(id: number): boolean {
   return activeRuns.get(id) === true;
@@ -20,48 +34,56 @@ const SEED_GENOME_TEMPLATES: GenomeModules[] = [
     opponentModeling: "Assume opponents are tracking patterns. Vary your clue style each round to prevent pattern recognition. Occasionally sacrifice clarity for unpredictability.",
     riskTolerance: "Moderate risk. Prefer clues your team will likely understand even if they're not perfectly obscure. Avoid overly clever clues that might confuse teammates.",
     memoryPolicy: "Track which clue styles have been intercepted in past rounds. Avoid repeating approaches that led to interceptions. Build on successful patterns from earlier rounds.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use concrete, sensory-based associations. Think about what the keyword looks like, sounds like, or feels like. Ground clues in physical experience.",
     opponentModeling: "Aggressive interception focus. Study opponent clue patterns closely and try to decode their keyword mapping. Prioritize breaking their code over protecting your own.",
     riskTolerance: "High risk tolerance. Willing to use obscure clues that only deep teammates would catch. Accept some miscommunication for better security against interception.",
     memoryPolicy: "Maintain a mental map of opponent keyword-clue associations. Each round, refine your model of what their keywords might be based on accumulated evidence.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use functional and relational associations. Think about what the keyword does, what category it belongs to, or what it relates to in everyday use.",
     opponentModeling: "Defensive posture. Focus primarily on making your own clues clear to teammates rather than trying to intercept. Only attempt interception when very confident.",
     riskTolerance: "Low risk. Prioritize team communication clarity above all else. Use straightforward associations that minimize miscommunication risk.",
     memoryPolicy: "Focus on consistency. Establish clue patterns early and maintain them so teammates can predict your style. Consistency builds team trust and accuracy.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use cultural and contextual references. Draw from shared cultural knowledge—movies, books, common expressions. Assume your teammates share similar cultural context.",
     opponentModeling: "Balanced approach. Split attention equally between making good clues and attempting interceptions. Adapt based on the score—more aggressive when behind, more defensive when ahead.",
     riskTolerance: "Adaptive risk. Take bigger risks early in the game to establish advantages, then become more conservative as token counts accumulate.",
     memoryPolicy: "Learn from mistakes. If a clue was too obvious (intercepted), shift to more obscure associations next round. If too obscure (miscommunicated), shift to clearer ones.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use oppositional and negative space associations. Think about what the keyword is NOT, or what contrasts with it. Clue by exclusion and contrast rather than similarity.",
     opponentModeling: "Theory of mind focused. Try to think about what opponents think you're thinking. Use second and third-order reasoning to stay ahead of their interception attempts.",
     riskTolerance: "Variable risk based on game state. Very conservative when close to losing (2 white tokens), very aggressive when opponent is close to losing.",
     memoryPolicy: "Build a comprehensive game model. Track all clues, codes, and outcomes for both teams. Use this complete history to make increasingly informed decisions.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use phonetic and linguistic associations. Think about how words sound, rhyme, or share etymological roots. Wordplay and language structure over meaning.",
     opponentModeling: "Minimal opponent modeling. Focus entirely on your own team's communication efficiency. Assume opponents will sometimes intercept and plan around it.",
     riskTolerance: "Extremely high risk. Use creative, unusual associations that require lateral thinking. Accept higher miscommunication rates for near-zero interception vulnerability.",
     memoryPolicy: "Short memory. Treat each round relatively fresh. Don't over-anchor on past patterns—stay flexible and responsive to the current situation.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use hierarchical category associations. Place the keyword in taxonomic categories (genus, species, family). Think like a classifier or encyclopedia.",
     opponentModeling: "Pattern-breaking focus. Actively change your clue strategy every 2-3 rounds to keep opponents off-balance. Use unpredictability as a weapon.",
     riskTolerance: "Medium-low risk. Slightly favor clarity over security but maintain enough variety to avoid being fully predictable.",
     memoryPolicy: "Selective memory. Remember only the most important events—interceptions and miscommunications. Ignore neutral rounds to avoid information overload.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
   {
     cluePhilosophy: "Use emotional and psychological associations. Connect keywords to feelings, moods, or psychological states they evoke. Tap into shared emotional understanding.",
     opponentModeling: "Exploit-focused. Look for weaknesses in opponent patterns. If they consistently struggle with certain types of clues, exploit those patterns aggressively.",
     riskTolerance: "Calculated risk. Assign rough probabilities to whether teammates and opponents will decode each clue. Choose the option with the best expected value.",
     memoryPolicy: "Strategic note-taking. Keep running notes on what works and what doesn't. Refine strategy between rounds based on accumulated intelligence.",
+    ...DEFAULT_GENOME_EXTENSION_FIELDS,
   },
 ];
 
@@ -82,9 +104,8 @@ export function generateSeedPopulation(runId: number, size: number): GenomeModul
 }
 
 function crossoverModules(a: GenomeModules, b: GenomeModules): GenomeModules {
-  const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
-  const child: GenomeModules = { cluePhilosophy: "", opponentModeling: "", riskTolerance: "", memoryPolicy: "" };
-  for (const key of keys) {
+  const child: GenomeModules = { ...a };
+  for (const key of GENOME_MODULE_KEYS) {
     child[key] = Math.random() < 0.5 ? a[key] : b[key];
   }
   return child;
@@ -101,7 +122,11 @@ RISK TOLERANCE: ${modules.riskTolerance}
 
 MEMORY POLICY: ${modules.memoryPolicy}
 
-Apply these strategic principles when generating clues, making guesses, and attempting interceptions. Your goal is to win the game by getting your team 2 interception tokens or forcing the opponent into 2 miscommunication tokens.`;
+EXECUTION GUIDANCE: ${modules.executionGuidance}
+
+DELIBERATION SCAFFOLD: ${modules.deliberationScaffold}
+
+Apply these strategic principles when generating clues, making guesses, attempting interceptions, and coordinating with teammates. Your goal is to win the game by getting your team 2 interception tokens or forcing the opponent into 2 miscommunication tokens.`;
 }
 
 const K_FACTOR = 32;
@@ -133,12 +158,11 @@ function tournamentSelect(genomes: StrategyGenome[], tournamentSize: number = 3)
 }
 
 function computeModuleSimilarity(a: GenomeModules, b: GenomeModules): number {
-  const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
   let matches = 0;
-  for (const key of keys) {
+  for (const key of GENOME_MODULE_KEYS) {
     if (a[key] === b[key]) matches++;
   }
-  return matches / keys.length;
+  return matches / GENOME_MODULE_KEYS.length;
 }
 
 function buildFrequencyWeightedPairings(population: StrategyGenome[], matchesPerEval: number): Array<[number, number]> {
@@ -173,19 +197,18 @@ function buildFrequencyWeightedPairings(population: StrategyGenome[], matchesPer
 
 function computePopulationDiversity(genomes: StrategyGenome[]): number {
   if (genomes.length < 2) return 0;
-  const moduleKeys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
   let totalPairs = 0;
   let totalDiff = 0;
   for (let i = 0; i < genomes.length; i++) {
     for (let j = i + 1; j < genomes.length; j++) {
       totalPairs++;
       let diff = 0;
-      for (const key of moduleKeys) {
+      for (const key of GENOME_MODULE_KEYS) {
         const a = (genomes[i].modules as GenomeModules)[key];
         const b = (genomes[j].modules as GenomeModules)[key];
         if (a !== b) diff++;
       }
-      totalDiff += diff / moduleKeys.length;
+      totalDiff += diff / GENOME_MODULE_KEYS.length;
     }
   }
   return totalPairs > 0 ? totalDiff / totalPairs : 0;
@@ -646,11 +669,22 @@ const MUTATION_VARIANTS: Record<keyof GenomeModules, string[]> = {
     "Weight recent rounds exponentially more than earlier rounds in decision-making.",
     "Use opponent-focused memory: primarily remember opponent behaviors and outcomes, minimize self-focus.",
   ],
+  executionGuidance: [
+    "Favor short, concrete clues with a quick sanity check for ambiguity before you commit.",
+    "Generate two clue candidates, compare teammate decodability, and choose the clearer option.",
+    "Bias toward literal associations first, only escalating to nuanced clues when secrecy clearly matters.",
+    "Use a fast preflight check: can teammates decode this more reliably than opponents can model it?",
+  ],
+  deliberationScaffold: [
+    "Use a structured discussion: each teammate states a top guess, one reason, and one uncertainty before the final vote.",
+    "Anchor on the most certain digit placements first, then resolve the ambiguous positions together.",
+    "Require one dissenting hypothesis before locking an answer so the team tests alternatives explicitly.",
+    "Keep deliberation concise: each teammate shares one primary read and one counterpoint, then the team commits.",
+  ],
 };
 
 function mutateModulesFallback(modules: GenomeModules): { mutated: GenomeModules; log: string } {
-  const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
-  const targetKey = keys[Math.floor(Math.random() * keys.length)];
+  const targetKey = GENOME_MODULE_KEYS[Math.floor(Math.random() * GENOME_MODULE_KEYS.length)];
   const variants = MUTATION_VARIANTS[targetKey];
   const newValue = variants[Math.floor(Math.random() * variants.length)];
 
@@ -666,8 +700,7 @@ async function mutateModulesWithAI(
   fitnessScore: number,
   genNumber: number
 ): Promise<{ mutated: GenomeModules; log: string }> {
-  const keys: (keyof GenomeModules)[] = ["cluePhilosophy", "opponentModeling", "riskTolerance", "memoryPolicy"];
-  const targetKey = keys[Math.floor(Math.random() * keys.length)];
+  const targetKey = GENOME_MODULE_KEYS[Math.floor(Math.random() * GENOME_MODULE_KEYS.length)];
 
   const aiConfig: AIPlayerConfig = {
     provider: config.baseProvider,
@@ -687,6 +720,8 @@ Current genome modules:
 - opponentModeling: ${modules.opponentModeling}
 - riskTolerance: ${modules.riskTolerance}
 - memoryPolicy: ${modules.memoryPolicy}
+- executionGuidance: ${modules.executionGuidance}
+- deliberationScaffold: ${modules.deliberationScaffold}
 
 Mutate the "${targetKey}" module. Create a meaningfully different variant that could improve performance. ${fitnessScore < 0.3 ? "This genome is underperforming — try a bold, creative change." : fitnessScore > 0.6 ? "This genome is performing well — try a subtle refinement." : "Try a moderate adjustment."}`;
 

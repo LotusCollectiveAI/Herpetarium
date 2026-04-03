@@ -5,6 +5,8 @@ const GENOME_DISCLOSURE_KEYS: Array<keyof GenomeModules> = [
   "opponentModeling",
   "riskTolerance",
   "memoryPolicy",
+  "executionGuidance",
+  "deliberationScaffold",
 ];
 
 export function buildDisclosureText(genome: GenomeModules): string {
