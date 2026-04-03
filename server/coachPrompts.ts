@@ -3,6 +3,8 @@ import type {
   AIPlayerConfig,
   CoachBeliefUpdate,
   CoachConfig,
+  CoachForecast,
+  CoachMetaMetrics,
   CoachModuleEdit,
   CoachPatchBundle,
   CoachPromptEnvironment,
@@ -11,6 +13,8 @@ import type {
   GenomeModuleKey,
   GenomeModules,
   PatchReviewSummary,
+  SearchPolicy,
+  SearchPolicyPatch,
   SprintEvaluation,
   AnchorABReport,
 } from "@shared/schema";
@@ -222,6 +226,67 @@ function formatEvaluation(evaluation: SprintEvaluation): string {
   ].join("\n");
 }
 
+function formatSearchPolicy(policy?: SearchPolicy): string {
+  if (!policy) {
+    return "No search policy set.";
+  }
+
+  const lines: string[] = [];
+  const bias = policy.explorationBias;
+  if (bias >= 0.5) {
+    lines.push("Current bias: favor bolder hypothesis testing when evidence is mixed.");
+  } else if (bias >= 0.25) {
+    lines.push("Current bias: balanced between exploration and conservation.");
+  } else {
+    lines.push("Current bias: favor conservative, evidence-grounded changes.");
+  }
+
+  if (policy.proposalComplexityPreference === "decrease") {
+    lines.push("Complexity preference: treat simplification as the default unless complexity is clearly buying performance.");
+  } else if (policy.proposalComplexityPreference === "increase") {
+    lines.push("Complexity preference: willing to add complexity when a clear mechanism is identified.");
+  } else {
+    lines.push("Complexity preference: neutral on complexity changes.");
+  }
+
+  if (policy.reviewStrictness >= 0.7) {
+    lines.push("Review stance: require stronger evidence before committing, but this is still an advisory bias, not a hard rule.");
+  } else if (policy.reviewStrictness <= 0.4) {
+    lines.push("Review stance: lean toward committing when the direction looks promising, even with limited evidence.");
+  } else {
+    lines.push("Review stance: moderate evidence bar for commits.");
+  }
+
+  if (policy.conservationWeight >= 0.8) {
+    lines.push("Conservation: prefer smaller edits unless a clear repeated failure mode is visible.");
+  }
+
+  const focusModules = Object.entries(policy.moduleFocusWeights)
+    .filter(([, w]) => w !== undefined && w > 0.5)
+    .map(([m]) => m);
+  if (focusModules.length > 0) {
+    lines.push(`Module focus areas: ${focusModules.join(", ")}.`);
+  }
+
+  return lines.join("\n");
+}
+
+function formatCoachMetaMetrics(metrics?: CoachMetaMetrics): string {
+  if (!metrics || metrics.proposalCount === 0) {
+    return "No coach track record yet.";
+  }
+
+  const lines = [
+    `Your track record: ${metrics.proposalCount} proposals, ${metrics.commitCount} commits (${(metrics.commitRate * 100).toFixed(0)}% commit rate).`,
+  ];
+
+  if (metrics.forecastChecks > 0) {
+    lines.push(`Forecast accuracy: ${(metrics.forecastAccuracy * 100).toFixed(0)}% correct over ${metrics.forecastChecks} checked forecasts.`);
+  }
+
+  return lines.join("\n");
+}
+
 function formatEnvironment(env?: CoachPromptEnvironment): string {
   if (!env) {
     return "No extra environment context.";
@@ -259,6 +324,16 @@ function formatEnvironment(env?: CoachPromptEnvironment): string {
   if (env.scratchNotes) {
     lines.push("Scratch Notes:");
     lines.push(env.scratchNotes);
+  }
+
+  if (env.searchPolicy) {
+    lines.push("### Search Policy");
+    lines.push(formatSearchPolicy(env.searchPolicy));
+  }
+
+  if (env.coachMetaMetrics) {
+    lines.push("### Coach Track Record");
+    lines.push(formatCoachMetaMetrics(env.coachMetaMetrics));
   }
 
   return lines.length > 0 ? lines.join("\n") : "No extra environment context.";
@@ -453,6 +528,88 @@ function fallbackProposal(): CoachProposal {
   };
 }
 
+function normalizeForecast(raw: unknown): CoachForecast | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+  const validDirections = ["up", "flat", "down"];
+  const winRateDirection = validDirections.includes(obj.winRateDirection as string) ? obj.winRateDirection as CoachForecast["winRateDirection"] : undefined;
+  const ownDecodeDirection = validDirections.includes(obj.ownDecodeDirection as string) ? obj.ownDecodeDirection as CoachForecast["ownDecodeDirection"] : undefined;
+  const ourInterceptDirection = validDirections.includes(obj.ourInterceptDirection as string) ? obj.ourInterceptDirection as CoachForecast["ourInterceptDirection"] : undefined;
+  if (!winRateDirection || !ownDecodeDirection || !ourInterceptDirection) return undefined;
+  return { winRateDirection, ownDecodeDirection, ourInterceptDirection };
+}
+
+function normalizeSearchPolicyPatch(raw: unknown): SearchPolicyPatch | null {
+  if (!raw || typeof raw !== "object") return null;
+  const obj = raw as Record<string, unknown>;
+  const summary = asTrimmedText(obj.summary);
+  const rationale = asTrimmedText(obj.rationale);
+  const expectedEffect = asTrimmedText(obj.expectedEffect);
+  if (!summary || !rationale || !expectedEffect) return null;
+
+  const rawPolicy = obj.newPolicy;
+  if (!rawPolicy || typeof rawPolicy !== "object") return null;
+
+  // Validate and pick only known SearchPolicy fields
+  const policyObj = rawPolicy as Record<string, unknown>;
+  const validComplexityPrefs = ["decrease", "neutral", "increase"];
+  const partial: Partial<SearchPolicy> = {};
+  let hasField = false;
+
+  if (typeof policyObj.commitThreshold === "number" && Number.isFinite(policyObj.commitThreshold)) {
+    partial.commitThreshold = Math.max(0, Math.min(1, policyObj.commitThreshold));
+    hasField = true;
+  }
+  if (typeof policyObj.rollbackWindowSprints === "number" && Number.isFinite(policyObj.rollbackWindowSprints)) {
+    partial.rollbackWindowSprints = Math.max(1, Math.round(policyObj.rollbackWindowSprints));
+    hasField = true;
+  }
+  if (typeof policyObj.noveltyWeight === "number" && Number.isFinite(policyObj.noveltyWeight)) {
+    partial.noveltyWeight = Math.max(0, Math.min(1, policyObj.noveltyWeight));
+    hasField = true;
+  }
+  if (typeof policyObj.conservationWeight === "number" && Number.isFinite(policyObj.conservationWeight)) {
+    partial.conservationWeight = Math.max(0, Math.min(1, policyObj.conservationWeight));
+    hasField = true;
+  }
+  if (typeof policyObj.evidenceHorizonSprints === "number" && Number.isFinite(policyObj.evidenceHorizonSprints)) {
+    partial.evidenceHorizonSprints = Math.max(1, Math.round(policyObj.evidenceHorizonSprints));
+    hasField = true;
+  }
+  if (typeof policyObj.explorationBias === "number" && Number.isFinite(policyObj.explorationBias)) {
+    partial.explorationBias = Math.max(0, Math.min(1, policyObj.explorationBias));
+    hasField = true;
+  }
+  if (validComplexityPrefs.includes(policyObj.proposalComplexityPreference as string)) {
+    partial.proposalComplexityPreference = policyObj.proposalComplexityPreference as SearchPolicy["proposalComplexityPreference"];
+    hasField = true;
+  }
+  if (typeof policyObj.reviewStrictness === "number" && Number.isFinite(policyObj.reviewStrictness)) {
+    partial.reviewStrictness = Math.max(0, Math.min(1, policyObj.reviewStrictness));
+    hasField = true;
+  }
+  if (typeof policyObj.anchorEvidenceWeight === "number" && Number.isFinite(policyObj.anchorEvidenceWeight)) {
+    partial.anchorEvidenceWeight = Math.max(0, Math.min(1, policyObj.anchorEvidenceWeight));
+    hasField = true;
+  }
+  if (policyObj.moduleFocusWeights && typeof policyObj.moduleFocusWeights === "object") {
+    const weights: Partial<Record<GenomeModuleKey, number>> = {};
+    for (const [key, val] of Object.entries(policyObj.moduleFocusWeights as Record<string, unknown>)) {
+      if (isGenomeModuleKey(key) && typeof val === "number" && Number.isFinite(val)) {
+        weights[key] = Math.max(0, Math.min(1, val));
+        hasField = true;
+      }
+    }
+    if (Object.keys(weights).length > 0) {
+      partial.moduleFocusWeights = weights;
+    }
+  }
+
+  if (!hasField) return null;
+
+  return { summary, rationale, expectedEffect, newPolicy: partial };
+}
+
 function normalizeProposal(raw: Record<string, unknown> | null, genome: GenomeModules): CoachProposal {
   if (!raw) {
     return fallbackProposal();
@@ -462,6 +619,8 @@ function normalizeProposal(raw: Record<string, unknown> | null, genome: GenomeMo
   const summary = asTrimmedText(raw.summary) || "No patch proposed.";
   const hypothesis = asTrimmedText(raw.hypothesis) || "No new hypothesis provided.";
   const patch = normalizePatchBundle(raw.patch, genome, proposalId, summary, hypothesis);
+  const forecast = normalizeForecast(raw.forecast);
+  const searchPolicyPatch = normalizeSearchPolicyPatch(raw.searchPolicyPatch);
 
   return {
     proposalId,
@@ -469,6 +628,8 @@ function normalizeProposal(raw: Record<string, unknown> | null, genome: GenomeMo
     summary,
     hypothesis,
     patch,
+    ...(forecast ? { forecast } : {}),
+    ...(searchPolicyPatch ? { searchPolicyPatch } : {}),
   };
 }
 
@@ -537,6 +698,9 @@ function buildProposalSystemPrompt(
     "Each edit must rewrite the full target module as narrative prose, not append a rule fragment.",
     "Ground your proposal in the evaluation evidence, especially training, execution, deliberation, leakage, side balance, complexity, and any pending patch reviews.",
     "",
+    "You may optionally include a forecast predicting next-sprint direction for winRate, ownDecodeRate, and ourInterceptRate (each: up/flat/down).",
+    "You may optionally propose a searchPolicyPatch to adjust how you approach future proposals. This changes advisory biases, not hard rules. Specify only the fields you want to change in newPolicy.",
+    "",
     "Example of a valid simplifying patch bundle. This example intentionally edits executionGuidance and opponentModeling, not cluePhilosophy:",
     "{",
     '  "proposalId": "proposal-example",',
@@ -591,6 +755,11 @@ function buildReviewSystemPrompt(
     "",
     "## Proposed Patch Bundle",
     formatProposalPatch(proposal.patch),
+    "",
+    "## Proposed Search Policy Patch",
+    proposal.searchPolicyPatch
+      ? `Summary: ${proposal.searchPolicyPatch.summary}\nRationale: ${proposal.searchPolicyPatch.rationale}\nExpected effect: ${proposal.searchPolicyPatch.expectedEffect}\nChanges: ${JSON.stringify(proposal.searchPolicyPatch.newPolicy)}`
+      : "No search policy patch proposed.",
     "",
     "## Anchor A/B Results",
     formatAnchorReport(anchorReport),

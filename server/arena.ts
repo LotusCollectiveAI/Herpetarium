@@ -6,7 +6,9 @@ import type {
   ArenaResult,
   CoachConfig,
   CoachDecision,
+  CoachForecast,
   CoachMatchmakingNote,
+  CoachMetaMetrics,
   CoachPatchBundle,
   CoachProposal,
   CoachReviewResult,
@@ -19,9 +21,10 @@ import type {
   DeliberationPatternVector,
   GenomeModules,
   ScratchNotesSnapshot,
+  SearchPolicy,
   SprintEvaluation,
 } from "@shared/schema";
-import { DEFAULT_GAME_RULES, LONGFORM_ARENA_RULES, type GameRules } from "@shared/schema";
+import { DEFAULT_GAME_RULES, DEFAULT_SEARCH_POLICY, LONGFORM_ARENA_RULES, type GameRules } from "@shared/schema";
 import { runBoundedSettledPool } from "./boundedPool";
 import {
   applyCoachPatchBundle,
@@ -72,6 +75,7 @@ interface ArenaRuntimeSlot {
   seedGenome: GenomeModules;
   state: CoachState;
   scratchNotes: ScratchNotesSnapshot | null;
+  searchPolicy: SearchPolicy;
   wins: number;
   losses: number;
   draws: number;
@@ -889,6 +893,74 @@ function formatBucketDistribution(pairings: MatchmakingPairing[]): string {
     .join(", ");
 }
 
+function classifyDirection(delta: number, deadband = 0.02): "up" | "flat" | "down" {
+  if (delta > deadband) return "up";
+  if (delta < -deadband) return "down";
+  return "flat";
+}
+
+async function buildCoachMetaMetrics(runId: string): Promise<CoachMetaMetrics> {
+  const sprints = await storage.getCoachSprints(runId);
+  const evals = await storage.getSprintEvaluations(runId);
+  const evalMap = new Map(evals.map((e) => [e.sprintNumber, e.evaluation]));
+
+  let proposalCount = 0;
+  let commitCount = 0;
+  let forecastChecks = 0;
+  let forecastCorrect = 0;
+
+  for (let i = 0; i < sprints.length; i++) {
+    const sprint = sprints[i];
+    const proposal = sprint.proposal as CoachProposal | null;
+    if (!proposal) continue;
+    proposalCount++;
+
+    const decision = sprint.decision as string | null;
+    if (decision === "commit") {
+      commitCount++;
+    }
+
+    // Score forecast against next sprint's evaluation
+    const forecast = proposal.forecast as CoachForecast | undefined;
+    if (!forecast || decision !== "commit") continue;
+
+    const currentEval = evalMap.get(sprint.sprintNumber);
+    const nextEval = evalMap.get(sprint.sprintNumber + 1);
+    if (!currentEval || !nextEval) continue;
+
+    // Compare each forecast direction
+    const checks: Array<{ predicted: string; actual: string }> = [
+      {
+        predicted: forecast.winRateDirection,
+        actual: classifyDirection(nextEval.training.winRate - currentEval.training.winRate),
+      },
+      {
+        predicted: forecast.ownDecodeDirection,
+        actual: classifyDirection(nextEval.execution.ownDecodeRate - currentEval.execution.ownDecodeRate),
+      },
+      {
+        predicted: forecast.ourInterceptDirection,
+        actual: classifyDirection(nextEval.execution.ourInterceptRate - currentEval.execution.ourInterceptRate),
+      },
+    ];
+
+    for (const check of checks) {
+      forecastChecks++;
+      if (check.predicted === check.actual) {
+        forecastCorrect++;
+      }
+    }
+  }
+
+  return {
+    proposalCount,
+    commitCount,
+    commitRate: proposalCount > 0 ? commitCount / proposalCount : 0,
+    forecastChecks,
+    forecastAccuracy: forecastChecks > 0 ? forecastCorrect / forecastChecks : 0,
+  };
+}
+
 async function persistArenaRunProgress(slot: ArenaRuntimeSlot): Promise<string | null> {
   const matchIds = getUniqueMatchIds(slot.state);
   const recordedCost = matchIds.length > 0
@@ -1128,6 +1200,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
         seedGenome: cloneGenome(seedGenome),
         state,
         scratchNotes: null,
+        searchPolicy: { ...DEFAULT_SEARCH_POLICY },
         wins: 0,
         losses: 0,
         draws: 0,
@@ -1224,6 +1297,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           foiaDelaySprints,
           sprintNumber,
         );
+        const coachMetaMetrics = await buildCoachMetaMetrics(slot.runId);
         const promptEnv = {
           arenaId: config.arenaId,
           disclosureText,
@@ -1231,6 +1305,8 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           opponentGenome: primaryOpponentGenome ? cloneGenome(primaryOpponentGenome) : undefined,
           scratchNotes: slot.scratchNotes?.notesText,
           arenaBriefing: priorArenaBriefing,
+          searchPolicy: slot.searchPolicy,
+          coachMetaMetrics,
         };
         let evaluation: SprintEvaluation;
 
@@ -1344,7 +1420,8 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           coachConfig,
           promptEnv,
         );
-        const finalDecision: CoachDecision = review.decision === "commit" && proposal.patch ? "commit" : "revert";
+        const hasAnyChange = Boolean(proposal.patch || proposal.searchPolicyPatch);
+        const finalDecision: CoachDecision = review.decision === "commit" && hasAnyChange ? "commit" : "revert";
 
         logArena(`Coach proposed: ${proposal.summary}`);
         logArena(`Coach decided: ${finalDecision}`);
@@ -1367,6 +1444,15 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
               })),
             ],
           };
+        }
+
+        if (finalDecision === "commit" && proposal.searchPolicyPatch) {
+          slot.searchPolicy = {
+            ...slot.searchPolicy,
+            ...proposal.searchPolicyPatch.newPolicy,
+          };
+          await storage.updateCoachRun(slot.runId, { searchPolicy: slot.searchPolicy });
+          logArena(`Search policy updated for slot ${slot.slotIndex}: ${proposal.searchPolicyPatch.summary}`);
         }
 
         slot.state = nextState;

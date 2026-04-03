@@ -946,6 +946,11 @@ export interface SearchPolicy {
   noveltyWeight: number;
   conservationWeight: number;
   evidenceHorizonSprints: number;
+  moduleFocusWeights: Partial<Record<GenomeModuleKey, number>>;
+  explorationBias: number;
+  proposalComplexityPreference: "decrease" | "neutral" | "increase";
+  reviewStrictness: number;
+  anchorEvidenceWeight: number;
 }
 
 export const DEFAULT_SEARCH_POLICY: SearchPolicy = {
@@ -955,6 +960,11 @@ export const DEFAULT_SEARCH_POLICY: SearchPolicy = {
   noveltyWeight: 0.1,
   conservationWeight: 0.9,
   evidenceHorizonSprints: 5,
+  moduleFocusWeights: {},
+  explorationBias: 0.35,
+  proposalComplexityPreference: "neutral",
+  reviewStrictness: 0.6,
+  anchorEvidenceWeight: 0.5,
 };
 
 export type PromptRole =
@@ -1040,6 +1050,8 @@ export interface CoachPromptEnvironment {
   arenaId?: string;
   scratchNotes?: string;
   arenaBriefing?: string;
+  searchPolicy?: SearchPolicy;
+  coachMetaMetrics?: CoachMetaMetrics;
 }
 
 export interface TrainingSprintMetrics {
@@ -1176,12 +1188,35 @@ export interface SprintEvaluationInput {
   compiledPrompts?: CompiledGenomePrompts;
 }
 
+export interface CoachForecast {
+  winRateDirection: "up" | "flat" | "down";
+  ownDecodeDirection: "up" | "flat" | "down";
+  ourInterceptDirection: "up" | "flat" | "down";
+}
+
+export interface SearchPolicyPatch {
+  summary: string;
+  rationale: string;
+  expectedEffect: string;
+  newPolicy: Partial<SearchPolicy>;
+}
+
+export interface CoachMetaMetrics {
+  proposalCount: number;
+  commitCount: number;
+  commitRate: number;
+  forecastChecks: number;
+  forecastAccuracy: number;
+}
+
 export interface CoachProposal {
   proposalId: string;
   beliefUpdates: CoachBeliefUpdate[];
   summary: string;
   hypothesis: string;
   patch: CoachPatchBundle | null;
+  forecast?: CoachForecast;
+  searchPolicyPatch?: SearchPolicyPatch | null;
   review?: CoachReviewResult;
 }
 
