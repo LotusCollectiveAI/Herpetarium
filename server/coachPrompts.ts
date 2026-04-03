@@ -262,17 +262,39 @@ function formatAnchorReport(anchorReport?: AnchorABReport): string {
     return "No anchor data available";
   }
 
-  return [
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  const delta = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(1)}%`;
+
+  const lines = [
     `Anchors used: ${anchorReport.anchorsUsed.join(", ")}`,
-    `Incumbent win rate: ${anchorReport.incumbentWinRate.toFixed(4)}`,
-    `Candidate win rate: ${anchorReport.candidateWinRate.toFixed(4)}`,
-    `Delta: ${anchorReport.delta.toFixed(4)}`,
+    "",
+    "Aggregate anchor evidence:",
+    `  Win rate:      incumbent ${pct(anchorReport.incumbentWinRate)} | candidate ${pct(anchorReport.candidateWinRate)} | delta ${delta(anchorReport.delta)}`,
+    `  Own decode:    incumbent ${pct(anchorReport.incumbentOwnDecodeRate)} | candidate ${pct(anchorReport.candidateOwnDecodeRate)} | delta ${delta(anchorReport.ownDecodeDelta)}`,
+    `  Our intercept: incumbent ${pct(anchorReport.incumbentOurInterceptRate)} | candidate ${pct(anchorReport.candidateOurInterceptRate)} | delta ${delta(anchorReport.ourInterceptDelta)}`,
+    "",
     `Incumbent match ids: ${anchorReport.incumbentMatchIds.join(", ") || "none"}`,
     `Candidate match ids: ${anchorReport.candidateMatchIds.join(", ") || "none"}`,
-    ...anchorReport.perAnchor.map((entry, index) =>
-      `${index + 1}. ${entry.label}: incumbent ${entry.incumbentWins}, candidate ${entry.candidateWins}, total ${entry.total}`,
-    ),
-  ].join("\n");
+  ];
+
+  if (anchorReport.perAnchor.length > 0) {
+    lines.push("", "Per-anchor breakdown:");
+    for (const entry of anchorReport.perAnchor) {
+      lines.push(
+        `  ${entry.label}:`,
+        `    Wins:      incumbent ${entry.incumbentWins} | candidate ${entry.candidateWins} | total seeds ${entry.total}`,
+        `    Decode:    incumbent ${pct(entry.incumbentOwnDecodeRate)} | candidate ${pct(entry.candidateOwnDecodeRate)}`,
+        `    Intercept: incumbent ${pct(entry.incumbentOurInterceptRate)} | candidate ${pct(entry.candidateOurInterceptRate)}`,
+      );
+    }
+  }
+
+  lines.push(
+    "",
+    "Note: Anchor evidence suggests relative performance against frozen opponents. Use this as one input alongside training results when deciding whether to commit or revert.",
+  );
+
+  return lines.join("\n");
 }
 
 function normalizeBeliefUpdates(rawBeliefUpdates: unknown): CoachBeliefUpdate[] {

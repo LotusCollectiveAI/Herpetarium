@@ -37,6 +37,7 @@ import {
   type CoachStructuredPatch,
   type SprintResult,
 } from "./coachLoop";
+import { runAnchorBatch, resolveAnchorConfig } from "./anchorEvaluator";
 import { coachCommitReview, coachProposePatch } from "./coachPrompts";
 import { buildDisclosureText } from "./disclosure";
 import { compileGenomePrompts } from "./genomeCompiler";
@@ -134,6 +135,12 @@ function createIncompleteAnchorReport(): AnchorABReport {
     incumbentWinRate: 0,
     candidateWinRate: 0,
     delta: 0,
+    incumbentOwnDecodeRate: 0,
+    candidateOwnDecodeRate: 0,
+    ownDecodeDelta: 0,
+    incumbentOurInterceptRate: 0,
+    candidateOurInterceptRate: 0,
+    ourInterceptDelta: 0,
     incumbentMatchIds: [],
     candidateMatchIds: [],
     perAnchor: [],
@@ -1027,7 +1034,39 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           coachConfig,
           promptEnv,
         );
-        const anchorSummary = proposal.patch ? createIncompleteAnchorReport() : null;
+
+        // Run real anchor A/B evaluation if patch exists
+        let anchorSummary: AnchorABReport | null = null;
+        if (proposal.patch) {
+          try {
+            const anchorConfig = resolveAnchorConfig(config);
+            if (anchorConfig.enabled) {
+              const candidateGenome = applyCoachPatchBundle(sprintState.genome, proposal.patch);
+              anchorSummary = await runAnchorBatch({
+                runId: slot.runId,
+                sprintNumber,
+                proposalId: proposal.proposalId,
+                incumbentGenome: sprintState.genome,
+                candidateGenome,
+                playerProvider: config.coachConfig.playerProvider,
+                playerModel: config.coachConfig.playerModel,
+                teamSize: config.coachConfig.teamSize,
+                config: anchorConfig,
+                gameRules: config.gameRules || DEFAULT_GAME_RULES,
+              });
+
+              // Enrich evaluation with anchor data and persist back
+              evaluation = { ...evaluation, anchor: anchorSummary };
+              await storage.updateSprintEvaluation(slot.runId, sprintNumber, evaluation);
+            }
+          } catch (error) {
+            logArena(
+              `Anchor evaluation failed for run ${slot.runId} sprint ${sprintNumber}: ${error instanceof Error ? error.message : String(error)}`,
+            );
+            anchorSummary = createIncompleteAnchorReport();
+          }
+        }
+
         const review = await coachCommitReview(
           sprintState,
           proposal,
