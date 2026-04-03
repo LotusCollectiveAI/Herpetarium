@@ -326,7 +326,7 @@ export function cloneGenome(genome: GenomeModules): GenomeModules {
   return { ...genome };
 }
 
-function buildGenomeSystemPrompt(modules: GenomeModules): string {
+export function buildGenomeSystemPrompt(modules: GenomeModules): string {
   return `You are a highly competitive Decrypto player with the following strategic profile:
 
 CLUE PHILOSOPHY: ${modules.cluePhilosophy}

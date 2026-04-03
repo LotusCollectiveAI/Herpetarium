@@ -27,6 +27,7 @@ import {
   type InsertCoachRun,
   type CoachSprint,
   type InsertCoachSprint,
+  type SprintEvaluation,
   type SprintEvaluationRecord,
   type InsertSprintEvaluationRecord,
   type AnchorEvaluationRecord,
@@ -129,6 +130,7 @@ export interface IStorage {
   createSprintEvaluation(entry: InsertSprintEvaluationRecord): Promise<SprintEvaluationRecord>;
   getSprintEvaluation(runId: string, sprintNumber: number): Promise<SprintEvaluationRecord | undefined>;
   getSprintEvaluations(runId: string): Promise<SprintEvaluationRecord[]>;
+  updateSprintEvaluation(runId: string, sprintNumber: number, evaluation: SprintEvaluation): Promise<SprintEvaluationRecord | undefined>;
   createAnchorEvaluation(entry: InsertAnchorEvaluationRecord): Promise<AnchorEvaluationRecord>;
   getAnchorEvaluations(runId: string, sprintNumber?: number): Promise<AnchorEvaluationRecord[]>;
   createPatchIndexEntry(entry: InsertPatchIndex): Promise<PatchIndex>;
@@ -501,6 +503,21 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(sprintEvaluations)
       .where(eq(sprintEvaluations.runId, runId))
       .orderBy(sprintEvaluations.sprintNumber, sprintEvaluations.createdAt, sprintEvaluations.id);
+  }
+
+  async updateSprintEvaluation(
+    runId: string,
+    sprintNumber: number,
+    evaluation: SprintEvaluation,
+  ): Promise<SprintEvaluationRecord | undefined> {
+    const [updated] = await db.update(sprintEvaluations)
+      .set({ evaluation })
+      .where(and(
+        eq(sprintEvaluations.runId, runId),
+        eq(sprintEvaluations.sprintNumber, sprintNumber),
+      ))
+      .returning();
+    return updated;
   }
 
   async createAnchorEvaluation(entry: InsertAnchorEvaluationRecord): Promise<AnchorEvaluationRecord> {

@@ -165,6 +165,17 @@ const arenaConfigInputSchema = z.object({
   foiaEnabled: z.boolean(),
   foiaDelaySprints: z.number().int().min(0).optional(),
   gameRules: gameRulesSchema.optional(),
+  anchorConfig: z.object({
+    enabled: z.boolean().optional(),
+    opponents: z.array(z.object({
+      label: z.string().min(1),
+      genome: genomeModulesSchema,
+    })).optional(),
+    gamesPerAnchor: z.number().int().min(1).max(10).optional(),
+    roleSwap: z.boolean().optional(),
+    maxAnchorGamesPerSprint: z.number().int().min(1).optional(),
+    gameRules: gameRulesSchema.optional(),
+  }).optional(),
 });
 
 const validationGateSchema = z.object({

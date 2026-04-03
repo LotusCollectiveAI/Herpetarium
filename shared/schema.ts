@@ -1057,20 +1057,49 @@ export interface SideBalanceMetrics {
   blueMatchCount: number;
 }
 
+export interface AnchorABPerAnchor {
+  label: string;
+  seeds: string[];
+  incumbentWins: number;
+  candidateWins: number;
+  incumbentOwnDecodeRate: number;
+  candidateOwnDecodeRate: number;
+  incumbentOurInterceptRate: number;
+  candidateOurInterceptRate: number;
+  incumbentMatchIds: number[];
+  candidateMatchIds: number[];
+  total: number;
+}
+
 export interface AnchorABReport {
   incomplete: boolean;
   anchorsUsed: string[];
   incumbentWinRate: number;
   candidateWinRate: number;
   delta: number;
+  incumbentOwnDecodeRate: number;
+  candidateOwnDecodeRate: number;
+  ownDecodeDelta: number;
+  incumbentOurInterceptRate: number;
+  candidateOurInterceptRate: number;
+  ourInterceptDelta: number;
   incumbentMatchIds: number[];
   candidateMatchIds: number[];
-  perAnchor: Array<{
-    label: string;
-    incumbentWins: number;
-    candidateWins: number;
-    total: number;
-  }>;
+  perAnchor: AnchorABPerAnchor[];
+}
+
+export interface AnchorOpponentSpec {
+  label: string;
+  genome: GenomeModules;
+}
+
+export interface AnchorEvaluationConfig {
+  enabled: boolean;
+  opponents: AnchorOpponentSpec[];
+  gamesPerAnchor: number;
+  roleSwap: boolean;
+  maxAnchorGamesPerSprint?: number;
+  gameRules?: GameRules;
 }
 
 export type PatchReviewStatus = "clear" | "trigger_fired" | "mixed" | "insufficient_data";
@@ -1172,6 +1201,7 @@ export interface ArenaConfig {
   foiaEnabled: boolean;
   foiaDelaySprints?: number;
   gameRules?: GameRules;
+  anchorConfig?: Partial<AnchorEvaluationConfig>;
 }
 
 export interface ArenaCoachSlot {
