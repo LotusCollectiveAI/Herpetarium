@@ -73,6 +73,7 @@ function estimateOpponentBlackTokens(metrics: SprintMetrics): number {
 
 function resolveOpponentBlackTokenExposure(
   arenaId: string,
+  runId: string,
   slotIndex: number,
   sprint: CoachSprint,
   metrics: SprintMetrics,
@@ -105,11 +106,26 @@ function resolveOpponentBlackTokenExposure(
     const occurrence = matchOccurrences.get(matchId) ?? 0;
     matchOccurrences.set(matchId, occurrence + 1);
 
-    let ourTeam: "amber" | "blue" = match.experimentId === runExperimentId ? "amber" : "blue";
+    let ourTeam: "amber" | "blue" | null = null;
 
-    // Mirror self-play persists the same match twice for the same run, once per side.
-    if (occurrence > 0 && match.experimentId === runExperimentId) {
-      ourTeam = occurrence % 2 === 0 ? "amber" : "blue";
+    if (match.focalTeam && match.runId === runId) {
+      ourTeam = match.focalTeam;
+    } else if (match.focalTeam && match.opponentRunId === runId) {
+      ourTeam = match.focalTeam === "amber" ? "blue" : "amber";
+    } else if (typeof match.experimentId === "string") {
+      ourTeam = match.experimentId === runExperimentId ? "amber" : "blue";
+
+      // Legacy mirror/self-play persists the same match twice for the same run, once per side.
+      if (occurrence > 0 && match.experimentId === runExperimentId) {
+        ourTeam = occurrence % 2 === 0 ? "amber" : "blue";
+      }
+    }
+
+    if (!ourTeam) {
+      return {
+        opponentBlackTokens: estimateOpponentBlackTokens(metrics),
+        maxPossibleBlackTokens,
+      };
     }
 
     opponentBlackTokens += ourTeam === "amber"
@@ -234,6 +250,7 @@ export async function computeArenaPareto(arenaId: string): Promise<ParetoFrontie
       const metrics = parseSprintMetrics(sprint);
       const exposure = resolveOpponentBlackTokenExposure(
         arenaId,
+        run.id,
         slotIndex,
         sprint,
         metrics,

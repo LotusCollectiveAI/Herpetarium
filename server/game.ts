@@ -1,4 +1,4 @@
-import { GameState, Player, RoundHistory, AIProvider } from "@shared/schema";
+import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, type GameRules } from "@shared/schema";
 import { getRandomKeywords } from "./wordPacks";
 
 export function createSeededRng(seed: string): () => number {
@@ -58,11 +58,35 @@ export function generateSecretCode(rng?: () => number): [number, number, number]
   return [shuffled[0], shuffled[1], shuffled[2]] as [number, number, number];
 }
 
-export function createNewGame(hostId: string, hostName: string): GameState {
+function getPenaltyBurden(tokens: { whiteTokens: number; blackTokens: number }): [number, number, number] {
+  return [
+    tokens.whiteTokens + tokens.blackTokens,
+    tokens.blackTokens,
+    tokens.whiteTokens,
+  ];
+}
+
+function comparePenaltyBurden(
+  amberTokens: { whiteTokens: number; blackTokens: number },
+  blueTokens: { whiteTokens: number; blackTokens: number },
+): "amber" | "blue" | null {
+  const amberBurden = getPenaltyBurden(amberTokens);
+  const blueBurden = getPenaltyBurden(blueTokens);
+
+  for (let index = 0; index < amberBurden.length; index += 1) {
+    if (amberBurden[index] < blueBurden[index]) return "amber";
+    if (blueBurden[index] < amberBurden[index]) return "blue";
+  }
+
+  return null;
+}
+
+export function createNewGame(hostId: string, hostName: string, rules: GameRules = DEFAULT_GAME_RULES): GameState {
   return {
     id: generateGameId(),
     phase: "lobby",
     round: 0,
+    rules: { ...rules },
     players: [{
       id: hostId,
       name: hostName,
@@ -257,6 +281,7 @@ function arraysEqual(a: number[], b: number[]): boolean {
 }
 
 export function evaluateRound(game: GameState): GameState {
+  const rules = game.rules || DEFAULT_GAME_RULES;
   // Evaluate both teams
   const evaluateTeam = (team: "amber" | "blue"): { history: RoundHistory; whiteTokens: number; blackTokens: number } => {
     const opponentTeam = team === "amber" ? "blue" : "amber";
@@ -298,17 +323,31 @@ export function evaluateRound(game: GameState): GameState {
   
   // Check win conditions
   let winner: "amber" | "blue" | null = null;
-  
-  // Team loses if they have 2 white or 2 black tokens
-  if (newAmberTokens.whiteTokens >= 2 || newAmberTokens.blackTokens >= 2) {
-    winner = "blue";
-  } else if (newBlueTokens.whiteTokens >= 2 || newBlueTokens.blackTokens >= 2) {
-    winner = "amber";
+
+  const amberLimitReached =
+    newAmberTokens.whiteTokens >= rules.whiteTokenLimit
+    || newAmberTokens.blackTokens >= rules.blackTokenLimit;
+  const blueLimitReached =
+    newBlueTokens.whiteTokens >= rules.whiteTokenLimit
+    || newBlueTokens.blackTokens >= rules.blackTokenLimit;
+  const canEndOnTokens = game.round >= rules.minRoundsBeforeWin;
+  const maxRoundsReached = game.round >= rules.maxRounds;
+
+  if (canEndOnTokens && (amberLimitReached || blueLimitReached)) {
+    if (amberLimitReached && !blueLimitReached) {
+      winner = "blue";
+    } else if (blueLimitReached && !amberLimitReached) {
+      winner = "amber";
+    } else {
+      winner = comparePenaltyBurden(newAmberTokens, newBlueTokens);
+    }
+  } else if (maxRoundsReached) {
+    winner = comparePenaltyBurden(newAmberTokens, newBlueTokens);
   }
-  
+
   return {
     ...game,
-    phase: winner ? "game_over" : "round_results",
+    phase: winner || maxRoundsReached ? "game_over" : "round_results",
     winner,
     teams: {
       amber: {

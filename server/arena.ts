@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import type {
   ArenaCoachSlot,
   ArenaConfig,
@@ -12,6 +13,7 @@ import type {
   DeliberationPatternVector,
   GenomeModules,
 } from "@shared/schema";
+import { DEFAULT_GAME_RULES, LONGFORM_ARENA_RULES, type GameRules } from "@shared/schema";
 import { runBoundedSettledPool } from "./boundedPool";
 import {
   applyCoachPatch,
@@ -37,15 +39,17 @@ import {
   type PairingHistory,
 } from "./matchmaking";
 import { analyzeSprintMatches } from "./researchAnalyzer";
+import { evaluateSprint } from "./sprintEvaluator";
 import { storage } from "./storage";
 
 const ARENA_SOURCE = "arena";
-const MATCHMAKING_BUCKET_ORDER: MatchmakingBucket[] = ["near_peer", "diagnostic", "mirror", "novelty", "baseline"];
+const MATCHMAKING_BUCKET_ORDER: MatchmakingBucket[] = ["near_peer", "diagnostic", "novelty", "baseline"];
 const DECEPTION_CATEGORIES: DeceptionCategory[] = [
   "behavior_rationale_divergence",
   "selective_omission",
   "observation_sensitivity",
 ];
+const ARENA_LONGFORM_RULES_ENABLED = /^(1|true|yes|on)$/i.test(process.env.ARENA_LONGFORM_RULES_ENABLED || "");
 
 interface ArenaRuntimeSlot {
   slotIndex: number;
@@ -73,6 +77,8 @@ interface PairingResult {
   reason: string;
   resultA: SprintResult;
   resultB: SprintResult;
+  actualMatchIds: number[];
+  roleSwapGroupId: string;
   opponentGenomeForA: GenomeModules;
   opponentGenomeForB: GenomeModules;
   opponentRunIdForA: string;
@@ -106,24 +112,23 @@ function summarizeSprint(matchResults: SprintResult["matchResults"]): Pick<Sprin
   };
 }
 
-function mirrorSprintResult(result: SprintResult): SprintResult {
-  const matchResults = result.matchResults.map((match) => {
-    const ourTeam: SprintResult["matchResults"][number]["ourTeam"] = match.ourTeam === "amber" ? "blue" : "amber";
-
-    return {
-      ...match,
-      ourTeam,
-      ourWhiteTokens: match.oppWhiteTokens,
-      ourBlackTokens: match.oppBlackTokens,
-      oppWhiteTokens: match.ourWhiteTokens,
-      oppBlackTokens: match.ourBlackTokens,
-      roundSummaries: [...match.roundSummaries],
-    };
-  });
+function toOpponentPerspective(
+  result: SprintResult,
+  sprintNumber: number,
+): SprintResult {
+  const matchResults = result.matchResults.map((match) => ({
+    ...match,
+    ourTeam: (match.ourTeam === "amber" ? "blue" : "amber") as "amber" | "blue",
+    ourWhiteTokens: match.oppWhiteTokens,
+    ourBlackTokens: match.oppBlackTokens,
+    oppWhiteTokens: match.ourWhiteTokens,
+    oppBlackTokens: match.ourBlackTokens,
+    roundSummaries: [...match.roundSummaries],
+  }));
   const summary = summarizeSprint(matchResults);
 
   return {
-    sprintNumber: result.sprintNumber,
+    sprintNumber,
     matchResults,
     record: summary.record,
     winRate: summary.winRate,
@@ -157,6 +162,16 @@ function buildSprintPairings(
     config.matchmaking,
     history,
   );
+}
+
+function resolveArenaGameRules(config: ArenaConfig): GameRules {
+  if (config.gameRules) {
+    return { ...config.gameRules };
+  }
+
+  return ARENA_LONGFORM_RULES_ENABLED
+    ? { ...LONGFORM_ARENA_RULES }
+    : { ...DEFAULT_GAME_RULES };
 }
 
 function buildDisclosureBundle(opponents: SprintOpponentContext[], foiaEnabled: boolean): string | undefined {
@@ -375,6 +390,84 @@ function buildAutopsyCoachConfig(config: ArenaConfig, opponentGenome?: GenomeMod
   };
 }
 
+export async function runPairedCoachMatches(
+  left: ArenaRuntimeSlot,
+  right: ArenaRuntimeSlot,
+  config: ArenaConfig,
+  sprintNumber: number,
+  pairingIndex: number,
+): Promise<PairingResult> {
+  const roleSwapGroupId = randomUUID();
+  const gameRules = resolveArenaGameRules(config);
+  const coachConfig = buildPerMatchCoachConfig(config, right.state.genome);
+  const baseSeedPrefix = `${left.state.teamId}-s${sprintNumber}-${pairingIndex + 1}`;
+
+  const firstResult = await runCoachSprint(
+    left.state,
+    coachConfig,
+    {
+      opponentRunId: right.runId,
+      opponentGenome: cloneGenome(right.state.genome),
+      matchmakingBucket: `${pairingIndex + 1}-${baseSeedPrefix}-amber`,
+      teamSequence: ["amber"],
+      matchConfigOverrides: [{
+        seed: `${baseSeedPrefix}-g1`,
+        arenaId: config.arenaId,
+        runId: left.runId,
+        opponentRunId: right.runId,
+        sprintNumber,
+        matchKind: "training",
+        roleSwapGroupId,
+        focalTeam: "amber",
+        gameRules,
+      }],
+    },
+  );
+
+  const secondResult = await runCoachSprint(
+    left.state,
+    coachConfig,
+    {
+      opponentRunId: right.runId,
+      opponentGenome: cloneGenome(right.state.genome),
+      matchmakingBucket: `${pairingIndex + 1}-${baseSeedPrefix}-blue`,
+      teamSequence: ["blue"],
+      matchConfigOverrides: [{
+        seed: `${baseSeedPrefix}-g2`,
+        arenaId: config.arenaId,
+        runId: left.runId,
+        opponentRunId: right.runId,
+        sprintNumber,
+        matchKind: "training",
+        roleSwapGroupId,
+        focalTeam: "blue",
+        gameRules,
+      }],
+    },
+  );
+
+  const resultA = combineSprintResults(sprintNumber, [firstResult, secondResult]);
+  const resultB = combineSprintResults(sprintNumber, [
+    toOpponentPerspective(firstResult, sprintNumber),
+    toOpponentPerspective(secondResult, sprintNumber),
+  ]);
+
+  return {
+    slotA: left.slotIndex,
+    slotB: right.slotIndex,
+    bucket: "baseline",
+    reason: "",
+    resultA,
+    resultB,
+    actualMatchIds: resultA.matchResults.map((match) => match.matchId),
+    roleSwapGroupId,
+    opponentGenomeForA: cloneGenome(right.state.genome),
+    opponentGenomeForB: cloneGenome(left.state.genome),
+    opponentRunIdForA: right.runId,
+    opponentRunIdForB: left.runId,
+  };
+}
+
 function getUniqueMatchIds(state: CoachState): number[] {
   return Array.from(new Set(
     state.sprintHistory.flatMap((sprint) => sprint.matchResults.map((match) => match.matchId)),
@@ -385,7 +478,6 @@ function formatBucketDistribution(pairings: MatchmakingPairing[]): string {
   const counts: Record<MatchmakingBucket, number> = {
     near_peer: 0,
     diagnostic: 0,
-    mirror: 0,
     novelty: 0,
     baseline: 0,
   };
@@ -618,27 +710,12 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
       const pairingTasks = pairings.map((pairing, pairingIndex) => async (): Promise<PairingResult> => {
         const slotA = slots[pairing.slotA];
         const slotB = slots[pairing.slotB];
-        const resultA = await runCoachSprint(
-          slotA.state,
-          buildPerMatchCoachConfig(config, slotB.state.genome),
-          {
-            opponentRunId: slotB.runId,
-            opponentGenome: cloneGenome(slotB.state.genome),
-            matchmakingBucket: `${pairing.bucket}-s${sprintNumber}-p${pairingIndex}`,
-          },
-        );
+        const paired = await runPairedCoachMatches(slotA, slotB, config, sprintNumber, pairingIndex);
 
         return {
-          slotA: slotA.slotIndex,
-          slotB: slotB.slotIndex,
+          ...paired,
           bucket: pairing.bucket,
           reason: pairing.reason,
-          resultA,
-          resultB: mirrorSprintResult(resultA),
-          opponentGenomeForA: cloneGenome(slotB.state.genome),
-          opponentGenomeForB: cloneGenome(slotA.state.genome),
-          opponentRunIdForA: slotB.runId,
-          opponentRunIdForB: slotA.runId,
         };
       });
 
@@ -665,7 +742,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
               genome: cloneGenome(result.opponentGenomeForA),
               bucket: result.bucket,
               reason: result.reason,
-              appearanceCount: 1,
+              appearanceCount: result.actualMatchIds.length,
             },
           ]);
           opponentsBySlot.set(result.slotB, [
@@ -676,7 +753,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
               genome: cloneGenome(result.opponentGenomeForB),
               bucket: result.bucket,
               reason: result.reason,
-              appearanceCount: 1,
+              appearanceCount: result.actualMatchIds.length,
             },
           ]);
         }
@@ -690,6 +767,21 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           resultsBySlot.get(slot.slotIndex) || [],
         );
         const genomeBefore = cloneGenome(slot.state.genome);
+
+        try {
+          await evaluateSprint({
+            runId: slot.runId,
+            sprintNumber,
+            matchIds: sprintResult.matchResults.map((match) => match.matchId),
+            focalTeam: sprintResult.matchResults[0]?.ourTeam || "amber",
+            currentGenome: genomeBefore,
+          });
+        } catch (error) {
+          logArena(
+            `Sprint evaluation failed for run ${slot.runId} sprint ${sprintNumber}: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+
         const sprintState = applySprintResultToCoachState(slot.state, sprintResult);
         const disclosureText = buildDisclosureBundle(opponentsBySlot.get(slot.slotIndex) || [], foiaActive);
         const autopsy = await coachAutopsy(

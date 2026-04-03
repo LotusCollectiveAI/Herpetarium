@@ -1,6 +1,6 @@
 import type { ArenaCoachSlot, MatchmakingWeights } from "@shared/schema";
 
-export type MatchmakingBucket = "near_peer" | "diagnostic" | "mirror" | "novelty" | "baseline";
+export type MatchmakingBucket = "near_peer" | "diagnostic" | "novelty" | "baseline";
 
 export interface MatchmakingPairing {
   slotA: number;
@@ -22,18 +22,11 @@ interface DistinctPairOption {
   winRateGap: number;
 }
 
-interface SelfPairOption {
-  slot: ArenaCoachSlot;
-  remaining: number;
-  pairCount: number;
-}
-
-const BUCKETS: MatchmakingBucket[] = ["near_peer", "diagnostic", "mirror", "novelty", "baseline"];
+const BUCKETS: MatchmakingBucket[] = ["near_peer", "diagnostic", "novelty", "baseline"];
 
 const WEIGHT_KEYS: Record<MatchmakingBucket, keyof MatchmakingWeights> = {
   near_peer: "nearPeer",
   diagnostic: "diagnostic",
-  mirror: "mirror",
   novelty: "novelty",
   baseline: "baseline",
 };
@@ -73,11 +66,6 @@ function applyPairing(
   slotA: number,
   slotB: number,
 ): void {
-  if (slotA === slotB) {
-    remainingBySlot.set(slotA, getRemaining(remainingBySlot, slotA) - 2);
-    return;
-  }
-
   remainingBySlot.set(slotA, getRemaining(remainingBySlot, slotA) - 1);
   remainingBySlot.set(slotB, getRemaining(remainingBySlot, slotB) - 1);
 }
@@ -87,11 +75,6 @@ function revertPairing(
   slotA: number,
   slotB: number,
 ): void {
-  if (slotA === slotB) {
-    remainingBySlot.set(slotA, getRemaining(remainingBySlot, slotA) + 2);
-    return;
-  }
-
   remainingBySlot.set(slotA, getRemaining(remainingBySlot, slotA) + 1);
   remainingBySlot.set(slotB, getRemaining(remainingBySlot, slotB) + 1);
 }
@@ -138,36 +121,6 @@ function getDistinctPairOptions(
 
   return options;
 }
-
-function getSelfPairOptions(
-  slots: ArenaCoachSlot[],
-  remainingBySlot: Map<number, number>,
-  usedPairKeys: Set<string>,
-  history: PairingHistory,
-): SelfPairOption[] {
-  const options: SelfPairOption[] = [];
-
-  for (const slot of slots) {
-    const remaining = getRemaining(remainingBySlot, slot.slotIndex);
-    if (remaining < 2) {
-      continue;
-    }
-
-    const pairKey = getPairKey(slot.slotIndex, slot.slotIndex);
-    if (usedPairKeys.has(pairKey)) {
-      continue;
-    }
-
-    options.push({
-      slot,
-      remaining,
-      pairCount: getPairCount(history, slot.slotIndex, slot.slotIndex),
-    });
-  }
-
-  return options;
-}
-
 function sortByPressure(
   leftRemainingA: number,
   leftRemainingB: number,
@@ -219,19 +172,6 @@ function buildDiagnosticCandidates(options: DistinctPairOption[]): MatchmakingPa
     );
 }
 
-function buildMirrorCandidates(options: SelfPairOption[]): MatchmakingPairing[] {
-  return options
-    .map((option) => ({
-      slotA: option.slot.slotIndex,
-      slotB: option.slot.slotIndex,
-      bucket: "mirror" as const,
-      reason: `Mirror self-play: slot ${option.slot.slotIndex} runs the same genome on both sides to measure variance.`,
-      pairCount: option.pairCount,
-      remaining: option.remaining,
-    }))
-    .sort((left, right) => right.remaining - left.remaining || left.pairCount - right.pairCount);
-}
-
 function buildNoveltyCandidates(options: DistinctPairOption[]): MatchmakingPairing[] {
   return options
     .map((option) => ({
@@ -265,14 +205,24 @@ function getCandidatesByBucket(
   history: PairingHistory,
 ): Record<MatchmakingBucket, MatchmakingPairing[]> {
   const distinctPairOptions = getDistinctPairOptions(slots, remainingBySlot, usedPairKeys, history);
-  const selfPairOptions = getSelfPairOptions(slots, remainingBySlot, usedPairKeys, history);
 
   return {
     near_peer: buildNearPeerCandidates(distinctPairOptions),
     diagnostic: buildDiagnosticCandidates(distinctPairOptions),
-    mirror: buildMirrorCandidates(selfPairOptions),
     novelty: buildNoveltyCandidates(distinctPairOptions),
     baseline: buildBaselineCandidates(distinctPairOptions),
+  };
+}
+
+function normalizeWeights(weights: MatchmakingWeights): MatchmakingWeights {
+  const legacyMirrorWeight = Math.max(0, weights.mirror ?? 0);
+
+  return {
+    nearPeer: Math.max(0, weights.nearPeer) + legacyMirrorWeight,
+    diagnostic: Math.max(0, weights.diagnostic),
+    mirror: 0,
+    novelty: Math.max(0, weights.novelty),
+    baseline: Math.max(0, weights.baseline),
   };
 }
 
@@ -280,9 +230,10 @@ function weightedBucketOrder(
   buckets: MatchmakingBucket[],
   weights: MatchmakingWeights,
 ): MatchmakingBucket[] {
+  const normalizedWeights = normalizeWeights(weights);
   const remaining = buckets.map((bucket) => ({
     bucket,
-    weight: Math.max(0, weights[WEIGHT_KEYS[bucket]]),
+    weight: normalizedWeights[WEIGHT_KEYS[bucket]],
   }));
   const ordered: MatchmakingBucket[] = [];
 
@@ -377,12 +328,6 @@ function canSatisfyRemainingAssignments(
       }
 
       capacity += 1;
-    }
-
-    const selfKey = getPairKey(slotA.slotIndex, slotA.slotIndex);
-    if (remainingA >= 2 && !usedPairKeys.has(selfKey)) {
-      availablePairings += 1;
-      capacity += 2;
     }
 
     if (remainingA > capacity) {
@@ -494,7 +439,7 @@ export function selectPairings(
     throw new Error("Matchmaking requires an even total number of scheduled games per sprint");
   }
 
-  const maxMatchesPerCoach = slots.length + 1;
+  const maxMatchesPerCoach = slots.length - 1;
   if (matchesPerCoach > maxMatchesPerCoach) {
     throw new Error(`Cannot schedule ${matchesPerCoach} matches per coach without duplicate pairings in a ${slots.length}-coach sprint`);
   }

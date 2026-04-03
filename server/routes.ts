@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig } from "@shared/schema";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
 import { MODEL_REGISTRY, getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
@@ -112,6 +112,7 @@ const headlessMatchConfigSchema = z.object({
   fastMode: z.boolean().optional(),
   seed: z.union([z.string(), z.number().int().transform(String)]).optional(),
   teamSize: z.number().int().min(2).max(3).optional(),
+  gameRules: gameRulesSchema.optional(),
 });
 
 const ablationFlagSchema = z.enum(["no_history", "no_scratch_notes", "no_opponent_history", "no_chain_of_thought", "random_clues", "no_persona", "no_semantic_context"]);
@@ -161,6 +162,7 @@ const arenaConfigInputSchema = z.object({
   }),
   foiaEnabled: z.boolean(),
   foiaDelaySprints: z.number().int().min(0).optional(),
+  gameRules: gameRulesSchema.optional(),
 });
 
 const validationGateSchema = z.object({
@@ -186,6 +188,7 @@ const validationConfigInputSchema = z.object({
   }),
   foiaEnabled: z.boolean(),
   foiaDelaySprints: z.number().int().min(0).optional(),
+  gameRules: gameRulesSchema.optional(),
   gates: z.array(validationGateSchema).min(1).optional(),
 });
 

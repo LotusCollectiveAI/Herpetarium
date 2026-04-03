@@ -12,6 +12,7 @@ import {
   MatchQualitySummary,
   buildMatchPlayerConfigs,
   normalizeHeadlessMatchConfig,
+  DEFAULT_GAME_RULES,
 } from "@shared/schema";
 import {
   createNewGame,
@@ -676,8 +677,6 @@ async function persistRoundResults(matchId: number, game: GameState) {
   });
 }
 
-const MAX_ROUNDS = 20;
-
 export async function runHeadlessMatch(
   config: HeadlessMatchConfig,
   scratchNotesMap?: Record<string, string>,
@@ -686,7 +685,7 @@ export async function runHeadlessMatch(
 ): Promise<HeadlessResult> {
   config = normalizeHeadlessMatchConfig(config);
   const hostId = generatePlayerId();
-  let game = createNewGame(hostId, config.players[0].name);
+  let game = createNewGame(hostId, config.players[0].name, config.gameRules || DEFAULT_GAME_RULES);
 
   game = {
     ...game,
@@ -751,6 +750,15 @@ export async function runHeadlessMatch(
     qualitySummary: initialQuality.qualitySummary,
     experimentId: config.experimentId || null,
     teamSize,
+    arenaId: config.arenaId || null,
+    runId: config.runId || null,
+    opponentRunId: config.opponentRunId || null,
+    sprintNumber: config.sprintNumber ?? null,
+    matchKind: config.matchKind || null,
+    anchorLabel: config.anchorLabel || null,
+    roleSwapGroupId: config.roleSwapGroupId || null,
+    focalTeam: config.focalTeam || null,
+    gameRules: game.rules,
   });
 
   const matchId = match.id;
@@ -758,7 +766,7 @@ export async function runHeadlessMatch(
 
   const ablations = config.ablations?.flags;
 
-  while (game.phase !== "game_over" && game.round < MAX_ROUNDS) {
+  while (game.phase !== "game_over") {
     game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 

@@ -268,6 +268,7 @@ async function createMatchRecord(gameId: string, game: GameState) {
       blueBlackTokens: 0,
       qualityStatus: "clean",
       qualitySummary: createEmptyQualitySummary(),
+      gameRules: game.rules,
     });
 
     gameMatchIds.set(gameId, match.id);

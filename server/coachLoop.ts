@@ -160,6 +160,8 @@ export interface CoachSprintEnvironment {
   opponentGenome: GenomeModules;
   disclosureText?: string;
   matchmakingBucket?: string;
+  teamSequence?: Team[];
+  matchConfigOverrides?: Array<Partial<HeadlessMatchConfig>>;
 }
 
 export interface CoachRunRecord {
@@ -1197,7 +1199,7 @@ export async function runCoachSprint(
   log(`[coach] Sprint ${sprintNumber} starting with ${config.matchesPerSprint} scheduled matches`, COACH_SOURCE);
 
   const scheduledMatches = Array.from({ length: config.matchesPerSprint }, (_, matchIndex) => async () => {
-    const ourTeam: Team = matchIndex % 2 === 0 ? "amber" : "blue";
+    const ourTeam: Team = env.teamSequence?.[matchIndex] || (matchIndex % 2 === 0 ? "amber" : "blue");
     const teamSystemPrompts = ourTeam === "amber"
       ? {
           amber: buildGenomeSystemPrompt(state.genome),
@@ -1209,6 +1211,7 @@ export async function runCoachSprint(
         };
 
     try {
+      const matchConfigOverride = env.matchConfigOverrides?.[matchIndex] || {};
       const result = await runHeadlessMatch({
         players: buildHeadlessPlayers(config, sprintNumber, matchIndex),
         fastMode: true,
@@ -1217,6 +1220,7 @@ export async function runCoachSprint(
           : `${state.teamId}-s${sprintNumber}-m${matchIndex + 1}`,
         experimentId: `coach-${state.teamId}`,
         teamSize: config.teamSize,
+        ...matchConfigOverride,
       }, undefined, teamSystemPrompts);
 
       const opposingTeam: Team = ourTeam === "amber" ? "blue" : "amber";

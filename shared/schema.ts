@@ -147,6 +147,7 @@ export function normalizeHeadlessMatchConfig(config: HeadlessMatchConfig): Headl
   return {
     ...config,
     teamRosters: resolveTeamRosters(config.players, config.teamRosters),
+    gameRules: config.gameRules ? { ...config.gameRules } : { ...DEFAULT_GAME_RULES },
   };
 }
 
@@ -315,6 +316,13 @@ export const teamStateSchema = z.object({
 
 export type TeamState = z.infer<typeof teamStateSchema>;
 
+export const gameRulesSchema = z.object({
+  whiteTokenLimit: z.number().int().min(1),
+  blackTokenLimit: z.number().int().min(1),
+  minRoundsBeforeWin: z.number().int().min(0),
+  maxRounds: z.number().int().min(1),
+});
+
 export interface GameRules {
   whiteTokenLimit: number;
   blackTokenLimit: number;
@@ -340,6 +348,7 @@ export const gameStateSchema = z.object({
   id: z.string(),
   phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]),
   round: z.number(),
+  rules: gameRulesSchema,
   players: z.array(playerSchema),
   hostId: z.string(),
   currentClueGiver: z.object({
@@ -650,6 +659,14 @@ export interface HeadlessMatchConfig {
   ablations?: HeadlessMatchAblations;
   experimentId?: string;
   teamSize?: 2 | 3;
+  arenaId?: string;
+  runId?: string;
+  opponentRunId?: string;
+  sprintNumber?: number;
+  matchKind?: string;
+  anchorLabel?: string;
+  roleSwapGroupId?: string;
+  focalTeam?: "amber" | "blue";
   gameRules?: GameRules;
 }
 
@@ -1139,6 +1156,7 @@ export interface ArenaConfig {
   matchmaking: MatchmakingWeights;
   foiaEnabled: boolean;
   foiaDelaySprints?: number;
+  gameRules?: GameRules;
 }
 
 export interface ArenaCoachSlot {
