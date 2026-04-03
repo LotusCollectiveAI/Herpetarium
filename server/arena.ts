@@ -551,7 +551,7 @@ export async function runPairedCoachMatches(
     {
       opponentRunId: right.runId,
       opponentGenome: cloneGenome(right.state.genome),
-      matchmakingBucket: `${pairingIndex + 1}-${baseSeedPrefix}-amber`,
+      seedTag: `${pairingIndex + 1}-${baseSeedPrefix}-amber`,
       teamSequence: ["amber"],
       matchConfigOverrides: [{
         seed: `${baseSeedPrefix}-g1`,
@@ -573,7 +573,7 @@ export async function runPairedCoachMatches(
     {
       opponentRunId: right.runId,
       opponentGenome: cloneGenome(right.state.genome),
-      matchmakingBucket: `${pairingIndex + 1}-${baseSeedPrefix}-blue`,
+      seedTag: `${pairingIndex + 1}-${baseSeedPrefix}-blue`,
       teamSequence: ["blue"],
       matchConfigOverrides: [{
         seed: `${baseSeedPrefix}-g2`,

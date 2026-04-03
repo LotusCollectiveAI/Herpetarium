@@ -13,6 +13,9 @@ import {
   buildMatchPlayerConfigs,
   normalizeHeadlessMatchConfig,
   DEFAULT_GAME_RULES,
+  HeadlessPromptOverrides,
+  TeamId,
+  PromptRole,
 } from "@shared/schema";
 import {
   createNewGame,
@@ -104,6 +107,38 @@ function getConfigForPlayer(player: Player): AIPlayerConfig {
   if (player.aiConfig) return player.aiConfig;
   if (player.aiProvider) return getDefaultConfig(player.aiProvider);
   return getDefaultConfig("chatgpt");
+}
+
+function resolveRoleSystemPrompt(
+  overrides: HeadlessPromptOverrides | undefined,
+  team: TeamId,
+  role: Exclude<PromptRole, "coach">,
+): string | undefined {
+  return overrides?.[team]?.compiledPrompts?.prompts[role]?.systemPrompt
+    ?? overrides?.[team]?.monolithicSystemPrompt
+    ?? undefined;
+}
+
+function resolveDeliberationPromptRole(
+  phase: DeliberationContext["phase"],
+): "own_deliberator" | "intercept_deliberator" {
+  return phase === "own_guess_deliberation" ? "own_deliberator" : "intercept_deliberator";
+}
+
+function normalizePromptOverrides(
+  config: HeadlessMatchConfig,
+  legacyTeamSystemPrompts?: Record<string, string>,
+): HeadlessPromptOverrides | undefined {
+  if (config.promptOverrides) return config.promptOverrides;
+  if (!legacyTeamSystemPrompts) return undefined;
+  const overrides: HeadlessPromptOverrides = {};
+  if (legacyTeamSystemPrompts.amber) {
+    overrides.amber = { monolithicSystemPrompt: legacyTeamSystemPrompts.amber };
+  }
+  if (legacyTeamSystemPrompts.blue) {
+    overrides.blue = { monolithicSystemPrompt: legacyTeamSystemPrompts.blue };
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
 async function logAiCall(matchId: number, gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean, usedFallback: boolean = false) {
@@ -215,7 +250,7 @@ async function processClues(
   qualityState: MatchQualityRuntimeState,
   scratchNotesMap?: Record<string, string>,
   ablations?: AblationFlag[],
-  teamSystemPrompts?: Record<string, string>,
+  promptOverrides?: HeadlessPromptOverrides,
   healthTracker?: ModelHealthTracker,
 ): Promise<GameState> {
   for (const team of ["amber", "blue"] as const) {
@@ -236,7 +271,7 @@ async function processClues(
     const noteKey = `${clueGiver.aiProvider}-${team}`;
     const GENERIC_FALLBACK_POOL = ["signal", "trace", "mark", "pulse", "drift", "bloom", "frost", "ridge", "shore", "vault"];
     const fallbackClues = Array.from({ length: 3 }, () => GENERIC_FALLBACK_POOL[Math.floor(Math.random() * GENERIC_FALLBACK_POOL.length)]);
-    const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
+    const clueParams = { keywords, targetCode: code, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "cluegiver") };
 
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
@@ -281,7 +316,7 @@ async function processGuesses(
   qualityState: MatchQualityRuntimeState,
   scratchNotesMap?: Record<string, string>,
   ablations?: AblationFlag[],
-  teamSystemPrompts?: Record<string, string>,
+  promptOverrides?: HeadlessPromptOverrides,
   healthTracker?: ModelHealthTracker,
 ): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
@@ -308,7 +343,7 @@ async function processGuesses(
     }));
 
     const noteKey = `${aiGuesser.aiProvider}-${team}`;
-    const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
+    const guessParams = { keywords, clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "own_guesser") };
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
       generateGuess(config, guessParams, { healthTracker }),
@@ -336,7 +371,7 @@ async function processInterceptions(
   qualityState: MatchQualityRuntimeState,
   scratchNotesMap?: Record<string, string>,
   ablations?: AblationFlag[],
-  teamSystemPrompts?: Record<string, string>,
+  promptOverrides?: HeadlessPromptOverrides,
   healthTracker?: ModelHealthTracker,
 ): Promise<GameState> {
   const fallbackGuess: [number, number, number] = [1, 2, 3];
@@ -358,7 +393,7 @@ async function processInterceptions(
     }));
 
     const noteKey = `${aiInterceptor.aiProvider}-${team}`;
-    const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: teamSystemPrompts?.[team] };
+    const interceptParams = { clues, history, scratchNotes: scratchNotesMap?.[noteKey], ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "interceptor") };
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
       generateInterception(config, interceptParams, { healthTracker }),
@@ -394,7 +429,7 @@ interface DeliberationContext {
   guessers: [Player, Player];
   scratchNotes?: Record<string, string>;
   ablations?: AblationFlag[];
-  teamSystemPrompts?: Record<string, string>;
+  promptOverrides?: HeadlessPromptOverrides;
   roundNumber: number;
   score: { amber: { miscommunication: number; interception: number }; blue: { miscommunication: number; interception: number } };
 }
@@ -487,7 +522,7 @@ async function processDeliberation(
           roundNumber: context.roundNumber,
           score: context.score,
           ablations: context.ablations,
-          systemPromptOverride: context.teamSystemPrompts?.[context.team],
+          systemPromptOverride: resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
           isPlayerB,
         };
 
@@ -518,7 +553,7 @@ async function processDeliberation(
           roundNumber: context.roundNumber,
           score: context.score,
           ablations: context.ablations,
-          systemPromptOverride: context.teamSystemPrompts?.[context.team],
+          systemPromptOverride: resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
           isPlayerB,
         };
 
@@ -539,7 +574,7 @@ async function processDeliberation(
       }
 
       // Get system prompt from strategy
-      const systemPrompt = context.teamSystemPrompts?.[context.team] || strategy.systemPrompt;
+      const systemPrompt = resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)) || strategy.systemPrompt;
 
       const remainingPhaseMs = maxPhaseDurationMs - (Date.now() - phaseStartMs);
       if (remainingPhaseMs <= 0) {
@@ -680,10 +715,11 @@ async function persistRoundResults(matchId: number, game: GameState) {
 export async function runHeadlessMatch(
   config: HeadlessMatchConfig,
   scratchNotesMap?: Record<string, string>,
-  teamSystemPrompts?: Record<string, string>,
+  legacyTeamSystemPrompts?: Record<string, string>,
   healthTracker?: ModelHealthTracker,
 ): Promise<HeadlessResult> {
   config = normalizeHeadlessMatchConfig(config);
+  const promptOverrides = normalizePromptOverrides(config, legacyTeamSystemPrompts);
   const hostId = generatePlayerId();
   let game = createNewGame(hostId, config.players[0].name, config.gameRules || DEFAULT_GAME_RULES);
 
@@ -759,6 +795,7 @@ export async function runHeadlessMatch(
     roleSwapGroupId: config.roleSwapGroupId || null,
     focalTeam: config.focalTeam || null,
     gameRules: game.rules,
+    matchmakingBucket: config.matchmakingBucket || null,
   });
 
   const matchId = match.id;
@@ -770,7 +807,7 @@ export async function runHeadlessMatch(
     game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
 
-    game = await processClues(game, matchId, qualityState, scratchNotesMap, ablations, teamSystemPrompts, healthTracker);
+    game = await processClues(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker);
 
     if (teamSize === 3) {
       // 3v3 mode: deliberation replaces single-shot guess/intercept
@@ -801,7 +838,7 @@ export async function runHeadlessMatch(
           guessers: [guessers[0], guessers[1]] as [Player, Player],
           scratchNotes: scratchNotesMap,
           ablations,
-          teamSystemPrompts,
+          promptOverrides,
           roundNumber: game.round,
           score: buildScore(),
         };
@@ -866,7 +903,7 @@ export async function runHeadlessMatch(
           guessers: [guessers[0], guessers[1]] as [Player, Player],
           scratchNotes: scratchNotesMap,
           ablations,
-          teamSystemPrompts,
+          promptOverrides,
           roundNumber: game.round,
           score: buildScore(),
         }, matchId, game.id, game.round, qualityState, healthTracker);
@@ -893,14 +930,14 @@ export async function runHeadlessMatch(
         break;
       }
 
-      game = await processGuesses(game, matchId, qualityState, scratchNotesMap, ablations, teamSystemPrompts, healthTracker);
+      game = await processGuesses(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker);
 
       if (game.phase !== "opponent_intercepting") {
         log(`[headless] Match ${matchId} - Unexpected phase after guesses: ${game.phase}`, "headless");
         break;
       }
 
-      game = await processInterceptions(game, matchId, qualityState, scratchNotesMap, ablations, teamSystemPrompts, healthTracker);
+      game = await processInterceptions(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker);
     }
 
     if (game.phase === "round_results" || game.phase === "game_over") {

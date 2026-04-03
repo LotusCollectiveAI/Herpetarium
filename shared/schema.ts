@@ -468,6 +468,7 @@ export const matches = pgTable("matches", {
   roleSwapGroupId: varchar("role_swap_group_id", { length: 64 }),
   focalTeam: varchar("focal_team", { length: 10 }).$type<"amber" | "blue" | null>(),
   gameRules: jsonb("game_rules").$type<GameRules | null>(),
+  matchmakingBucket: varchar("matchmaking_bucket", { length: 24 }),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
@@ -668,6 +669,8 @@ export interface HeadlessMatchConfig {
   roleSwapGroupId?: string;
   focalTeam?: "amber" | "blue";
   gameRules?: GameRules;
+  promptOverrides?: HeadlessPromptOverrides;
+  matchmakingBucket?: string;
 }
 
 export interface TournamentConfig {
@@ -970,6 +973,18 @@ export interface CompiledGenomePrompts {
   genomeHash: string;
   compilerVersion: string;
   prompts: Record<PromptRole, CompiledPromptArtifact>;
+}
+
+export type TeamId = "amber" | "blue";
+
+export interface HeadlessTeamPromptOverrides {
+  monolithicSystemPrompt?: string;
+  compiledPrompts?: CompiledGenomePrompts;
+}
+
+export interface HeadlessPromptOverrides {
+  amber?: HeadlessTeamPromptOverrides;
+  blue?: HeadlessTeamPromptOverrides;
 }
 
 export interface ComplexityMetrics {

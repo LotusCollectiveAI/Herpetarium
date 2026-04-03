@@ -11,6 +11,7 @@ import type {
   CoachSprint as PersistedCoachSprint,
   GenomeModules,
   HeadlessMatchConfig,
+  HeadlessPromptOverrides,
   MatchRound,
   PatchMeasuredOutcome,
   SearchPolicy,
@@ -18,6 +19,7 @@ import type {
 import { DEFAULT_SEARCH_POLICY, getDefaultConfig } from "@shared/schema";
 import { callAI, estimateCost } from "./ai";
 import { runBoundedSettledPool } from "./boundedPool";
+import { compileGenomePrompts } from "./genomeCompiler";
 import { runHeadlessMatch } from "./headlessRunner";
 import { log } from "./index";
 import { storage } from "./storage";
@@ -182,6 +184,7 @@ export interface CoachSprintEnvironment {
   opponentGenome: GenomeModules;
   disclosureText?: string;
   matchmakingBucket?: string;
+  seedTag?: string;
   teamSequence?: Team[];
   matchConfigOverrides?: Array<Partial<HeadlessMatchConfig>>;
 }
@@ -1278,32 +1281,53 @@ export async function runCoachSprint(
   const sprintNumber = state.currentSprint + 1;
   const opponentGenome = cloneGenome(env.opponentGenome);
 
+  // Compile role-specific prompts once per sprint
+  const ownCompiledPrompts = compileGenomePrompts(state.genome);
+  const opponentCompiledPrompts = compileGenomePrompts(opponentGenome);
+  const ownMonolithic = buildGenomeSystemPrompt(state.genome);
+  const opponentMonolithic = buildGenomeSystemPrompt(opponentGenome);
+
   log(`[coach] Sprint ${sprintNumber} starting with ${config.matchesPerSprint} scheduled matches`, COACH_SOURCE);
 
   const scheduledMatches = Array.from({ length: config.matchesPerSprint }, (_, matchIndex) => async () => {
     const ourTeam: Team = env.teamSequence?.[matchIndex] || (matchIndex % 2 === 0 ? "amber" : "blue");
-    const teamSystemPrompts = ourTeam === "amber"
+    const promptOverrides: HeadlessPromptOverrides = ourTeam === "amber"
       ? {
-          amber: buildGenomeSystemPrompt(state.genome),
-          blue: buildGenomeSystemPrompt(opponentGenome),
+          amber: {
+            compiledPrompts: ownCompiledPrompts,
+            monolithicSystemPrompt: ownMonolithic,
+          },
+          blue: {
+            compiledPrompts: opponentCompiledPrompts,
+            monolithicSystemPrompt: opponentMonolithic,
+          },
         }
       : {
-          amber: buildGenomeSystemPrompt(opponentGenome),
-          blue: buildGenomeSystemPrompt(state.genome),
+          amber: {
+            compiledPrompts: opponentCompiledPrompts,
+            monolithicSystemPrompt: opponentMonolithic,
+          },
+          blue: {
+            compiledPrompts: ownCompiledPrompts,
+            monolithicSystemPrompt: ownMonolithic,
+          },
         };
 
     try {
       const matchConfigOverride = env.matchConfigOverrides?.[matchIndex] || {};
+      const seedTag = env.seedTag || env.matchmakingBucket;
       const result = await runHeadlessMatch({
         players: buildHeadlessPlayers(config, sprintNumber, matchIndex),
         fastMode: true,
-        seed: env.matchmakingBucket
-          ? `${state.teamId}-s${sprintNumber}-${env.matchmakingBucket}-m${matchIndex + 1}`
+        seed: seedTag
+          ? `${state.teamId}-s${sprintNumber}-${seedTag}-m${matchIndex + 1}`
           : `${state.teamId}-s${sprintNumber}-m${matchIndex + 1}`,
         experimentId: `coach-${state.teamId}`,
         teamSize: config.teamSize,
+        promptOverrides,
+        matchmakingBucket: env.matchmakingBucket,
         ...matchConfigOverride,
-      }, undefined, teamSystemPrompts);
+      });
 
       const opposingTeam: Team = ourTeam === "amber" ? "blue" : "amber";
       const ourScore = result.teams[ourTeam];
