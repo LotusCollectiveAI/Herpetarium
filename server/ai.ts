@@ -30,11 +30,11 @@ export function resetProviderThrottleState() {
   }
 }
 
-function getThrottleState(provider: string): ProviderThrottleState {
-  if (!providerThrottleState[provider]) {
-    providerThrottleState[provider] = { lastRateLimitAt: 0, backoffMs: 0, totalRetries: 0, totalRateLimits: 0 };
+function getThrottleState(throttleKey: string): ProviderThrottleState {
+  if (!providerThrottleState[throttleKey]) {
+    providerThrottleState[throttleKey] = { lastRateLimitAt: 0, backoffMs: 0, totalRetries: 0, totalRateLimits: 0 };
   }
-  return providerThrottleState[provider];
+  return providerThrottleState[throttleKey];
 }
 
 function isRateLimitError(err: unknown): { isRateLimit: boolean; retryAfterMs?: number } {
@@ -80,8 +80,8 @@ async function callAIWithBackoff(
   userPrompt: string,
   options: AICallOptions = {},
 ): Promise<RawAIResponse> {
-  const state = getThrottleState(config.provider);
   const modelKey = getModelKey(config.provider, config.model);
+  const state = getThrottleState(modelKey);
   const healthTracker = options.healthTracker;
 
   if (healthTracker && !healthTracker.isAvailable(modelKey)) {

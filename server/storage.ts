@@ -1,4 +1,49 @@
-import { type User, type InsertUser, type Match, type InsertMatch, type MatchRound, type InsertMatchRound, type AiCallLog, type InsertAiCallLog, type Tournament, type InsertTournament, type TournamentMatch, type InsertTournamentMatch, type Experiment, type InsertExperiment, type Series, type InsertSeries, type ScratchNote, type InsertScratchNote, type StrategyGenome, type InsertStrategyGenome, type EvolutionRun, type InsertEvolutionRun, type Generation, type InsertGeneration, type TeamChatter, type InsertTeamChatter, matches, matchRounds, aiCallLogs, tournaments, tournamentMatches, experiments, series, scratchNotes, strategyGenomes, evolutionRuns, generations, teamChatter } from "@shared/schema";
+import {
+  type User,
+  type InsertUser,
+  type Match,
+  type InsertMatch,
+  type MatchRound,
+  type InsertMatchRound,
+  type AiCallLog,
+  type InsertAiCallLog,
+  type Tournament,
+  type InsertTournament,
+  type TournamentMatch,
+  type InsertTournamentMatch,
+  type Experiment,
+  type InsertExperiment,
+  type Series,
+  type InsertSeries,
+  type ScratchNote,
+  type InsertScratchNote,
+  type StrategyGenome,
+  type InsertStrategyGenome,
+  type EvolutionRun,
+  type InsertEvolutionRun,
+  type Generation,
+  type InsertGeneration,
+  type CoachRun,
+  type InsertCoachRun,
+  type CoachSprint,
+  type InsertCoachSprint,
+  type TeamChatter,
+  type InsertTeamChatter,
+  matches,
+  matchRounds,
+  aiCallLogs,
+  tournaments,
+  tournamentMatches,
+  experiments,
+  series,
+  scratchNotes,
+  strategyGenomes,
+  evolutionRuns,
+  generations,
+  coachRuns,
+  coachSprints,
+  teamChatter,
+} from "@shared/schema";
 import { db } from "./db";
 import { eq, desc, and, or, like, sql, inArray } from "drizzle-orm";
 import { randomUUID } from "crypto";
@@ -57,6 +102,14 @@ export interface IStorage {
   updateGeneration(id: number, data: Partial<InsertGeneration>): Promise<Generation | undefined>;
   getGenerations(evolutionRunId: number): Promise<Generation[]>;
   getGeneration(evolutionRunId: number, generationNumber: number): Promise<Generation | undefined>;
+
+  createCoachRun(run: InsertCoachRun): Promise<CoachRun>;
+  updateCoachRun(id: string, fields: Partial<InsertCoachRun>): Promise<CoachRun | undefined>;
+  getCoachRun(id: string): Promise<CoachRun | undefined>;
+  listCoachRuns(): Promise<CoachRun[]>;
+
+  createCoachSprint(sprint: InsertCoachSprint): Promise<CoachSprint>;
+  getCoachSprints(runId: string): Promise<CoachSprint[]>;
 
   createStrategyGenome(data: InsertStrategyGenome): Promise<StrategyGenome>;
   updateStrategyGenome(id: number, data: Partial<InsertStrategyGenome>): Promise<StrategyGenome | undefined>;
@@ -362,6 +415,36 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(generations.evolutionRunId, evolutionRunId), eq(generations.generationNumber, generationNumber)))
       .limit(1);
     return gen;
+  }
+
+  async createCoachRun(run: InsertCoachRun): Promise<CoachRun> {
+    const [created] = await db.insert(coachRuns).values(run as typeof coachRuns.$inferInsert).returning();
+    return created;
+  }
+
+  async updateCoachRun(id: string, fields: Partial<InsertCoachRun>): Promise<CoachRun | undefined> {
+    const [updated] = await db.update(coachRuns).set(fields as Partial<typeof coachRuns.$inferInsert>).where(eq(coachRuns.id, id)).returning();
+    return updated;
+  }
+
+  async getCoachRun(id: string): Promise<CoachRun | undefined> {
+    const [run] = await db.select().from(coachRuns).where(eq(coachRuns.id, id)).limit(1);
+    return run;
+  }
+
+  async listCoachRuns(): Promise<CoachRun[]> {
+    return db.select().from(coachRuns).orderBy(desc(coachRuns.createdAt));
+  }
+
+  async createCoachSprint(sprint: InsertCoachSprint): Promise<CoachSprint> {
+    const [created] = await db.insert(coachSprints).values(sprint as typeof coachSprints.$inferInsert).returning();
+    return created;
+  }
+
+  async getCoachSprints(runId: string): Promise<CoachSprint[]> {
+    return db.select().from(coachSprints)
+      .where(eq(coachSprints.runId, runId))
+      .orderBy(coachSprints.sprintNumber);
   }
 
   async createStrategyGenome(data: InsertStrategyGenome): Promise<StrategyGenome> {

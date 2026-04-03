@@ -1248,6 +1248,40 @@ export async function registerRoutes(
     }
   });
 
+  // ═══ Coach Loop (V2 Experiment Zero) ═══
+
+  app.post("/api/coach", async (req, res) => {
+    try {
+      const { createAndStartCoachRun } = await import("./coachLoop");
+      const run = await createAndStartCoachRun(req.body || {});
+      res.json({ status: "started", runId: run.id, config: run.config });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to start coach run" });
+    }
+  });
+
+  app.post("/api/coach/:id/stop", async (req, res) => {
+    try {
+      const { stopCoachRun, getCoachRun } = await import("./coachLoop");
+      await stopCoachRun(req.params.id);
+      const run = await getCoachRun(req.params.id);
+      res.json({ success: true, status: run?.status || "unknown" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop coach run" });
+    }
+  });
+
+  app.get("/api/coach/:id", async (req, res) => {
+    try {
+      const { getCoachRun } = await import("./coachLoop");
+      const run = await getCoachRun(req.params.id);
+      if (!run) return res.status(404).json({ error: "Coach run not found" });
+      res.json(run);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to get coach run" });
+    }
+  });
+
   // Week 3: Publication-ready CSV export routes
   registerExportRoutes(app);
 

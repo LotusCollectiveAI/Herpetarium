@@ -428,7 +428,7 @@ export const matches = pgTable("matches", {
   //   ALTER TABLE matches ADD COLUMN experiment_id VARCHAR(100);
   //   CREATE INDEX idx_matches_experiment_id ON matches (experiment_id) WHERE experiment_id IS NOT NULL;
   experimentId: varchar("experiment_id", { length: 100 }),
-  teamSize: integer("team_size").notNull().default(2),
+  teamSize: integer("team_size").notNull().default(3),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
@@ -524,7 +524,7 @@ export interface MatchQualitySummary {
 export const aiCallLogs = pgTable("ai_call_logs", {
   id: serial("id").primaryKey(),
   matchId: integer("match_id"),
-  gameId: varchar("game_id", { length: 10 }),
+  gameId: varchar("game_id", { length: 100 }),
   roundNumber: integer("round_number"),
   provider: varchar("provider", { length: 20 }).notNull(),
   model: varchar("model", { length: 100 }).notNull(),
@@ -795,6 +795,94 @@ export interface EvolutionConfig {
   matchesPerEvaluation: number;
   budgetCapUsd?: string;
 }
+
+// Coach loop tables
+
+export interface CoachBelief {
+  id: string;
+  proposition: string;
+  confidence: number;
+  evidence: string;
+  sprintFormed: number;
+  revisionOf?: string;
+  status: CoachBeliefStatus;
+}
+
+export type CoachBeliefStatus = "active" | "superseded" | "retracted";
+
+export interface CoachPatch {
+  targetModule: keyof GenomeModules;
+  oldValue: string;
+  newValue: string;
+  rationale: string;
+  expectedEffect: string;
+}
+
+export type CoachDecision = "commit" | "revert";
+
+export type CoachRunStatus = "pending" | "running" | "completed" | "failed" | "stopped" | "budget_exceeded";
+
+export interface CoachConfig {
+  coachProvider: AIProvider;
+  coachModel: string;
+  playerProvider: AIProvider;
+  playerModel: string;
+  matchesPerSprint: number;
+  sprintConcurrency: number;
+  totalSprints: number;
+  opponentGenome?: GenomeModules;
+  teamSize: 2 | 3;
+  budgetCapUsd?: number;
+}
+
+export interface CoachResearchMetrics {
+  completedMatches?: number;
+  wins?: number;
+  losses?: number;
+  draws?: number;
+}
+
+export const coachRuns = pgTable("coach_runs", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  status: varchar("status", { length: 20 }).$type<CoachRunStatus>().notNull(),
+  config: jsonb("config").$type<CoachConfig>().notNull(),
+  initialGenome: jsonb("initial_genome").$type<GenomeModules>().notNull(),
+  currentGenome: jsonb("current_genome").$type<GenomeModules>().notNull(),
+  currentBeliefs: jsonb("current_beliefs").$type<CoachBelief[]>().default([]),
+  currentSprint: integer("current_sprint").notNull().default(0),
+  arenaId: varchar("arena_id", { length: 64 }),
+  budgetCapUsd: varchar("budget_cap_usd", { length: 20 }),
+  actualCostUsd: varchar("actual_cost_usd", { length: 20 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  startedAt: timestamp("started_at"),
+  completedAt: timestamp("completed_at"),
+});
+
+export const insertCoachRunSchema = createInsertSchema(coachRuns).omit({ createdAt: true });
+export type InsertCoachRun = z.infer<typeof insertCoachRunSchema>;
+export type CoachRun = typeof coachRuns.$inferSelect;
+
+export const coachSprints = pgTable("coach_sprints", {
+  id: serial("id").primaryKey(),
+  runId: varchar("run_id", { length: 64 }).notNull(),
+  sprintNumber: integer("sprint_number").notNull(),
+  opponentRunId: varchar("opponent_run_id", { length: 64 }),
+  matchIds: jsonb("match_ids").$type<number[]>().default([]),
+  record: varchar("record", { length: 20 }).notNull(),
+  winRate: varchar("win_rate", { length: 20 }).notNull(),
+  genomeBefore: jsonb("genome_before").$type<GenomeModules>().notNull(),
+  genomeAfter: jsonb("genome_after").$type<GenomeModules>().notNull(),
+  beliefsAfter: jsonb("beliefs_after").$type<CoachBelief[]>().default([]),
+  decision: varchar("decision", { length: 10 }).$type<CoachDecision>().notNull(),
+  patch: jsonb("patch").$type<CoachPatch | null>(),
+  disclosureText: text("disclosure_text"),
+  researchMetrics: jsonb("research_metrics").$type<CoachResearchMetrics>().default({}),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertCoachSprintSchema = createInsertSchema(coachSprints).omit({ id: true, createdAt: true });
+export type InsertCoachSprint = z.infer<typeof insertCoachSprintSchema>;
+export type CoachSprint = typeof coachSprints.$inferSelect;
 
 // Experiment config schema for reproducible experiments (Week 3)
 

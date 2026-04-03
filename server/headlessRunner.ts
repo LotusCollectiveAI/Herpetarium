@@ -731,7 +731,7 @@ export async function runHeadlessMatch(
 
   const playerConfigs = buildMatchPlayerConfigs(game.players, config.teamRosters);
 
-  const teamSize = config.teamSize || 2;
+  const teamSize = config.teamSize || 3;
   const qualityState = createMatchQualityRuntimeState();
   const initialQuality = buildMatchQualitySummary(qualityState);
 
