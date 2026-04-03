@@ -8,6 +8,7 @@ import type {
   LeakageMetrics,
   Match,
   MatchRound,
+  MatchSummary,
   PatchReviewSummary,
   PromptRole,
   SideBalanceMetrics,
@@ -17,6 +18,7 @@ import type {
   TrainingSprintMetrics,
 } from "@shared/schema";
 import { analyzeMatchTranscripts } from "./transcriptAnalyzer";
+import { analyzeSprintMatches } from "./researchAnalyzer";
 import { storage } from "./storage";
 
 type Team = "amber" | "blue";
@@ -376,6 +378,153 @@ function buildEvidenceLines(
   ];
 }
 
+async function buildPerMatchSummaries(
+  matches: Match[],
+  rounds: MatchRound[],
+  chatter: TeamChatter[],
+  input: SprintEvaluationInput,
+): Promise<MatchSummary[]> {
+  const roundsByMatchId = new Map<number, MatchRound[]>();
+  for (const round of rounds) {
+    const entries = roundsByMatchId.get(round.matchId) || [];
+    entries.push(round);
+    roundsByMatchId.set(round.matchId, entries);
+  }
+
+  const chatterByMatchId = new Map<number, TeamChatter[]>();
+  for (const entry of chatter) {
+    const entries = chatterByMatchId.get(entry.matchId) || [];
+    entries.push(entry);
+    chatterByMatchId.set(entry.matchId, entries);
+  }
+
+  // Group matches by focal team for batch deception analysis
+  const focalTeamByMatchId = new Map<number, Team>();
+  const amberMatchIds: number[] = [];
+  const blueMatchIds: number[] = [];
+
+  for (const match of matches) {
+    const focalTeam = resolveFocalTeam(match, input);
+    focalTeamByMatchId.set(match.id, focalTeam);
+    if (focalTeam === "amber") {
+      amberMatchIds.push(match.id);
+    } else {
+      blueMatchIds.push(match.id);
+    }
+  }
+
+  // Run deception analysis in batch per focal-team group
+  const [amberResearch, blueResearch] = await Promise.all([
+    amberMatchIds.length > 0 ? analyzeSprintMatches(amberMatchIds, "amber") : null,
+    blueMatchIds.length > 0 ? analyzeSprintMatches(blueMatchIds, "blue") : null,
+  ]);
+
+  // Index deception reports by matchId
+  const deceptionByMatchId = new Map<number, { highlights: string[]; patterns: string }>();
+  for (const research of [amberResearch, blueResearch]) {
+    if (!research) continue;
+    for (let i = 0; i < research.deceptionReports.length; i++) {
+      const report = research.deceptionReports[i];
+      const pattern = research.deliberationPatterns[i];
+      const highlights: string[] = [];
+      for (const finding of report.findings) {
+        if (finding.score > 0 && finding.evidence.length > 0) {
+          highlights.push(`${finding.category.replace(/_/g, " ")} ${finding.score.toFixed(2)}`);
+        }
+      }
+      const patternStr = pattern
+        ? `hedge ${pattern.hedgeRate.toFixed(2)}, disagreement ${pattern.disagreementRate.toFixed(2)}, revision ${pattern.revisionRate.toFixed(2)}`
+        : "";
+      deceptionByMatchId.set(report.matchId, { highlights: highlights.slice(0, 3), patterns: patternStr });
+    }
+  }
+
+  const summaries: MatchSummary[] = [];
+
+  for (const match of matches) {
+    const focalTeam = focalTeamByMatchId.get(match.id) || input.focalTeam;
+    const opponentTeam = oppositeTeam(focalTeam);
+    const matchRounds = roundsByMatchId.get(match.id) || [];
+
+    // Determine outcome
+    let outcome: "win" | "loss" | "draw";
+    if (match.winner === focalTeam) {
+      outcome = "win";
+    } else if (match.winner === null) {
+      outcome = "draw";
+    } else {
+      outcome = "loss";
+    }
+
+    // Build per-round decode/intercept traces
+    const ownDecodeByRound: Array<{ roundNumber: number; correct: boolean }> = [];
+    const opponentInterceptByRound: Array<{ roundNumber: number; intercepted: boolean }> = [];
+
+    for (const round of matchRounds.sort((a, b) => a.roundNumber - b.roundNumber)) {
+      if (round.team === focalTeam) {
+        ownDecodeByRound.push({ roundNumber: round.roundNumber, correct: round.ownCorrect });
+        opponentInterceptByRound.push({ roundNumber: round.roundNumber, intercepted: round.intercepted });
+      }
+    }
+
+    // Get leakage from transcript analysis
+    let maxLeakageScore = 0;
+    const analysis = await analyzeMatchTranscripts(match.id);
+    if (analysis) {
+      const focalTranscripts = analysis.transcripts.filter((t) => t.team === focalTeam);
+      for (const transcript of focalTranscripts) {
+        maxLeakageScore = Math.max(maxLeakageScore, transcript.leakageScore);
+      }
+    }
+
+    // Deception data
+    const deception = deceptionByMatchId.get(match.id);
+    const deceptionHighlights = deception?.highlights || [];
+
+    // Build summary lines (2-3 lines per match)
+    const roundsPlayed = match.totalRounds ?? 0;
+    const line1Parts = [`Match ${match.id}`];
+    if (match.matchKind) line1Parts.push(`${match.matchKind}`);
+    line1Parts.push(outcome);
+    line1Parts.push(`side ${focalTeam}`);
+    line1Parts.push(`${roundsPlayed} rounds`);
+    if (match.opponentRunId) line1Parts.push(`opponent ${match.opponentRunId}`);
+
+    const decodeStr = ownDecodeByRound
+      .map((r) => `R${r.roundNumber} ${r.correct ? "hit" : "miss"}`)
+      .join(", ");
+    const interceptStr = opponentInterceptByRound
+      .map((r) => `R${r.roundNumber} ${r.intercepted ? "picked" : "clean"}`)
+      .join(", ");
+    const line2 = `Own decode: ${decodeStr || "none"}. Opponent intercept against us: ${interceptStr || "none"}.`;
+
+    const line3Parts = [`Leakage max ${roundMean(maxLeakageScore).toFixed(2)}`];
+    if (deception?.patterns) {
+      line3Parts.push(`Deliberation: ${deception.patterns}`);
+    }
+    if (deceptionHighlights.length > 0) {
+      line3Parts.push(`Highlights: ${deceptionHighlights.join("; ")}`);
+    }
+    const line3 = `${line3Parts.join(". ")}.`;
+
+    summaries.push({
+      matchId: match.id,
+      opponentRunId: match.opponentRunId ?? undefined,
+      matchKind: match.matchKind,
+      focalTeam,
+      outcome,
+      roundsPlayed,
+      ownDecodeByRound,
+      opponentInterceptByRound,
+      maxLeakageScore: roundMean(maxLeakageScore),
+      deceptionHighlights,
+      summaryLines: [line1Parts.join(" | "), line2, line3],
+    });
+  }
+
+  return summaries;
+}
+
 export async function evaluateSprint(input: SprintEvaluationInput): Promise<SprintEvaluation> {
   const matchIds = uniqueSortedMatchIds(input.matchIds);
   const [matches, rounds, chatter, aiLogs, pendingPatchEntries] = await Promise.all([
@@ -398,6 +547,7 @@ export async function evaluateSprint(input: SprintEvaluationInput): Promise<Spri
   const sideBalance = buildSideBalanceMetrics(orderedMatches, input);
   const complexity = buildComplexityMetrics(input.currentGenome, input.previousGenome, input.compiledPrompts);
   const pendingPatchReviews = buildPendingPatchReviews(pendingPatchEntries);
+  const perMatchSummaries = await buildPerMatchSummaries(orderedMatches, rounds, chatter, input);
 
   const evaluation: SprintEvaluation = {
     runId: input.runId,
@@ -419,6 +569,7 @@ export async function evaluateSprint(input: SprintEvaluationInput): Promise<Spri
       complexity,
       aiLogs,
     ),
+    perMatchSummaries,
   };
 
   await storage.createSprintEvaluation({

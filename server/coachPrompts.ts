@@ -170,6 +170,20 @@ function formatPolicyNotices(evaluation: SprintEvaluation): string {
     .join("\n");
 }
 
+function formatPerMatchSummaries(evaluation: SprintEvaluation): string {
+  const summaries = evaluation.perMatchSummaries;
+  if (!summaries || summaries.length === 0) {
+    return "No per-match summaries available.";
+  }
+
+  const blocks = summaries.map((summary, index) => {
+    const lines = summary.summaryLines.map((line) => `   ${line}`);
+    return [`${index + 1}.`, ...lines].join("\n");
+  });
+
+  return blocks.join("\n");
+}
+
 function formatEvaluation(evaluation: SprintEvaluation): string {
   return [
     `Sprint ${evaluation.sprintNumber} for run ${evaluation.runId}`,
@@ -196,6 +210,9 @@ function formatEvaluation(evaluation: SprintEvaluation): string {
     ...(evaluation.evidenceLines.length > 0
       ? evaluation.evidenceLines.map((line, index) => `${index + 1}. ${line}`)
       : ["No evidence lines available."]),
+    "",
+    "### Per-Match Summaries",
+    formatPerMatchSummaries(evaluation),
     "",
     "### Pending Patch Reviews",
     formatPendingPatchReviews(evaluation.pendingPatchReviews),
