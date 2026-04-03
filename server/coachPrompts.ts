@@ -247,6 +247,11 @@ function formatEnvironment(env?: CoachPromptEnvironment): string {
     lines.push(formatGenomeModules(env.opponentGenome));
   }
 
+  if (env.arenaBriefing) {
+    lines.push("Arena Briefing:");
+    lines.push(env.arenaBriefing);
+  }
+
   if (env.researcherPolicy) {
     lines.push(`Researcher policy: ${JSON.stringify(env.researcherPolicy)}`);
   }
