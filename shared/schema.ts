@@ -330,10 +330,17 @@ export interface GameRules {
   maxRounds: number;
 }
 
-export const DEFAULT_GAME_RULES: GameRules = {
+export const CLASSIC_GAME_RULES: GameRules = {
   whiteTokenLimit: 2,
   blackTokenLimit: 2,
   minRoundsBeforeWin: 0,
+  maxRounds: 20,
+};
+
+export const DEFAULT_GAME_RULES: GameRules = {
+  whiteTokenLimit: 2,
+  blackTokenLimit: 3,
+  minRoundsBeforeWin: 3,
   maxRounds: 20,
 };
 
