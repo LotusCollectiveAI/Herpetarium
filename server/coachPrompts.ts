@@ -164,6 +164,22 @@ function formatPendingPatchReviews(patchReviews: PatchReviewSummary[]): string {
     .join("\n");
 }
 
+function formatArenaBaseRates(evaluation: SprintEvaluation): string {
+  const base = evaluation.arenaBaseRates;
+  if (!base || base.coachCount === 0) {
+    return "No arena base rate data available.";
+  }
+
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  return [
+    `Arena context (${base.coachCount} coaches this sprint):`,
+    `  Arena avg miscommunication: ${pct(base.avgMiscommunicationRate)}`,
+    `  Arena avg own decode: ${pct(base.avgOwnDecodeRate)}`,
+    `  Arena avg our intercept: ${pct(base.avgOurInterceptRate)}`,
+    `  Arena avg win rate: ${pct(base.avgWinRate)}`,
+  ].join("\n");
+}
+
 function formatPolicyNotices(evaluation: SprintEvaluation): string {
   if (evaluation.policyNotices.length === 0) {
     return "No policy notices.";
@@ -223,6 +239,9 @@ function formatEvaluation(evaluation: SprintEvaluation): string {
     "",
     "### Policy Notices",
     formatPolicyNotices(evaluation),
+    "",
+    "### Arena Base Rates",
+    formatArenaBaseRates(evaluation),
   ].join("\n");
 }
 

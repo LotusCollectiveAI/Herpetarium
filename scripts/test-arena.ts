@@ -25,7 +25,7 @@ async function main() {
       coachModel: "deepseek/deepseek-chat-v3-0324",
       playerProvider: "openrouter",
       playerModel: "deepseek/deepseek-chat-v3-0324",
-      matchesPerSprint: 2,
+      matchesPerSprint: 2, // Test mode — production default is 4
       sprintConcurrency: 1,
       totalSprints: 2,
       teamSize: 2,

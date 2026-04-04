@@ -1211,7 +1211,8 @@ export function defaultCoachConfig(overrides: Partial<CoachConfig> = {}): CoachC
     coachModel,
     playerProvider,
     playerModel,
-    matchesPerSprint: asPositiveInteger(overrides.matchesPerSprint, 3),
+    // Development default: 4 (= 8 games after side-swap). For production, set to 8.
+    matchesPerSprint: asPositiveInteger(overrides.matchesPerSprint, 4),
     sprintConcurrency: asPositiveInteger(overrides.sprintConcurrency, 5),
     totalSprints: asPositiveInteger(overrides.totalSprints, 10),
     opponentGenome: coerceGenomeModules(overrides.opponentGenome),

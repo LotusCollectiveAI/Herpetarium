@@ -23,6 +23,7 @@ import type {
   ScratchNotesSnapshot,
   SearchPolicy,
   SprintEvaluation,
+  ArenaBaseRates,
 } from "@shared/schema";
 import { DEFAULT_GAME_RULES, DEFAULT_SEARCH_POLICY, LONGFORM_ARENA_RULES, type GameRules } from "@shared/schema";
 import { runBoundedSettledPool } from "./boundedPool";
@@ -252,6 +253,33 @@ function buildFallbackEvaluation(
       `Observed sprint record ${sprintResult.record} with win rate ${sprintResult.winRate.toFixed(4)} across ${sprintResult.matchResults.length} matches.`,
     ],
     perMatchSummaries: [],
+  };
+}
+
+function computeArenaBaseRates(evaluations: SprintEvaluation[]): ArenaBaseRates {
+  const count = evaluations.length;
+  if (count === 0) {
+    return { avgMiscommunicationRate: 0, avgOwnDecodeRate: 0, avgOurInterceptRate: 0, avgWinRate: 0, coachCount: 0 };
+  }
+
+  let totalMiscomm = 0;
+  let totalOwnDecode = 0;
+  let totalOurIntercept = 0;
+  let totalWinRate = 0;
+
+  for (const ev of evaluations) {
+    totalMiscomm += ev.execution.miscommunicationRate;
+    totalOwnDecode += ev.execution.ownDecodeRate;
+    totalOurIntercept += ev.execution.ourInterceptRate;
+    totalWinRate += ev.training.winRate;
+  }
+
+  return {
+    avgMiscommunicationRate: totalMiscomm / count,
+    avgOwnDecodeRate: totalOwnDecode / count,
+    avgOurInterceptRate: totalOurIntercept / count,
+    avgWinRate: totalWinRate / count,
+    coachCount: count,
   };
 }
 
@@ -1283,7 +1311,19 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
 
       const foiaActive = config.foiaEnabled && shouldInjectFoia(sprintsCompleted, foiaDelaySprints);
 
-      await Promise.all(slots.map(async (slot) => {
+      // Phase 1: Compute evaluations for all slots in parallel
+      interface SlotEvalContext {
+        slot: typeof slots[number];
+        sprintResult: SprintResult;
+        genomeBefore: GenomeModules;
+        compiledPrompts: CompiledGenomePrompts;
+        primaryOpponentGenome: GenomeModules | undefined;
+        disclosureText: string | undefined;
+        promptEnv: Record<string, unknown>;
+        evaluation: SprintEvaluation;
+      }
+
+      const evalContexts: SlotEvalContext[] = await Promise.all(slots.map(async (slot) => {
         const sprintResult = combineSprintResults(
           sprintNumber,
           resultsBySlot.get(slot.slotIndex) || [],
@@ -1365,6 +1405,23 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
         } catch (error) {
           logArena(`Patch review evaluation failed for run ${slot.runId}: ${error instanceof Error ? error.message : String(error)}`);
         }
+
+        return { slot, sprintResult, genomeBefore, compiledPrompts, primaryOpponentGenome, disclosureText, promptEnv, evaluation };
+      }));
+
+      // Compute arena-wide base rates across all coaches for this sprint
+      const arenaBaseRates = computeArenaBaseRates(evalContexts.map((ctx) => ctx.evaluation));
+
+      // Enrich evaluations with base rates and persist
+      for (const ctx of evalContexts) {
+        ctx.evaluation = { ...ctx.evaluation, arenaBaseRates };
+        await storage.updateSprintEvaluation(ctx.slot.runId, sprintNumber, ctx.evaluation);
+      }
+
+      // Phase 2: Run coach proposals, anchors, and reviews in parallel
+      await Promise.all(evalContexts.map(async (ctx) => {
+        const { slot, sprintResult, genomeBefore, primaryOpponentGenome, disclosureText, promptEnv } = ctx;
+        let { evaluation } = ctx;
 
         const sprintState = applySprintResultToCoachState(slot.state, sprintResult);
         const coachConfig = buildAutopsyCoachConfig(

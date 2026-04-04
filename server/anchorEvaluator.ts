@@ -17,7 +17,7 @@ import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
 
 const ANCHOR_CONCURRENCY = 4;
-const DEFAULT_GAMES_PER_ANCHOR = 1;
+const DEFAULT_GAMES_PER_ANCHOR = 4;
 const DEFAULT_MAX_ANCHOR_GAMES_PER_SPRINT = 32;
 
 const DEFAULT_ANCHOR_OPPONENTS: AnchorOpponentSpec[] = SEED_GENOME_TEMPLATES.slice(0, 2).map((genome, index) => ({
