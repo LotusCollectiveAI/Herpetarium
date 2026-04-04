@@ -1198,6 +1198,14 @@ export interface MatchClueEvidence {
   opponentRounds: RoundEvidence[];
 }
 
+export interface ArenaBaseRates {
+  avgMiscommunicationRate: number;
+  avgOwnDecodeRate: number;
+  avgOurInterceptRate: number;
+  avgWinRate: number;
+  coachCount: number;
+}
+
 export interface SprintEvaluation {
   runId: string;
   sprintNumber: number;
@@ -1208,6 +1216,7 @@ export interface SprintEvaluation {
   sideBalance: SideBalanceMetrics;
   complexity: ComplexityMetrics;
   anchor?: AnchorABReport;
+  arenaBaseRates?: ArenaBaseRates | null;
   pendingPatchReviews: PatchReviewSummary[];
   policyNotices: ResearcherPolicyNotice[];
   evidenceLines: string[];
