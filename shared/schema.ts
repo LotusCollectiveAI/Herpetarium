@@ -978,6 +978,7 @@ export type PromptRole =
 export interface CompiledPromptArtifact {
   role: PromptRole;
   systemPrompt: string;
+  taskDirectives: string | null;
   tokenEstimate: number;
   charCount: number;
 }
@@ -1162,6 +1163,34 @@ export interface MatchSummary {
   summaryLines: string[];
 }
 
+export interface ClueEvidence {
+  clueWord: string;
+  targetKeyword: string;
+  targetPosition: number;  // 1-4
+  teammateCorrect: boolean;
+  opponentIntercepted: boolean;
+}
+
+export interface RoundEvidence {
+  matchId: number;
+  roundNumber: number;
+  team: "amber" | "blue";
+  code: [number, number, number];
+  keywords: string[];
+  clues: ClueEvidence[];
+  teamDecoded: boolean;
+  opponentIntercepted: boolean;
+}
+
+export interface MatchClueEvidence {
+  matchId: number;
+  focalTeam: "amber" | "blue";
+  ourKeywords: string[];
+  theirKeywords: string[];
+  ourRounds: RoundEvidence[];
+  opponentRounds: RoundEvidence[];
+}
+
 export interface SprintEvaluation {
   runId: string;
   sprintNumber: number;
@@ -1176,6 +1205,7 @@ export interface SprintEvaluation {
   policyNotices: ResearcherPolicyNotice[];
   evidenceLines: string[];
   perMatchSummaries: MatchSummary[];
+  clueEvidence: MatchClueEvidence[];
 }
 
 export interface SprintEvaluationInput {

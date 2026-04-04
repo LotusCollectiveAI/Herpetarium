@@ -122,6 +122,14 @@ function resolveRoleSystemPrompt(
     ?? undefined;
 }
 
+function resolveRoleTaskDirectives(
+  overrides: HeadlessPromptOverrides | undefined,
+  team: TeamId,
+  role: Exclude<PromptRole, "coach">,
+): string | undefined {
+  return overrides?.[team]?.compiledPrompts?.prompts[role]?.taskDirectives ?? undefined;
+}
+
 function resolveDeliberationPromptRole(
   phase: DeliberationContext["phase"],
 ): "own_deliberator" | "intercept_deliberator" {
@@ -276,7 +284,7 @@ async function processClues(
     const GENERIC_FALLBACK_POOL = ["signal", "trace", "mark", "pulse", "drift", "bloom", "frost", "ridge", "shore", "vault"];
     const fallbackClues = Array.from({ length: 3 }, () => GENERIC_FALLBACK_POOL[Math.floor(Math.random() * GENERIC_FALLBACK_POOL.length)]);
     const teamNotesClue = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
-    const clueParams = { keywords, targetCode: code, history, scratchNotes: teamNotesClue, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "cluegiver") };
+    const clueParams = { keywords, targetCode: code, history, scratchNotes: teamNotesClue, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "cluegiver"), taskDirectives: resolveRoleTaskDirectives(promptOverrides, team, "cluegiver") };
 
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
@@ -350,7 +358,7 @@ async function processGuesses(
 
     const noteKey = `${aiGuesser.aiProvider}-${team}`;
     const teamNotesGuess = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
-    const guessParams = { keywords, clues, history, scratchNotes: teamNotesGuess, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "own_guesser") };
+    const guessParams = { keywords, clues, history, scratchNotes: teamNotesGuess, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "own_guesser"), taskDirectives: resolveRoleTaskDirectives(promptOverrides, team, "own_guesser") };
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
       generateGuess(config, guessParams, { healthTracker }),
@@ -402,7 +410,7 @@ async function processInterceptions(
 
     const noteKey = `${aiInterceptor.aiProvider}-${team}`;
     const teamNotesIntercept = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
-    const interceptParams = { clues, history, scratchNotes: teamNotesIntercept, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "interceptor") };
+    const interceptParams = { clues, history, scratchNotes: teamNotesIntercept, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "interceptor"), taskDirectives: resolveRoleTaskDirectives(promptOverrides, team, "interceptor") };
     const { result: callResult, timedOut } = await withTimeout(
       config.timeoutMs,
       generateInterception(config, interceptParams, { healthTracker }),
@@ -533,6 +541,7 @@ async function processDeliberation(
           score: context.score,
           ablations: context.ablations,
           systemPromptOverride: resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
+          taskDirectives: resolveRoleTaskDirectives(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
           isPlayerB,
         };
 
@@ -564,6 +573,7 @@ async function processDeliberation(
           score: context.score,
           ablations: context.ablations,
           systemPromptOverride: resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
+          taskDirectives: resolveRoleTaskDirectives(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
           isPlayerB,
         };
 

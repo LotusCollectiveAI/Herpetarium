@@ -18,6 +18,7 @@ export interface ClueTemplateParams {
   scratchNotes?: string;
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
+  taskDirectives?: string;
 }
 
 export interface GuessTemplateParams {
@@ -27,6 +28,7 @@ export interface GuessTemplateParams {
   scratchNotes?: string;
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
+  taskDirectives?: string;
 }
 
 export interface InterceptionTemplateParams {
@@ -35,6 +37,7 @@ export interface InterceptionTemplateParams {
   scratchNotes?: string;
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
+  taskDirectives?: string;
 }
 
 export interface DeliberationOwnTemplateParams {
@@ -52,6 +55,7 @@ export interface DeliberationOwnTemplateParams {
   scratchNotes?: string;
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
+  taskDirectives?: string;
   isPlayerB?: boolean;
 }
 
@@ -70,6 +74,7 @@ export interface DeliberationInterceptTemplateParams {
   scratchNotes?: string;
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
+  taskDirectives?: string;
   isPlayerB?: boolean;
 }
 
@@ -148,6 +153,10 @@ THIS ROUND'S CLUES (from your clue-giver, ${clueGiverName}):
     prompt += `\n\nCLUE HISTORY (your team's previous rounds, visible to opponents):\n${formatHistory(history)}`;
   }
 
+  if (params.taskDirectives) {
+    prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
+  }
+
   prompt += `\n\nYOUR TASK: Work with your teammate ${otherPlayerName} to determine which keyword (1-4) each clue refers to -- i.e., decode the 3-number code your clue-giver is communicating.`;
 
   if (isPlayerB) {
@@ -205,6 +214,10 @@ THIS ROUND'S CLUES (from ${clueGiverName}):
   if (lastOtherMsg) {
     const summary = lastOtherMsg.content.slice(0, 200);
     prompt += `\n\nYour teammate ${otherPlayerName} just argued: "${summary}"`;
+  }
+
+  if (params.taskDirectives) {
+    prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
   }
 
   prompt += `\n\nNow that you've heard ${otherPlayerName}'s perspective, do you see the mapping differently? What evidence supports or contradicts their interpretation? Consider:
@@ -271,6 +284,10 @@ You do NOT know their keywords, but you can deduce patterns from their clue hist
     prompt += `\n\nYOUR ANALYTICAL FOCUS: Focus on what the opponents SAID -- their explicit reasoning, keyword mentions, and confidence levels. Map their stated associations back to the clue history to build hypotheses about their keywords.`;
   }
 
+  if (params.taskDirectives) {
+    prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
+  }
+
   prompt += `\n\nYou and your teammate ${otherPlayerName} are trying to crack the opposing team's code. Discuss what you think each clue maps to.`;
 
   prompt += `\n\nIMPORTANT: The opposing team can hear your discussion too. Be strategic about what reasoning you reveal -- they may adjust their cluing in future rounds based on what they learn about your interception strategies.`;
@@ -323,6 +340,10 @@ THE OPPOSING TEAM (${opponentTeam}) GAVE THESE CLUES THIS ROUND:
     prompt += `\n\nYour teammate ${otherPlayerName} just argued: "${summary}"`;
   }
 
+  if (params.taskDirectives) {
+    prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
+  }
+
   prompt += `\n\nConsider their reasoning -- did they spot a signal in the opponent's discussion that you missed? Revisit the intercepted transcript. What patterns emerge when you combine your analysis with theirs?
 
 Remember: the opponents are listening to your interception discussion too. Be strategic.`;
@@ -362,6 +383,10 @@ Strategic considerations:
       prompt += `\n\nOpponents have seen these patterns. Shift your approach for any keyword you've clued before.`;
     }
 
+    if (params.taskDirectives) {
+      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
+    }
+
     prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\n\nANSWER: Respond with exactly 3 words separated by commas on a line starting with "ANSWER:". Example:\nANSWER: ocean,bright,ancient`;
     return prompt;
@@ -383,6 +408,10 @@ Each clue maps to one keyword (in order of the secret code). Determine which key
       prompt += `\n\nUse your teammate's past cluing patterns to inform your guess.`;
     }
 
+    if (params.taskDirectives) {
+      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
+    }
+
     prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\n\nANSWER: Respond with exactly 3 numbers (1-4) separated by commas on a line starting with "ANSWER:". Example:\nANSWER: 3,1,4`;
     return prompt;
@@ -400,6 +429,10 @@ You don't know their keywords, but you can deduce patterns from their clue histo
       prompt += `\n\nLook for patterns: clues that are semantically similar likely refer to the same keyword number.`;
     } else {
       prompt += `\n\nThis is round 1 — no history available. Make your best educated guess.`;
+    }
+
+    if (params.taskDirectives) {
+      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
     }
 
     prompt += formatScratchNotes(params.scratchNotes);
@@ -447,6 +480,9 @@ Step 1 — Opponent Model: What do opponents know so far? Which keywords might t
 Step 5 — Final Selection: Choose 3 single-word clues that balance teammate clarity with opponent deception.
 
 RULES: Each clue must be a complete, real English word. No abbreviations, acronyms, fragments, or prefixes. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.`;
+    if (params.taskDirectives) {
+      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
+    }
     prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\n\nPut your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 words separated by commas. Example:\nANSWER: ocean,bright,ancient`;
     return prompt;
@@ -474,6 +510,10 @@ Step 2 — Elimination: If multiple clues point to the same keyword, re-evaluate
       prompt += `\nStep 4 — Consistency Check: Does your proposed mapping make sense given your teammate's historical approach?`;
     }
 
+    if (params.taskDirectives) {
+      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
+    }
+
     prompt += formatScratchNotes(params.scratchNotes);
     prompt += `\nStep 5 — Final Answer: Commit to the mapping with highest confidence.
 
@@ -499,6 +539,10 @@ Step 4 — Current Round Mapping: Match each current clue to the most likely key
 Step 5 — Confidence Assessment: Rate your confidence for each position. Where you're uncertain, consider which mapping is most consistent with the overall pattern.`;
     } else {
       prompt += `\n\nNo history yet — this is round 1. Use your best intuition about likely word associations.`;
+    }
+
+    if (params.taskDirectives) {
+      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
     }
 
     prompt += formatScratchNotes(params.scratchNotes);

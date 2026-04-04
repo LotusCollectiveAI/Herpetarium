@@ -252,6 +252,7 @@ function buildFallbackEvaluation(
       `Observed sprint record ${sprintResult.record} with win rate ${sprintResult.winRate.toFixed(4)} across ${sprintResult.matchResults.length} matches.`,
     ],
     perMatchSummaries: [],
+    clueEvidence: [],
   };
 }
 
@@ -1371,11 +1372,14 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           config,
           primaryOpponentGenome,
         );
+        const sprintMatchIds = sprintResult.matchResults.map((match) => match.matchId);
+        const sprintMatches = await storage.getMatchesByIds(sprintMatchIds);
         const proposal = await coachProposePatch(
           sprintState,
           sprintResult,
           evaluation,
           coachConfig,
+          sprintMatches,
           promptEnv,
         );
 
@@ -1418,6 +1422,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
           anchorSummary || undefined,
           evaluation.pendingPatchReviews,
           coachConfig,
+          sprintMatches,
           promptEnv,
         );
         const hasAnyChange = Boolean(proposal.patch || proposal.searchPolicyPatch);

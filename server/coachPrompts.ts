@@ -12,6 +12,8 @@ import type {
   CoachReviewResult,
   GenomeModuleKey,
   GenomeModules,
+  Match,
+  MatchClueEvidence,
   PatchReviewSummary,
   SearchPolicy,
   SearchPolicyPatch,
@@ -186,6 +188,63 @@ function formatPerMatchSummaries(evaluation: SprintEvaluation): string {
   });
 
   return blocks.join("\n");
+}
+
+function oppositeTeam(team: "amber" | "blue"): "amber" | "blue" {
+  return team === "amber" ? "blue" : "amber";
+}
+
+function formatMatchEvidence(evidence: MatchClueEvidence, match: Match): string {
+  const focalTeam = evidence.focalTeam;
+  const opponentTeam = oppositeTeam(focalTeam);
+  const outcome = match.winner === focalTeam ? "WIN" : match.winner === null ? "DRAW" : "LOSS";
+  const lines: string[] = [];
+
+  lines.push(
+    `Match ${evidence.matchId} (us: ${focalTeam}, opp: ${opponentTeam}) -- ${outcome} in ${match.totalRounds ?? 0} rounds`,
+  );
+  lines.push(`  Our keywords: ${evidence.ourKeywords.join(", ")}`);
+  lines.push(`  Their keywords: ${evidence.theirKeywords.join(", ")}`);
+
+  // Our clues with full outcomes
+  for (const round of evidence.ourRounds) {
+    const codeStr = `[${round.code.join(",")}]`;
+    const clueDetails = round.clues.map((c) => {
+      const tm = c.teammateCorrect ? "ok" : "MISS";
+      const op = c.opponentIntercepted ? "LEAK" : "safe";
+      return `"${c.clueWord}"->${c.targetKeyword} ${tm}/${op}`;
+    }).join(", ");
+
+    let roundStatus = "";
+    if (!round.teamDecoded) roundStatus += " MISCOM";
+    if (round.opponentIntercepted) roundStatus += " INTERCEPTED";
+
+    lines.push(`  R${round.roundNumber} ${codeStr}: ${clueDetails}${roundStatus}`);
+  }
+
+  // Opponent clues
+  if (evidence.opponentRounds.length > 0) {
+    lines.push("  --- opponent clues ---");
+    for (const round of evidence.opponentRounds) {
+      const clues = round.clues.map((c) =>
+        `"${c.clueWord}"->${c.targetKeyword}`,
+      ).join(", ");
+      const weCracked = round.opponentIntercepted ? " [WE CRACKED THIS]" : "";
+      lines.push(`  R${round.roundNumber}: ${clues}${weCracked}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+function formatAllMatchEvidence(evidenceList: MatchClueEvidence[], matchList: Match[]): string {
+  if (evidenceList.length === 0) return "No clue-level evidence available.";
+  const matchById = new Map(matchList.map((m) => [m.id, m]));
+  return evidenceList.map((ev) => {
+    const match = matchById.get(ev.matchId);
+    if (!match) return null;
+    return formatMatchEvidence(ev, match);
+  }).filter(Boolean).join("\n\n");
 }
 
 function formatEvaluation(evaluation: SprintEvaluation): string {
@@ -646,6 +705,7 @@ function buildProposalSystemPrompt(
   state: CoachState,
   sprintResult: SprintResult,
   evaluation: SprintEvaluation,
+  matches: Match[],
   env?: CoachPromptEnvironment,
 ): string {
   return [
@@ -669,8 +729,35 @@ function buildProposalSystemPrompt(
     "## Sprint Evaluation Evidence",
     formatEvaluation(evaluation),
     "",
+    "## Clue-Level Evidence (raw match data for diagnosis)",
+    formatAllMatchEvidence(evaluation.clueEvidence, matches),
+    "",
     "## Environment",
     formatEnvironment(env),
+    "",
+    "## How Genome Modules Affect Players",
+    "Your genome modules are compiled into two outputs per role:",
+    "1. A system prompt (advisory context the model sees before the task)",
+    "2. Task directives (injected into the user prompt where the model sees the actual game task)",
+    "",
+    "Task directives are the HIGH-LEVERAGE channel. Here's how modules map to roles:",
+    "  executionGuidance -> cluegiver, own_guesser, interceptor (during action phases)",
+    "  deliberationScaffold -> own_deliberator, intercept_deliberator (during team discussion)",
+    "  cluePhilosophy -> cluegiver (during clue generation)",
+    "  opponentModeling -> interceptor, intercept_deliberator (during opponent analysis)",
+    "  riskTolerance, memoryPolicy -> system prompt only (advisory context)",
+    "",
+    "Write executionGuidance and deliberationScaffold as specific, operational instructions the",
+    "player should follow during gameplay — not philosophical essays.",
+    "",
+    "Example executionGuidance that works:",
+    "  'For each keyword, mentally list 3 candidate clues. For each candidate, estimate: (a) probability",
+    "   teammate decodes correctly, (b) probability opponent intercepts. Choose the candidate with the",
+    "   best ratio. Never use a direct synonym or category label.'",
+    "",
+    "Example deliberationScaffold that works:",
+    "  'State your confidence level (high/medium/low) before each guess. If you and your teammate",
+    "   disagree, explicitly list the evidence for each interpretation before converging.'",
     "",
     "## Task",
     "Return a CoachProposal as valid JSON with double quotes and no markdown fences.",
@@ -718,6 +805,7 @@ function buildReviewSystemPrompt(
   evaluation: SprintEvaluation,
   anchorReport: AnchorABReport | undefined,
   patchReviews: PatchReviewSummary[],
+  matches: Match[],
   env?: CoachPromptEnvironment,
 ): string {
   return [
@@ -754,6 +842,9 @@ function buildReviewSystemPrompt(
     "## Latest Sprint Evidence",
     formatEvaluation(evaluation),
     "",
+    "## Clue-Level Evidence (raw match data for diagnosis)",
+    formatAllMatchEvidence(evaluation.clueEvidence, matches),
+    "",
     "## Environment",
     formatEnvironment(env),
     "",
@@ -774,10 +865,11 @@ export async function coachProposePatch(
   sprintResult: SprintResult,
   evaluation: SprintEvaluation,
   config: CoachConfig,
+  matches: Match[],
   env?: CoachPromptEnvironment,
 ): Promise<CoachProposal> {
   const aiConfig = buildCoachAIConfig(config);
-  const systemPrompt = buildProposalSystemPrompt(state, sprintResult, evaluation, env);
+  const systemPrompt = buildProposalSystemPrompt(state, sprintResult, evaluation, matches, env);
   const userPrompt = "Return only valid JSON for a CoachProposal.";
 
   try {
@@ -796,10 +888,11 @@ export async function coachCommitReview(
   anchorReport: AnchorABReport | undefined,
   patchReviews: PatchReviewSummary[],
   config: CoachConfig,
+  matches: Match[],
   env?: CoachPromptEnvironment,
 ): Promise<CoachReviewResult> {
   const aiConfig = buildCoachAIConfig(config);
-  const systemPrompt = buildReviewSystemPrompt(state, proposal, evaluation, anchorReport, patchReviews, env);
+  const systemPrompt = buildReviewSystemPrompt(state, proposal, evaluation, anchorReport, patchReviews, matches, env);
   const userPrompt = "Return only valid JSON for a CoachReviewResult.";
 
   try {

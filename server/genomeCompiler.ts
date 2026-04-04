@@ -6,7 +6,7 @@ import type {
   PromptRole,
 } from "@shared/schema";
 
-const COMPILER_VERSION = "1.0.0";
+const COMPILER_VERSION = "2.0.0";
 
 const ROLE_TITLES: Record<PromptRole, string> = {
   cluegiver: "Cluegiver",
@@ -44,6 +44,24 @@ const ROLE_MODULES: Record<PromptRole, GenomeModuleKey[]> = {
   coach: COACH_MODULE_KEYS,
 };
 
+const DIRECTIVE_MODULES: Record<Exclude<PromptRole, "coach">, GenomeModuleKey[]> = {
+  cluegiver: ["executionGuidance", "cluePhilosophy"],
+  own_guesser: ["executionGuidance"],
+  interceptor: ["executionGuidance", "opponentModeling"],
+  own_deliberator: ["deliberationScaffold"],
+  intercept_deliberator: ["deliberationScaffold", "opponentModeling"],
+};
+
+function buildTaskDirectives(role: PromptRole, genome: GenomeModules): string | null {
+  if (role === "coach") return null;
+  const moduleKeys = DIRECTIVE_MODULES[role];
+  const sections = moduleKeys
+    .map(key => genome[key].trim())
+    .filter(s => s.length > 0);
+  if (sections.length === 0) return null;
+  return sections.join("\n\n");
+}
+
 function simpleGenomeHash(input: string): string {
   let hash = 0;
 
@@ -76,11 +94,13 @@ function buildPrompt(role: PromptRole, genome: GenomeModules): string {
 
 function buildArtifact(role: PromptRole, genome: GenomeModules): CompiledPromptArtifact {
   const systemPrompt = buildPrompt(role, genome);
-  const charCount = systemPrompt.length;
+  const taskDirectives = buildTaskDirectives(role, genome);
+  const charCount = systemPrompt.length + (taskDirectives?.length || 0);
 
   return {
     role,
     systemPrompt,
+    taskDirectives,
     charCount,
     tokenEstimate: Math.ceil(charCount / 4),
   };

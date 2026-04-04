@@ -1,5 +1,6 @@
 import type {
   AiCallLog,
+  ClueEvidence,
   CompiledGenomePrompts,
   ComplexityMetrics,
   DeliberationExecutionMetrics,
@@ -7,10 +8,12 @@ import type {
   GenomeModules,
   LeakageMetrics,
   Match,
+  MatchClueEvidence,
   MatchRound,
   MatchSummary,
   PatchReviewSummary,
   PromptRole,
+  RoundEvidence,
   SideBalanceMetrics,
   SprintEvaluation,
   SprintEvaluationInput,
@@ -378,6 +381,99 @@ function buildEvidenceLines(
   ];
 }
 
+function asStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === "string");
+  }
+  return [];
+}
+
+function asCodeTuple(value: unknown): [number, number, number] | null {
+  if (
+    Array.isArray(value)
+    && value.length >= 3
+    && typeof value[0] === "number"
+    && typeof value[1] === "number"
+    && typeof value[2] === "number"
+  ) {
+    return [value[0], value[1], value[2]];
+  }
+  return null;
+}
+
+function buildClueEvidence(
+  matches: Match[],
+  rounds: MatchRound[],
+  input: SprintEvaluationInput,
+): MatchClueEvidence[] {
+  const evidence: MatchClueEvidence[] = [];
+
+  const roundsByMatchId = new Map<number, MatchRound[]>();
+  for (const round of rounds) {
+    const entries = roundsByMatchId.get(round.matchId) || [];
+    entries.push(round);
+    roundsByMatchId.set(round.matchId, entries);
+  }
+
+  for (const match of matches) {
+    const focalTeam = resolveFocalTeam(match, input);
+    const opponentTeam = oppositeTeam(focalTeam);
+    const ourKeywords = asStringArray(
+      focalTeam === "amber" ? match.amberKeywords : match.blueKeywords,
+    );
+    const theirKeywords = asStringArray(
+      opponentTeam === "amber" ? match.amberKeywords : match.blueKeywords,
+    );
+
+    const allMatchRounds = roundsByMatchId.get(match.id) || [];
+
+    const extractRounds = (team: Team, keywords: string[]): RoundEvidence[] => {
+      return allMatchRounds
+        .filter((r) => r.team === team)
+        .sort((a, b) => a.roundNumber - b.roundNumber)
+        .map((round): RoundEvidence | null => {
+          const code = asCodeTuple(round.code);
+          const clues = asStringArray(round.clues);
+          if (!code || clues.length === 0) return null;
+
+          const ownGuess = asCodeTuple(round.ownGuess);
+          const opponentGuess = asCodeTuple(round.opponentGuess);
+
+          const clueEvidences: ClueEvidence[] = code.map((pos, i) => ({
+            clueWord: clues[i] || "???",
+            targetKeyword: keywords[pos - 1] || `keyword_${pos}`,
+            targetPosition: pos,
+            teammateCorrect: ownGuess ? ownGuess[i] === pos : round.ownCorrect,
+            opponentIntercepted: opponentGuess ? opponentGuess[i] === pos : round.intercepted,
+          }));
+
+          return {
+            matchId: match.id,
+            roundNumber: round.roundNumber,
+            team,
+            code,
+            keywords,
+            clues: clueEvidences,
+            teamDecoded: round.ownCorrect,
+            opponentIntercepted: round.intercepted,
+          };
+        })
+        .filter((r): r is RoundEvidence => r !== null);
+    };
+
+    evidence.push({
+      matchId: match.id,
+      focalTeam,
+      ourKeywords,
+      theirKeywords,
+      ourRounds: extractRounds(focalTeam, ourKeywords),
+      opponentRounds: extractRounds(opponentTeam, theirKeywords),
+    });
+  }
+
+  return evidence;
+}
+
 async function buildPerMatchSummaries(
   matches: Match[],
   rounds: MatchRound[],
@@ -548,6 +644,7 @@ export async function evaluateSprint(input: SprintEvaluationInput): Promise<Spri
   const complexity = buildComplexityMetrics(input.currentGenome, input.previousGenome, input.compiledPrompts);
   const pendingPatchReviews = buildPendingPatchReviews(pendingPatchEntries);
   const perMatchSummaries = await buildPerMatchSummaries(orderedMatches, rounds, chatter, input);
+  const clueEvidence = buildClueEvidence(orderedMatches, rounds, input);
 
   const evaluation: SprintEvaluation = {
     runId: input.runId,
@@ -570,6 +667,7 @@ export async function evaluateSprint(input: SprintEvaluationInput): Promise<Spri
       aiLogs,
     ),
     perMatchSummaries,
+    clueEvidence,
   };
 
   await storage.createSprintEvaluation({
