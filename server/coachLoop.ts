@@ -31,8 +31,8 @@ type CoachRunStatus = "pending" | "running" | "completed" | "failed" | "stopped"
 
 const COACH_SOURCE = "coach";
 const COACH_ACTION_TYPE = "coach_autopsy";
-const DEFAULT_EXECUTION_GUIDANCE = "Focus on clear, unambiguous clues that your teammates can decode reliably. When uncertain, prefer simpler associations over clever ones.";
-const DEFAULT_DELIBERATION_SCAFFOLD = "Discuss openly with your teammates. Share your reasoning, consider alternatives, and reach consensus before committing to an answer.";
+const DEFAULT_EXECUTION_GUIDANCE = "For each keyword in the code, mentally generate 3 candidate clues. Evaluate each for teammate decode probability and opponent interception risk. Choose the candidate with the best ratio.";
+const DEFAULT_DELIBERATION_SCAFFOLD = "State your confidence level before each guess. Explain the association chain: clue X maps to keyword Y because X connects to Y through Z. If disagreement exists, list evidence for each interpretation before converging.";
 const DEFAULT_GENOME_EXTENSION_FIELDS: Pick<GenomeModules, "executionGuidance" | "deliberationScaffold"> = {
   executionGuidance: DEFAULT_EXECUTION_GUIDANCE,
   deliberationScaffold: DEFAULT_DELIBERATION_SCAFFOLD,
@@ -47,61 +47,77 @@ const GENOME_MODULE_KEYS: Array<keyof GenomeModules> = [
 ];
 
 export const SEED_GENOME_TEMPLATES: GenomeModules[] = [
+  // 1. Intermediate Concepts
   {
-    cluePhilosophy: "Use abstract, metaphorical associations. Prefer poetic and lateral thinking over direct synonyms. Aim for clues that feel thematic rather than dictionary-like.",
-    opponentModeling: "Assume opponents are tracking patterns. Vary your clue style each round to prevent pattern recognition. Occasionally sacrifice clarity for unpredictability.",
-    riskTolerance: "Moderate risk. Prefer clues your team will likely understand even if they're not perfectly obscure. Avoid overly clever clues that might confuse teammates.",
-    memoryPolicy: "Track which clue styles have been intercepted in past rounds. Avoid repeating approaches that led to interceptions. Build on successful patterns from earlier rounds.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Connect through intermediate concepts. Never use direct synonyms. For 'ocean', say 'horizon' or 'salt', not 'water'. Find a concept one hop away that your team can trace back but opponents cannot shortcut.",
+    opponentModeling: "Assume opponents will catch any first-order synonym. Your clue must require at least one inferential step that depends on knowing YOUR keywords, not just the clue word.",
+    riskTolerance: "Moderate risk. Prefer clues your team can reliably trace (>70% decode) even if they leak some information. Avoid clues that are so indirect they confuse teammates.",
+    memoryPolicy: "Track which intermediate links have been intercepted. If opponents cracked a hop-path before, avoid that association family in future rounds. Reuse successful hop-paths with teammates.",
+    executionGuidance: "Mentally list 3 candidate intermediate concepts for each keyword. For each candidate, evaluate: (a) can my teammates trace it back in one step? (b) does it also point to a trap word? Choose the candidate with highest clarity and lowest leakage.",
+    deliberationScaffold: "State your confidence level (high/medium/low) for each clue-keyword mapping. Explain the association chain: clue -> intermediate concept -> keyword. If multiple interpretations exist, list each chain and pick the most probable.",
   },
+  // 2. Sensory Experience
   {
-    cluePhilosophy: "Use concrete, sensory-based associations. Think about what the keyword looks like, sounds like, or feels like. Ground clues in physical experience.",
-    opponentModeling: "Aggressive interception focus. Study opponent clue patterns closely and try to decode their keyword mapping. Prioritize breaking their code over protecting your own.",
-    riskTolerance: "High risk tolerance. Willing to use obscure clues that only deep teammates would catch. Accept some miscommunication for better security against interception.",
-    memoryPolicy: "Maintain a mental map of opponent keyword-clue associations. Each round, refine your model of what their keywords might be based on accumulated evidence.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Clue using physical sensory experience. Prioritize texture, sound, and smell over visual. For 'forest', say 'pine' (smell) or 'crunch' (leaves underfoot). Sensory clues are distinctive and hard to intercept because they depend on experiential context.",
+    opponentModeling: "Opponents default to semantic/category reasoning. Sensory clues exploit a blind spot: they require imagining the physical experience of the keyword, which is harder to reverse-engineer from clue alone.",
+    riskTolerance: "Medium-high risk. Sensory associations can be ambiguous (many things 'crunch'), so accept some decode uncertainty in exchange for strong interception resistance.",
+    memoryPolicy: "Note which sensory modalities (smell, sound, texture, taste, temperature) you have used. Rotate modalities across rounds to prevent opponents from building a sensory-pattern model.",
+    executionGuidance: "For each keyword, imagine physically encountering it. What sensation stands out first? Generate one clue each for smell, sound, and texture. Pick the most distinctive and least ambiguous.",
+    deliberationScaffold: "Address interception risk explicitly for each clue. Build a hypothesis table: for each opponent keyword, could this sensory clue plausibly point there? If yes, flag the risk and consider alternatives.",
   },
+  // 3. Functional/Relational
   {
-    cluePhilosophy: "Use functional and relational associations. Think about what the keyword does, what category it belongs to, or what it relates to in everyday use.",
-    opponentModeling: "Defensive posture. Focus primarily on making your own clues clear to teammates rather than trying to intercept. Only attempt interception when very confident.",
-    riskTolerance: "Low risk. Prioritize team communication clarity above all else. Use straightforward associations that minimize miscommunication risk.",
-    memoryPolicy: "Focus on consistency. Establish clue patterns early and maintain them so teammates can predict your style. Consistency builds team trust and accuracy.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "What does the keyword DO? What is it used FOR? For 'hammer', say 'build' or 'toolbox', not 'heavy'. Functional associations are precise because they capture the keyword's role rather than its surface properties.",
+    opponentModeling: "Defensive opponent modeling. Assume opponents will try to intercept using surface-level attributes (size, color, shape). Functional clues sidestep those attacks because function is context-dependent.",
+    riskTolerance: "Low-moderate risk. Functional clues tend to be clear to teammates since function is a strong associative link. Prefer reliability over cleverness.",
+    memoryPolicy: "Track which functional frames (purpose, tool-use, cause-effect, part-of-process) have been used. If opponents start catching functional clues, shift to less obvious functional frames (e.g., secondary uses).",
+    executionGuidance: "For each keyword, ask: what is its primary function? What process is it part of? What tool category does it belong to? Generate a clue from each frame and pick the one least likely to also describe a trap word.",
+    deliberationScaffold: "List certain vs uncertain keyword mappings. For certain mappings, state the functional link. For uncertain ones, list 2-3 possible functions and assign rough probabilities before committing.",
   },
+  // 4. Rotation Strategy
   {
-    cluePhilosophy: "Use cultural and contextual references. Draw from shared cultural knowledge—movies, books, common expressions. Assume your teammates share similar cultural context.",
-    opponentModeling: "Balanced approach. Split attention equally between making good clues and attempting interceptions. Adapt based on the score—more aggressive when behind, more defensive when ahead.",
-    riskTolerance: "Adaptive risk. Take bigger risks early in the game to establish advantages, then become more conservative as token counts accumulate.",
-    memoryPolicy: "Learn from mistakes. If a clue was too obvious (intercepted), shift to more obscure associations next round. If too obscure (miscommunicated), shift to clearer ones.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Rotate association types between rounds. Never use the same kind of link twice in a row. If you used a sensory clue last round, switch to functional or cultural this round. Unpredictability is a defensive asset.",
+    opponentModeling: "Balanced opponent modeling. Track what types of clues opponents give and what types they successfully intercept. Rotate INTO their weak spots and AWAY from their strong interception categories.",
+    riskTolerance: "Adaptive risk. When rotating into a familiar association type, take moderate risk. When rotating into an unfamiliar type, reduce risk and prioritize teammate clarity.",
+    memoryPolicy: "Maintain a rotation log: record the association type used each round (sensory, functional, cultural, contrast, etc.). Before each round, consult the log to ensure you pick a different type.",
+    executionGuidance: "Before generating clues, ask: what association type did I use last round? Explicitly pick a different type. Then generate 3 candidates within that new type and evaluate as usual.",
+    deliberationScaffold: "Frame each guess as a decision under uncertainty. For each clue, assign probabilities to possible keywords: P(keyword_A | clue) = X%, P(keyword_B | clue) = Y%. Choose the mapping with highest expected value given miscommunication and interception costs.",
   },
+  // 5. Cultural/Historical
   {
-    cluePhilosophy: "Use oppositional and negative space associations. Think about what the keyword is NOT, or what contrasts with it. Clue by exclusion and contrast rather than similarity.",
-    opponentModeling: "Theory of mind focused. Try to think about what opponents think you're thinking. Use second and third-order reasoning to stay ahead of their interception attempts.",
-    riskTolerance: "Variable risk based on game state. Very conservative when close to losing (2 white tokens), very aggressive when opponent is close to losing.",
-    memoryPolicy: "Build a comprehensive game model. Track all clues, codes, and outcomes for both teams. Use this complete history to make increasingly informed decisions.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Clue using specific cultural or historical references. For 'bridge', say 'Brooklyn' or 'troll'. Proper nouns and cultural touchstones are distinctive because they carry rich, specific context that generic words lack.",
+    opponentModeling: "Pattern-focused opponent modeling. Track which cultural domains opponents draw from (movies, history, geography, mythology). If they cluster in one domain, avoid that domain for your own clues to reduce interception overlap.",
+    riskTolerance: "Medium risk. Cultural references can misfire if teammates lack the same cultural knowledge. Use widely-known references (top-100 cultural touchstones) rather than niche ones unless your team has demonstrated niche knowledge.",
+    memoryPolicy: "Note which cultural references landed successfully and which confused teammates. Build a team cultural-knowledge model: what domains does your team reliably share? Lean into those domains.",
+    executionGuidance: "For each keyword, brainstorm 3 cultural or historical references that connect to it. Evaluate each for: (a) how widely known is this reference? (b) does it uniquely point to my keyword or could it point to a trap word? Pick the most distinctive and widely known.",
+    deliberationScaffold: "When decoding opponent clues, check if the clue is a proper noun or cultural reference. If so, list what it could refer to. Map each referent to possible keywords. Prefer the interpretation that fits the most specific cultural context.",
   },
+  // 6. Contrast/Negative Space
   {
-    cluePhilosophy: "Use phonetic and linguistic associations. Think about how words sound, rhyme, or share etymological roots. Wordplay and language structure over meaning.",
-    opponentModeling: "Minimal opponent modeling. Focus entirely on your own team's communication efficiency. Assume opponents will sometimes intercept and plan around it.",
-    riskTolerance: "Extremely high risk. Use creative, unusual associations that require lateral thinking. Accept higher miscommunication rates for near-zero interception vulnerability.",
-    memoryPolicy: "Short memory. Treat each round relatively fresh. Don't over-anchor on past patterns—stay flexible and responsive to the current situation.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Clue using what the keyword is NOT or what contrasts with it. For 'fire', say 'extinguish' or 'ice'. For 'mountain', say 'valley'. Contrast clues work because the opposite uniquely identifies the keyword through its absence.",
+    opponentModeling: "Theory-of-mind opponent modeling. Opponents expect positive associations. Contrast clues force them to invert their reasoning, adding a cognitive step that increases their error rate on interception.",
+    riskTolerance: "High risk tolerance. Contrast clues are inherently indirect and require teammates to flip the association. Accept ~60% decode rate if interception resistance is very high. Use this strategy when behind on tokens.",
+    memoryPolicy: "Track which contrast pairs have been used (fire/ice, mountain/valley). Avoid reusing the same contrast axis. If opponents start catching contrasts, temporarily switch to a direct strategy before returning.",
+    executionGuidance: "For each keyword, list its primary antonym, its environmental opposite, and what would negate or destroy it. Pick the contrast that most uniquely identifies the keyword (fewest alternative interpretations).",
+    deliberationScaffold: "When decoding, always test the inversion hypothesis: could this clue be the OPPOSITE of the intended keyword? For each clue, list both the direct interpretation and the contrast interpretation. Weigh evidence for each before committing.",
   },
+  // 7. Emotional/Psychological
   {
-    cluePhilosophy: "Use hierarchical category associations. Place the keyword in taxonomic categories (genus, species, family). Think like a classifier or encyclopedia.",
-    opponentModeling: "Pattern-breaking focus. Actively change your clue strategy every 2-3 rounds to keep opponents off-balance. Use unpredictability as a weapon.",
-    riskTolerance: "Medium-low risk. Slightly favor clarity over security but maintain enough variety to avoid being fully predictable.",
-    memoryPolicy: "Selective memory. Remember only the most important events—interceptions and miscommunications. Ignore neutral rounds to avoid information overload.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Clue using the feeling or mood the keyword evokes. For 'ocean', say 'awe' or 'lonely'. For 'knife', say 'danger' or 'precise'. Emotional associations tap into shared human experience and are hard to reverse-engineer logically.",
+    opponentModeling: "Exploit-focused opponent modeling. Look for emotional blind spots: opponents who reason logically will struggle to connect emotional clues to concrete keywords. Exploit this gap by leaning into abstract emotional territory.",
+    riskTolerance: "Medium-high risk. Emotional associations are personal and can vary between individuals. Use emotions that are culturally universal (fear, awe, comfort) rather than idiosyncratic ones.",
+    memoryPolicy: "Track which emotional registers (positive, negative, arousal, calm) have been used. Note if teammates consistently misread certain emotions. Avoid those registers in future rounds.",
+    executionGuidance: "For each keyword, imagine how it makes you feel. Name the primary emotion, then a secondary emotion. Generate a clue from each. Pick the emotion that is most specifically tied to this keyword and least likely to apply to trap words.",
+    deliberationScaffold: "When decoding, identify the emotional valence of the clue first (positive/negative, high/low arousal). Then list keywords that match that emotional profile. Rank by specificity: which keyword most uniquely evokes this emotion?",
   },
+  // 8. Compound/Multi-hop
   {
-    cluePhilosophy: "Use emotional and psychological associations. Connect keywords to feelings, moods, or psychological states they evoke. Tap into shared emotional understanding.",
-    opponentModeling: "Exploit-focused. Look for weaknesses in opponent patterns. If they consistently struggle with certain types of clues, exploit those patterns aggressively.",
-    riskTolerance: "Calculated risk. Assign rough probabilities to whether teammates and opponents will decode each clue. Choose the option with the best expected value.",
-    memoryPolicy: "Strategic note-taking. Keep running notes on what works and what doesn't. Refine strategy between rounds based on accumulated intelligence.",
-    ...DEFAULT_GENOME_EXTENSION_FIELDS,
+    cluePhilosophy: "Clue using compound words or phrases that contain the keyword. For 'sun', say 'flower' (sunflower) or 'burn' (sunburn). The compound word creates a traceable link: teammates combine clue + keyword to form the compound, confirming the match.",
+    opponentModeling: "Conservative opponent modeling. Assume opponents know common compound words. Use less obvious compounds (e.g., for 'sun', prefer 'dial' over 'flower') to reduce interception. Check that the compound is real but not the first one that comes to mind.",
+    riskTolerance: "Low risk. Compound clues are highly decodable because the verification step (does clue + keyword form a real word?) gives teammates strong confirmation. Prioritize decode reliability.",
+    memoryPolicy: "Keep a list of compound words already used. Never reuse the same compound root. If opponents start catching compounds, switch to phrasal compounds (two-word phrases) or less common formations.",
+    executionGuidance: "For each keyword, list 5 compound words that contain it (keyword + clue or clue + keyword). Eliminate any where the compound is the most obvious association. From the remaining, pick the one least likely to also compound with a trap word.",
+    deliberationScaffold: "When decoding, test each clue against each keyword by asking: does clue + keyword (or keyword + clue) form a recognized compound word or common phrase? If yes, that mapping gets a strong confidence boost. List all valid compounds found before deciding.",
   },
 ];
 
