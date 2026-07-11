@@ -1,6 +1,20 @@
 name: Deploy to VPS
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "client/**"
+      - "server/**"
+      - "shared/**"
+      - "script/**"
+      - "scripts/deploy-vps.sh"
+      - "package.json"
+      - "package-lock.json"
+      - "tsconfig.json"
+      - "vite.config.ts"
+      - "drizzle.config.ts"
+      - ".github/workflows/deploy-vps.yml"
   push:
     branches: [main]
     paths:
@@ -38,6 +52,7 @@ jobs:
       - run: npm run build
 
   deploy:
+    if: github.event_name != 'pull_request'
     needs: verify
     runs-on: ubuntu-latest
     environment: production
