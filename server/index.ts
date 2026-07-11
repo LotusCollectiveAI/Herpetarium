@@ -24,6 +24,12 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
+// Lightweight deployment health check. This deliberately avoids databases and
+// model providers so a deploy can verify that the HTTP process came back up.
+app.get("/healthz", (_req, res) => {
+  res.status(200).json({ ok: true, service: "herpetarium" });
+});
+
 export function log(message: string, source = "express") {
   const formattedTime = new Date().toLocaleTimeString("en-US", {
     hour: "numeric",
