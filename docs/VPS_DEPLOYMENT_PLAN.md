@@ -84,3 +84,15 @@ Do not solve future scale, future storage, and future architecture all at once.
 First make Herpetarium present on the VPS.
 Then make it stable.
 Then decide what it should become.
+
+## Current deployment workflow
+
+Herpetarium now uses the standard Lotus Collective “ship it” workflow:
+
+1. Development happens on a branch and is reviewed through a pull request.
+2. Merging application code into `main` runs GitHub checks.
+3. If the checks pass, GitHub deploys that exact commit to the VPS.
+4. The VPS installs dependencies, checks and builds the app, applies the database schema, restarts `herpetarium.service`, and verifies `/healthz`.
+5. Local research files on the VPS are not deleted or overwritten. Deployment stops if committed files contain unpreserved local changes.
+
+In ordinary use, a human can ask for work in Slack, review Claude’s plain-English summary, and say “ship it.” The agent handles the branch, pull request, checks, merge, and deployment status.
