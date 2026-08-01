@@ -83,10 +83,12 @@ export function aliasEpochFor(provider: string, model: string, asOf: string): st
 }
 
 /**
- * The two sanctioned DeepSeek V4-Flash lanes (see diagnostic §5 and founder
- * question 7): a dated, upstream-pinned OpenRouter route as the cheap
- * canonical experiment treatment, and the official direct alias as a
- * provenance canary whose traces must carry an alias epoch.
+ * The two sanctioned DeepSeek V4-Flash lanes (resolved decision, 2026-08-01;
+ * diagnostic §5): the dated, upstream-pinned OpenRouter route is the
+ * canonical experiment workhorse, in use now. The official direct alias is
+ * a provenance canary only — it runs solely when its own credential is
+ * available, its traces must carry an alias epoch and a distinct label, and
+ * canary data is never pooled with workhorse data in any evaluation.
  */
 export const DEEPSEEK_V4_FLASH_CANONICAL: ModelRef = {
   provider: "openrouter",

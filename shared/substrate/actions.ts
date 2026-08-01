@@ -58,6 +58,15 @@ export interface ClueRuleOptions {
 export const TABLE_CLUE_RULES: ClueRuleOptions = { maxLength: 120, singleWordOnly: false };
 export const HERPETARIUM_CLUE_RULES: ClueRuleOptions = { maxLength: 40, singleWordOnly: true };
 
+/**
+ * Resolved decision (2026-08-01): at The Table, BOT encryptors submit
+ * single-word clues (the trained regime; definition-phrases are how the
+ * pilot was lost) while human players keep phrase freedom under
+ * TABLE_CLUE_RULES. Phrase clues for bots return only behind a calibrated
+ * blind-inversion audit.
+ */
+export const TABLE_BOT_CLUE_RULES: ClueRuleOptions = { maxLength: 40, singleWordOnly: true };
+
 export interface ClueContext {
   ownKeywords: [string, string, string, string];
   previousOwnClues: string[];

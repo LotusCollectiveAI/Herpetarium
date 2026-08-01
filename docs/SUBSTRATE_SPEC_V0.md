@@ -43,7 +43,7 @@ Both copies are byte-identical; any change lands in both in the same logical cha
 
 ## 4. Adoption map (who wires what)
 
-- **The Table (Codex):** `runner.ts` builds `DecryptoObservation` from `viewCipherRelayState` and asserts role-legality before prompting; `prompts.ts` overlays compiled artifact `systemPrompt`/`taskDirectives` for seats with a `strategyArtifactId`; `ai_calls` writes gain a `TraceEnvelope` projection; per-game `teamChatVisibility` setting backs the new team channel. The existing visibility chokepoint stays authoritative — the substrate adds a second assertion, it does not replace projection.
+- **The Table (Codex):** `runner.ts` builds `DecryptoObservation` from `viewCipherRelayState` and asserts role-legality before prompting; `prompts.ts` overlays compiled artifact `systemPrompt`/`taskDirectives` for seats with a `strategyArtifactId`; bot encryptor submissions validate against `TABLE_BOT_CLUE_RULES` (single word — resolved decision 7); `ai_calls` writes gain a `TraceEnvelope` projection; the per-game `teamChatVisibility` setting (default `private`, host opt-`open` pre-start — resolved decision 1) backs the new team channel, which carries bot strategic deliberation (decision 2). The existing visibility chokepoint stays authoritative — the substrate adds a second assertion, it does not replace projection.
 - **Herpetarium (either):** `coachLoop`/`arena` mint artifacts at sprint commit; `headlessRunner` accepts a `StrategyArtifact` in place of raw overrides; evaluators consume TraceEnvelopes (from arena or The Table exports) instead of bespoke rows.
 - **Extrospection:** records the artifact ledger (name@version + hash + eval verdicts) as canonical knowledge.
 

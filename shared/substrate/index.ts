@@ -62,6 +62,7 @@ export type {
 } from "./observation";
 export {
   HERPETARIUM_CLUE_RULES,
+  TABLE_BOT_CLUE_RULES,
   TABLE_CLUE_RULES,
   validateClue,
   validateClueSubmission,

@@ -7,7 +7,7 @@ For Codex, working in parallel on these branches:
 
 ## What exists as of this handoff (all validated locally)
 
-1. **Diagnostic:** `docs/DECRYPTO_TRANSFER_DIAGNOSTIC_2026-08-01.md` — evidence-backed causes of the game-night bot failure, proven-vs-retracted-vs-prospective ledger for Herpetarium findings, DeepSeek 0731 reproducibility analysis, prioritized plan, 7 founder questions. Includes production-game evidence (game `20610f90…`, round-3 definition clues, token/latency/cost showing budget was not the constraint).
+1. **Diagnostic:** `docs/DECRYPTO_TRANSFER_DIAGNOSTIC_2026-08-01.md` — evidence-backed causes of the game-night bot failure, proven-vs-retracted-vs-prospective ledger for Herpetarium findings, DeepSeek 0731 reproducibility analysis, prioritized plan, and the seven **resolved decisions** (§7). Includes production-game evidence (game `20610f90…`, round-3 definition clues, token/latency/cost showing budget was not the constraint).
 2. **Substrate v0.1:** `shared/substrate/` (canonical) and `the-table-handoff/lib/decrypto-substrate/src/` (byte-identical vendored twin, registered as `@workspace/decrypto-substrate`, added to root tsconfig references). Spec: `docs/SUBSTRATE_SPEC_V0.md`.
 3. **Validation:** `npx tsx scripts/substrate-conformance.ts [dir]` (29/29 green on both copies), `scripts/substrate-parity.sh` (byte parity), `npm run check` green here, `pnpm -w run typecheck` green in the-table-handoff.
 4. **First named artifacts:** `sensory-anchor@0.1.0`, `intermediate-hops@0.1.0` (P4-D seeds, provenance marked unvalidated — the promotion gate knows).
@@ -37,13 +37,19 @@ For Codex, working in parallel on these branches:
 - `ModelRef` requires `aliasEpoch` for ledgered mutable aliases (`deepseek-v4-flash` since 2026-07-31). DeepSeek lanes: canonical = OpenRouter `deepseek/deepseek-v4-flash-0731` pinned to `deepinfra` with `allow_fallbacks:false`; provenance canary = direct alias with epoch stamped.
 - Baseline: no promoted artifact may reproduce game `20610f90…` round 3. The fixtures also carry the 2026-08-01 blind-inversion **live probe** (all six clues reconstructed blind at .60–.99; $0.000155; 4.8s) — evidence the inversion stage is cheap enough to be a per-move candidate-policy step, recorded explicitly as a probe, not a validated benchmark.
 
-## Open decisions awaiting the founder (full text in diagnostic §7)
+## Resolved decisions (2026-08-01 — full text in diagnostic §7; nothing awaits escalation)
 
-Team-chat visibility default between the two shipped worlds (recommend `open` for family games, `private` for competitive); bot deliberation moving to team channel; human-encryptor unmute; artifact minting authority (recommend Herpetarium-only); experiment budget green-light; DeepSeek two-lane routing; clue format (recommend single-word for bots via artifact guidance).
+1. New games default `teamChatVisibility: private`; host may choose `open` before start; no `delayed` in v1.
+2. Bot strategic deliberation goes to the Team channel; public Table is social/table-talk only.
+3. All seated humans may use Table chat in every role including encryptor (scanner-guarded); observers read-only; bot encryptors strategically quiet.
+4. Herpetarium sole minter; The Table read-only consumer; Extrospection canonical ledger.
+5. Experiments proceed today — the pinned 0731 lane reprices a 12–16-games/cell run to cents-to-dollars.
+6. Pinned OpenRouter/DeepInfra 0731 workhorse now; direct alias only as a separately labeled canary once its credential exists; canary data never pooled.
+7. Bot clues single-word (`TABLE_BOT_CLUE_RULES`); humans keep phrases; audited phrases later.
 
 ## Next highest-leverage steps (in order)
 
-1. Codex: seat `sensory-anchor@0.1.0` on one Cipher seat behind `allowUnvalidated`, verify a full stub + one live game, and emit TraceEnvelopes.
-2. Codex: team-chat channel + `open | private` setting (product) — substrate already encodes it.
+1. Codex: seat `sensory-anchor@0.1.0` on one Cipher seat behind `allowUnvalidated`, verify a full stub + one live game, and emit TraceEnvelopes. Bot encryptors validate against `TABLE_BOT_CLUE_RULES` (single word).
+2. Codex: team-chat channel + `open | private` setting per resolved decisions 1–3 (default `private`, host opt-`open`; bot deliberation to Team; Table open to all seated humans, observers read-only) — substrate already encodes the setting.
 3. Fable: turn the blind-inversion probe into protocol `blind-inversion@0.1` in Herpetarium — calibrate false-positive rate on known-good clues, then wire it as (a) evaluation stage and (b) per-move candidate-policy self-check; then the K-level/advanced/baseline experiment at honest power on the two-lane DeepSeek treatment, minting `EvaluationRecord`s.
 4. Both: promotion of the first artifact whose EvaluationRecord passes; The Table flips its seat to validated and cites the license in traces.
