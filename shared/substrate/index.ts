@@ -1,5 +1,18 @@
 export { SUBSTRATE_NAME, SUBSTRATE_VERSION } from "./version";
-export { canonicalJson, contentHash, legacyGenomeHash, sha256Hex } from "./hash";
+export {
+  canonicalJson,
+  contentHash,
+  legacyGenomeHash,
+  sha256Hex,
+} from "./hash";
+export {
+  CIPHER_ENCRYPT_CANDIDATE_POLICY,
+  CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
+  CIPHER_ENCRYPT_CANDIDATE_POLICY_HASH,
+  CIPHER_ENCRYPT_CANDIDATE_POLICY_ID,
+  composeCandidatePolicyTaskInstruction,
+} from "./candidatePolicy";
+export type { CandidatePolicyArtifact } from "./candidatePolicy";
 export {
   DIRECTIVE_MODULES,
   GENOME_MODULE_KEYS,
@@ -90,10 +103,28 @@ export {
   BASELINE_GAME_ROUND,
   BASELINE_INVERSION_PROBE,
   BASELINE_KEYWORDS,
+  BLIND_INVERSION_CALIBRATION_2026_08_01,
+  BLIND_INVERSION_LIVE_PROBE_2026_08_01,
   EXPECTED_HASHES,
   INTERMEDIATE_HOPS_SOURCE,
+  INVERSION_PROMOTION_PREREQUISITES,
+  PROVISIONAL_INVERSION_VETO_POLICY,
   SENSORY_ANCHOR_SOURCE,
 } from "./fixtures";
 export type { BaselineClueRecord, InversionProbeClueResult } from "./fixtures";
+export {
+  BLIND_INVERSION_PROTOCOL_VERSION,
+  PROVISIONAL_INVERSION_VETO_POLICY_HASH,
+  PROVISIONAL_INVERSION_VETO_POLICY_ID,
+  conceptRecoversTarget,
+  evaluateBlindInversion,
+  normalizeInversionTokens,
+} from "./inversion";
+export type {
+  BlindInversionAudit,
+  BlindInversionConcept,
+  BlindInversionEvaluation,
+  InversionVetoOutcome,
+} from "./inversion";
 export { runConformance } from "./conformance";
 export type { ConformanceCheck, ConformanceReport } from "./conformance";

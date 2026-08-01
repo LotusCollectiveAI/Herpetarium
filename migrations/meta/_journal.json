@@ -8,6 +8,27 @@
       "when": 1774778365913,
       "tag": "0000_nice_silhouette",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785617200000,
+      "tag": "0009_strict_execution_telemetry",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785620648406,
+      "tag": "0010_provider_attempt_timestamptz",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785620925715,
+      "tag": "0011_headless_strategy_lineage",
+      "breakpoints": true
     }
   ]
 }

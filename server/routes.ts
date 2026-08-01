@@ -2,7 +2,7 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
 import { MODEL_REGISTRY, getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
@@ -15,20 +15,31 @@ import { runExperiment } from "./experimentRunner";
 import { registerExportRoutes } from "./exportRouter";
 import { computeModelMetrics, computeMatchupMetrics, computeStrategyMetrics, analyzeClues, computeTeamCompositionMetrics, computeSelfPlayMetrics, analyzeCrossModelClues, computeParseQualityMetrics } from "./metrics";
 import { getProviderThrottleState } from "./ai";
-import { getDefaultConfig, type AIProvider } from "@shared/schema";
+import {
+  getConfigForModel,
+  getDefaultConfig,
+  type AIProvider,
+} from "@shared/schema";
 import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
 import { analyzeMatchTranscripts, analyzeTournamentTranscripts } from "./transcriptAnalyzer";
+import {
+  headlessMatchConfigSchema,
+  tournamentConfigSchema,
+} from "./headlessConfigSchema";
 
 function resolvePlayerConfig(player: { aiProvider?: string; aiConfig?: Partial<AIPlayerConfig> }): AIPlayerConfig | null {
   if (!player.aiProvider) return null;
-  const defaults = getDefaultConfig(player.aiProvider as AIProvider);
+  const provider = player.aiProvider as AIProvider;
+  const providerDefaults = getDefaultConfig(provider);
+  const model = player.aiConfig?.model || providerDefaults.model;
+  const defaults = getConfigForModel(provider, model);
   return {
     ...defaults,
     ...(player.aiConfig || {}),
-    provider: player.aiProvider as AIProvider,
-    model: player.aiConfig?.model || defaults.model,
+    provider,
+    model,
   };
 }
 
@@ -88,46 +99,6 @@ function computeEstimatedCost(
   return +total.toFixed(4);
 }
 
-const headlessMatchConfigSchema = z.object({
-  players: z.array(z.object({
-    name: z.string(),
-    aiProvider: z.enum(["chatgpt", "claude", "gemini", "openrouter"]),
-    team: z.enum(["amber", "blue"]),
-    aiConfig: aiPlayerConfigSchema.optional(),
-  })).min(2).max(6),
-  teamRosters: z.object({
-    amber: z.object({
-      rosterId: z.string(),
-      label: z.string(),
-      compositionKey: z.string(),
-      models: z.array(z.string()),
-    }),
-    blue: z.object({
-      rosterId: z.string(),
-      label: z.string(),
-      compositionKey: z.string(),
-      models: z.array(z.string()),
-    }),
-  }).optional(),
-  fastMode: z.boolean().optional(),
-  seed: z.union([z.string(), z.number().int().transform(String)]).optional(),
-  teamSize: z.number().int().min(2).max(3).optional(),
-  gameRules: gameRulesSchema.optional(),
-});
-
-const ablationFlagSchema = z.enum(["no_history", "no_scratch_notes", "no_opponent_history", "no_chain_of_thought", "random_clues", "no_persona", "no_semantic_context"]);
-
-const tournamentConfigSchema = z.object({
-  name: z.string().min(1).max(200),
-  matchConfigs: z.array(headlessMatchConfigSchema).min(1),
-  gamesPerMatchup: z.number().int().min(1).max(100).optional(),
-  budgetCapUsd: z.string().optional(),
-  concurrency: z.number().int().min(1).max(20).optional(),
-  delayBetweenMatchesMs: z.number().int().min(0).max(60000).optional(),
-  skipModelValidation: z.boolean().optional(),
-  ablations: z.object({ flags: z.array(ablationFlagSchema).min(1) }).optional(),
-});
-
 const genomeModulesSchema = z.object({
   cluePhilosophy: z.string().min(1),
   opponentModeling: z.string().min(1),
@@ -147,6 +118,7 @@ const arenaCoachConfigSchema = z.object({
   totalSprints: z.number().int().min(1),
   teamSize: z.union([z.literal(2), z.literal(3)]),
   budgetCapUsd: z.number().positive().optional(),
+  strictExecution: z.boolean().optional(),
 });
 
 const arenaConfigInputSchema = z.object({
@@ -360,6 +332,15 @@ export async function registerRoutes(
         matchConfigs: config.matchConfigs.map((matchConfig) => normalizeHeadlessMatchConfig(matchConfig as HeadlessMatchConfig)),
       } satisfies TournamentConfig;
 
+      if (
+        skipModelValidation &&
+        tournamentConfig.matchConfigs.some((matchConfig) => matchConfig.strictExecution)
+      ) {
+        return res.status(400).json({
+          error: "Strict tournaments require model validation",
+        });
+      }
+
       for (const mc of tournamentConfig.matchConfigs) {
         const amberCount = mc.players.filter(p => p.team === "amber").length;
         const blueCount = mc.players.filter(p => p.team === "blue").length;
@@ -407,6 +388,7 @@ export async function registerRoutes(
     delayBetweenMatchesMs: z.number().int().min(0).max(60000).default(12000),
     budgetCapUsd: z.string().default("250.00"),
     teamSize: z.number().int().min(2).max(3).default(3),
+    strictExecution: z.boolean().default(true),
     skipModelValidation: z.boolean().optional(),
   });
 
@@ -417,26 +399,44 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Invalid round-robin configuration", details: parsed.error.issues });
       }
 
-      const { name, models, gamesPerMatchup, concurrency, delayBetweenMatchesMs, budgetCapUsd, teamSize, skipModelValidation } = parsed.data;
+      const {
+        name,
+        models,
+        gamesPerMatchup,
+        concurrency,
+        delayBetweenMatchesMs,
+        budgetCapUsd,
+        teamSize,
+        strictExecution,
+        skipModelValidation,
+      } = parsed.data;
 
       if (gamesPerMatchup % 2 !== 0) {
         return res.status(400).json({ error: "gamesPerMatchup must be even for balanced round-robin fixtures" });
       }
 
-      // Build model specs — all models get advanced strategy, per-model reasoning effort
+      // Resolve each model from its registry entry. Only an explicit request
+      // override may replace the exact model's versioned defaults.
       const modelSpecs = models.map(m => ({
         name: m.name,
         provider: m.provider as AIProvider,
         model: m.model,
-        config: {
-          timeoutMs: 14400000 as const,
-          promptStrategy: "advanced" as const,
-          reasoningEffort: (m.reasoningEffort || "xhigh") as "low" | "medium" | "high" | "xhigh",
-        },
+        ...(m.reasoningEffort
+          ? { config: { reasoningEffort: m.reasoningEffort } }
+          : {}),
       }));
 
       const rawConfigs = generateRoundRobinConfigs(modelSpecs, teamSize as 2 | 3, gamesPerMatchup);
-      const matchConfigs = interleaveByProvider(rawConfigs);
+      const matchConfigs = interleaveByProvider(rawConfigs).map((matchConfig) => ({
+        ...matchConfig,
+        strictExecution,
+      }));
+
+      if (skipModelValidation && strictExecution) {
+        return res.status(400).json({
+          error: "Strict round-robin tournaments require model validation",
+        });
+      }
 
       if (!skipModelValidation) {
         const validation = await validateModels(matchConfigs);

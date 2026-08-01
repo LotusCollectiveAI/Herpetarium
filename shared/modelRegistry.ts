@@ -283,12 +283,27 @@ const MODEL_SPECS = [
 
   createSpec({
     provider: "openrouter",
+    model: "deepseek/deepseek-v4-flash-0731",
+    displayName: "DeepSeek V4 Flash 0731",
+    optionLabel: "DeepSeek V4 Flash 0731 (DeepInfra, pinned)",
+    costPer1K: { input: 0.00009, output: 0.00018 },
+    reasoningMode: "openrouter_reasoning",
+    supportsTemperature: false,
+    defaults: {
+      timeoutMs: 900000,
+      promptStrategy: "advanced",
+      reasoningEffort: "xhigh",
+    },
+    tags: ["ui", "default", "tournament2"],
+  }),
+  createSpec({
+    provider: "openrouter",
     model: "deepseek/deepseek-v3.2",
     displayName: "DeepSeek V3.2",
     costPer1K: { input: 0.00026, output: 0.00038 },
     reasoningMode: "none",
     supportsTemperature: true,
-    tags: ["ui", "default", "tournament2"],
+    tags: ["ui", "tournament2"],
   }),
   createSpec({
     provider: "openrouter",
@@ -435,6 +450,25 @@ export function getDefaultConfigForProvider(provider: AIProvider): AIPlayerConfi
     provider,
     model: fallbackEntry.model,
     ...fallbackEntry.defaults,
+  };
+}
+
+export function getConfigForModel(
+  provider: AIProvider,
+  model: string,
+): AIPlayerConfig {
+  const entry = getModelEntry(provider, model);
+  if (!entry) {
+    return {
+      ...getDefaultConfigForProvider(provider),
+      provider,
+      model,
+    };
+  }
+  return {
+    provider,
+    model,
+    ...entry.defaults,
   };
 }
 

@@ -8,7 +8,7 @@
  */
 
 import type { PromptStrategy, ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
-import { applyAblations, formatScratchNotes } from "./promptStrategies";
+import { applyAblations, finalizeCluePrompt, formatScratchNotes } from "./promptStrategies";
 
 function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
   if (history.length === 0) return "";
@@ -63,9 +63,12 @@ RULES: Each clue must be a complete, real English word. No abbreviations, acrony
       prompt += `\n\nDO NOT repeat any clue from previous rounds. Vary your semantic angle for each keyword across rounds.`;
     }
 
-    prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nPut your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 words separated by commas. Example:\nANSWER: ocean,bright,ancient`;
-    return prompt;
+    return finalizeCluePrompt(
+      prompt,
+      params,
+      `Put your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 words separated by commas. Example:\nANSWER: ocean,bright,ancient`,
+      false,
+    );
   },
 
   guessTemplate: (params: GuessTemplateParams): string => {

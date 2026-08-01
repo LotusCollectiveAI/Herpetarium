@@ -1,10 +1,12 @@
 /**
- * Standardized trace envelope: one record per model decision, identical
- * shape whether the game ran in Herpetarium's arena or at The Table with
- * humans. This is the object The Table returns to research and the object
- * Herpetarium evaluators consume. It cites the exact artifact and the
- * exact model (requested AND served), so results are attributable and
- * alias mutations are partitionable.
+ * Standardized trace-envelope contract: the intended shape for one model
+ * decision, whether a game ran in Herpetarium's arena or at The Table with
+ * humans. As of 2026-08-01 this schema and its conformance checks exist, but
+ * neither runtime emits/exports/ingests this envelope yet. Both apps retain
+ * native decision telemetry; projecting that telemetry truthfully into this
+ * contract is the next integration slice. The envelope cites the exact
+ * artifact and exact model (requested AND served), so eventual results can be
+ * attributable and alias mutations partitionable.
  *
  * Telemetry contract: `responseText` is provider-visible text only (no
  * chain of thought). Full telemetry — including human table/team dialogue —
@@ -89,7 +91,9 @@ const TASK_KINDS: TraceTaskKind[] = [
 export function validateTraceEnvelope(trace: TraceEnvelope): string[] {
   const problems: string[] = [];
   if (trace.traceVersion !== TRACE_VERSION) {
-    problems.push(`traceVersion "${trace.traceVersion}" is not "${TRACE_VERSION}"`);
+    problems.push(
+      `traceVersion "${trace.traceVersion}" is not "${TRACE_VERSION}"`,
+    );
   }
   if (trace.app !== "herpetarium" && trace.app !== "the-table") {
     problems.push(`app "${String(trace.app)}" is unknown`);
@@ -108,7 +112,9 @@ export function validateTraceEnvelope(trace: TraceEnvelope): string[] {
   }
   if (trace.transcript !== undefined && trace.transcript.length > 0) {
     if (!trace.exportStamp || trace.exportStamp.mode !== "operator_research") {
-      problems.push("inline transcript requires an operator_research exportStamp");
+      problems.push(
+        "inline transcript requires an operator_research exportStamp",
+      );
     } else {
       if (!/^\d{4}-\d{2}-\d{2}/.test(trace.exportStamp.exportedAt ?? "")) {
         problems.push("exportStamp.exportedAt must be an ISO date");

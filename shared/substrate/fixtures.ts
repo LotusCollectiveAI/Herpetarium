@@ -34,7 +34,8 @@ export const SENSORY_ANCHOR_SOURCE: StrategyArtifactSource = {
       "Address interception risk explicitly for each clue. Build a hypothesis table: for each opponent keyword, could this sensory clue plausibly point there? If yes, flag the risk and consider alternatives.",
   },
   provenance: {
-    origin: "Herpetarium server/coachLoop.ts SEED_GENOME_TEMPLATES[1] (P4-D, 2026-04-03)",
+    origin:
+      "Herpetarium server/coachLoop.ts SEED_GENOME_TEMPLATES[1] (P4-D, 2026-04-03)",
     method: "seed",
     mintedAt: "2026-08-01",
     evalRefs: [],
@@ -62,7 +63,8 @@ export const INTERMEDIATE_HOPS_SOURCE: StrategyArtifactSource = {
       "State your confidence level (high/medium/low) for each clue-keyword mapping. Explain the association chain: clue -> intermediate concept -> keyword. If multiple interpretations exist, list each chain and pick the most probable.",
   },
   provenance: {
-    origin: "Herpetarium server/coachLoop.ts SEED_GENOME_TEMPLATES[0] (P4-D, 2026-04-03)",
+    origin:
+      "Herpetarium server/coachLoop.ts SEED_GENOME_TEMPLATES[0] (P4-D, 2026-04-03)",
     method: "seed",
     mintedAt: "2026-08-01",
     evalRefs: [],
@@ -139,7 +141,10 @@ export const BASELINE_GAME_CLUES: BaselineClueRecord[] = [
 ];
 
 /** Keyword sets reconstructed from the round-3 reveal (completed game). */
-export const BASELINE_KEYWORDS: Record<string, [string, string, string, string]> = {
+export const BASELINE_KEYWORDS: Record<
+  string,
+  [string, string, string, string]
+> = {
   DOpus: ["FACTORY", "WINDMILL", "FALCON", "JASMINE"],
   BackHoleSol: ["WOLF", "CARPET", "WHALE", "LANTERN"],
 };
@@ -177,15 +182,222 @@ export const BASELINE_INVERSION_PROBE = {
   } satisfies ModelRef,
   fallbacksDisabled: true,
   results: [
-    { clue: "Conveyor belts and punch clocks", reconstructedAs: "factory", confidence: 0.6, matchesTarget: true },
-    { clue: "Classic mini-golf obstacle", reconstructedAs: "windmill", confidence: 0.7, matchesTarget: true },
-    { clue: "Atlanta's pro football squad", reconstructedAs: "Falcons", confidence: 0.95, matchesTarget: true },
-    { clue: "Pack hunter that howls at the full moon", reconstructedAs: "wolf", confidence: 0.98, matchesTarget: true },
-    { clue: "Rolled out in red for celebrities at premieres", reconstructedAs: "red carpet", confidence: 0.99, matchesTarget: true },
-    { clue: "Ocean giant that swallowed Jonah", reconstructedAs: "whale", confidence: 0.99, matchesTarget: true },
+    {
+      clue: "Conveyor belts and punch clocks",
+      reconstructedAs: "factory",
+      confidence: 0.6,
+      matchesTarget: true,
+    },
+    {
+      clue: "Classic mini-golf obstacle",
+      reconstructedAs: "windmill",
+      confidence: 0.7,
+      matchesTarget: true,
+    },
+    {
+      clue: "Atlanta's pro football squad",
+      reconstructedAs: "Falcons",
+      confidence: 0.95,
+      matchesTarget: true,
+    },
+    {
+      clue: "Pack hunter that howls at the full moon",
+      reconstructedAs: "wolf",
+      confidence: 0.98,
+      matchesTarget: true,
+    },
+    {
+      clue: "Rolled out in red for celebrities at premieres",
+      reconstructedAs: "red carpet",
+      confidence: 0.99,
+      matchesTarget: true,
+    },
+    {
+      clue: "Ocean giant that swallowed Jonah",
+      reconstructedAs: "whale",
+      confidence: 0.99,
+      matchesTarget: true,
+    },
   ] as InversionProbeClueResult[],
   usage: { tokensIn: 220, tokensOut: 779, costUsd: 0.000155, latencyMs: 4800 },
   provisionalFlagThreshold: 0.6,
+} as const;
+
+/**
+ * Calibration probe (2026-08-01, second run) — still NOT a validated
+ * benchmark. Same pinned route, 30 clues in one call: the 6 baseline clues
+ * plus 24 deterministic historical own-decode/no-intercept control clues
+ * (weak outcome proxies, not human adjudications of clue quality).
+ *
+ * Read together with BASELINE_INVERSION_PROBE, the decisive facts are:
+ * - all 6 catastrophic clues were blind-recovered; 5/6 crossed the 0.60
+ *   flag; the miss ("Conveyor belts and punch clocks"→FACTORY) was
+ *   recovered at rank 2 with confidence 0.35 — the least transparent of
+ *   the six, lethal in the pilot mainly through three rounds of
+ *   accumulated public history, which a single-clue audit cannot see;
+ * - 8/24 control clues were blind-recovered at some rank, but only 1/24
+ *   crossed the flag. Recovery-anywhere therefore CANNOT be a hard veto:
+ *   it would regenerate ~a third of historically good clues and push
+ *   encryptors toward the miscommunication failure mode.
+ */
+export const BLIND_INVERSION_CALIBRATION_2026_08_01 = {
+  status: "calibration_probe",
+  protocolVersion: "blind-inversion@0.1-probe",
+  auditedAt: "2026-08-01",
+  modelRoute: {
+    provider: "openrouter",
+    model: "deepseek/deepseek-v4-flash-0731",
+    upstream: "deepinfra",
+    reasoningEffort: "max",
+  } satisfies ModelRef,
+  baseline: {
+    clueCount: 6,
+    recovered: 6,
+    flaggedAtThreshold: 5,
+    threshold: 0.6,
+    knownMiss: {
+      clue: "Conveyor belts and punch clocks",
+      target: "FACTORY",
+      recoveredAtRank: 2,
+      confidence: 0.35,
+    },
+  },
+  controls: {
+    source:
+      "deterministic historical own-decode/no-intercept triples from clean matches; outcome proxies, not ground truth",
+    tripleCount: 8,
+    clueCount: 24,
+    flagged: 1,
+    recovered: 8,
+  },
+  usage: { costUsd: 0.003187, latencyMs: 133_000 },
+  limitation:
+    "Single run, one auditor route, proxy controls, no rank-sensitive control statistics, no repeat-run stability estimate, no human adjudication. Establishes mechanism and cost, not a production threshold.",
+} as const;
+
+/**
+ * Live probe (2026-08-01, third run) — the sensitivity counterweight to the
+ * calibration above, and the reason this instrument must not be described as
+ * a strategy detector.
+ *
+ * Twelve ordinary one-word base-advanced clues were audited on the same
+ * pinned route. Only 2/12 hard-flagged and only 3/12 had their target
+ * recovered at any rank. Against catastrophic definition-shaped phrases the
+ * auditor recovered 6/6; against ordinary play it recovers roughly a
+ * quarter.
+ *
+ * The structural cause is in `inversion.ts`, not in the sample size:
+ * `conceptRecoversTarget` is LEXICAL. A target token must reappear as a
+ * whole normalized token in a returned concept. A clue whose leak is purely
+ * semantic — `sword` for WARRIOR, `hive` for BEE — is unrecoverable by
+ * construction no matter how obvious it is to a human opponent, because the
+ * auditor's concept string never contains the target token.
+ *
+ * Consequence: this is a CATASTROPHIC-CLUE GUARDRAIL with a low
+ * over-regeneration rate (1/24 proxy controls hard-flagged), not a measure
+ * of clue opacity. It is sound as a runtime floor under family play. It is
+ * NOT a valid outcome metric for an experiment about strategic opacity,
+ * because the dominant leak channel is invisible to it. See
+ * INVERSION_PROMOTION_PREREQUISITES.
+ */
+export const BLIND_INVERSION_LIVE_PROBE_2026_08_01 = {
+  status: "live_probe",
+  protocolVersion: "blind-inversion@0.1-probe",
+  auditedAt: "2026-08-01",
+  source:
+    "operator-reported live probe on the seated Table lane; per-clue run artifact not yet filed in-repo",
+  modelRoute: {
+    provider: "openrouter",
+    model: "deepseek/deepseek-v4-flash-0731",
+    upstream: "deepinfra",
+    reasoningEffort: "max",
+  } satisfies ModelRef,
+  sample: {
+    description: "ordinary one-word base-advanced clues, normal play",
+    clueCount: 12,
+    hardFlagged: 2,
+    recoveredAtAnyRank: 3,
+    threshold: 0.6,
+  },
+  knownCeiling:
+    "deterministic target comparison is lexical; semantic-association leaks (sword->WARRIOR) pass by construction and cannot be detected by raising or lowering the threshold",
+  limitation:
+    "Sensitivity on ordinary clues is far below sensitivity on definition-shaped clues. Treat as a guardrail against the pilot failure mode, never as evidence that submitted clues are opaque.",
+} as const;
+
+/**
+ * Provisional veto policy for encryptor clue regeneration, decided
+ * 2026-08-01 from the calibration above. Probe-grade: the soft tier and the
+ * threshold freeze only after blind-inversion@0.2 reports rank-sensitive
+ * control statistics, repeat-run stability, and a human-adjudicated
+ * subsample. `inversion.ts` implements matching and the typed outcome; this
+ * record states the decision so both apps and the docs cannot drift apart.
+ *
+ * FROZEN: this object is content-hashed as
+ * PROVISIONAL_INVERSION_VETO_POLICY_HASH and seated in live traces. Do not
+ * edit it to record new evidence or to raise the research bar — add an
+ * adjacent record instead (see INVERSION_PROMOTION_PREREQUISITES).
+ */
+export const PROVISIONAL_INVERSION_VETO_POLICY = {
+  status: "probe",
+  decidedAt: "2026-08-01",
+  confidenceThreshold: 0.6,
+  hardVeto: [
+    "a concept matching the intended target carries confidence >= confidenceThreshold",
+    "definitionShaped is true and directness >= confidenceThreshold",
+  ],
+  softRegenerateOnce: [
+    "the intended target is the auditor's rank-1 concept at any confidence",
+    "the intended target is recovered at any rank while definitionShaped is true",
+  ],
+  neverVetoOn:
+    "target recovered at rank > 1 below threshold: 8/24 historical good clues were blind-recoverable (33% proxy rate); vetoing on recovery-anywhere over-regenerates toward miscommunication",
+  pendingBeforeFreeze: [
+    "rank-sensitive statistics on >= 90 control clues",
+    "3 repeat runs for auditor stability",
+    "human-adjudicated subsample of >= 20 clues",
+  ],
+} as const;
+
+/**
+ * Separates the two bars that were previously conflated.
+ *
+ * The runtime veto policy above is a product safety floor: it may seat under
+ * family play while probe-grade, because its failure mode is "misses a bad
+ * clue", which is ordinary Decrypto. A BotBuild promotion claim is a research
+ * assertion about strategic quality, and it inherits the measurement ceiling
+ * recorded in BLIND_INVERSION_LIVE_PROBE_2026_08_01.
+ *
+ * Decided 2026-08-01 (release review): hard-flag counts from
+ * blind-inversion@0.1 are NOT an admissible primary outcome for promotion.
+ * A treatment can drive hard-flags to zero while leaving every semantic leak
+ * intact, so "zero hard-flags" measures compliance with a lexical filter, not
+ * opacity. Promotion evidence must come from a semantic judge scored OFFLINE
+ * over durable traces — the auditor's full ranked concept list is already
+ * persisted per call, so this needs no additional runtime call, no added
+ * latency, and no change to the seated game path.
+ */
+export const INVERSION_PROMOTION_PREREQUISITES = {
+  status: "decided",
+  decidedAt: "2026-08-01",
+  appliesTo: "BotBuild promotion / EvaluationRecord verdict pass",
+  doesNotApplyTo:
+    "family-play seating of the runtime veto policy, which may remain probe-grade",
+  inadmissibleAsPrimaryOutcome: [
+    "hard-flag count under blind-inversion@0.1 (lexical comparison; blind to semantic leaks)",
+    "recovered-at-any-rank count under blind-inversion@0.1 (same ceiling)",
+  ],
+  required: [
+    "everything in PROVISIONAL_INVERSION_VETO_POLICY.pendingBeforeFreeze",
+    "a semantic-equivalence judge scored offline over persisted auditor concept lists, reported with its own agreement rate against human adjudication",
+    "interception rate and teammate-decode rate as co-primary behavioral outcomes, since they are ceiling-free",
+    "side-balanced seeded matched arms on one pinned route",
+    "prompt envelope held constant across arms: run the no_scratch_notes ablation on both arms (or prove identical notes), because Herpetarium injects cross-game scratch notes that The Table has no equivalent of",
+  ],
+  transferCaveat:
+    "Byte-identity holds for the task-authority block only, not the whole prompt. Table adds a system preamble and Herpetarium adds scratch notes. A within-Herpetarium A/B stays valid by holding the envelope constant; do not restate it as 'The Table runs the validated prompt'.",
+  rationale:
+    "A lexical filter cannot license a claim about strategic opacity. Behavioral outcomes and a semantic judge can; the filter remains a guardrail either way.",
 } as const;
 
 /**

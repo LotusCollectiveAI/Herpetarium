@@ -1,13 +1,17 @@
 /**
- * Role-legal observations. The schema itself is the security boundary:
- * there is no field for opponent keywords, so no code path can hand a bot
- * (or a prompt, or an exported trace) the other team's secrets. Both apps
- * build this shape from their own authoritative state (Herpetarium's
- * headless runner params; The Table's viewCipherRelayState projection) and
- * bots consume only this.
+ * Role-legal observation contract. The schema itself cannot express opponent
+ * keywords. As of 2026-08-01 the contract and conformance fixtures exist, but
+ * neither runtime constructs this shape or calls `assertRoleLegal` before
+ * provider dispatch yet; their existing app-specific visibility boundaries
+ * remain authoritative. Runtime construction, assertion, and observation
+ * hashing are the next integration slice.
  */
 
-export type ObservationRole = "encryptor" | "decoder" | "interceptor" | "deliberator";
+export type ObservationRole =
+  | "encryptor"
+  | "decoder"
+  | "interceptor"
+  | "deliberator";
 
 /**
  * The two team-chat worlds the product exposes: opponents can read your team
@@ -69,14 +73,16 @@ export interface DecryptoObservation {
 
 /**
  * Assert an observation is legal for its declared role. Throws with all
- * violations listed. This runs on BOTH sides of the boundary: the app
- * asserts before prompting; research asserts before accepting a trace.
+ * violations listed. The intended adoption boundary is symmetric: apps
+ * assert before prompting and research asserts before accepting a trace.
  */
 export function assertRoleLegal(observation: DecryptoObservation): void {
   const violations: string[] = [];
 
   if (observation.code !== undefined && observation.role !== "encryptor") {
-    violations.push(`role "${observation.role}" must not receive the live code`);
+    violations.push(
+      `role "${observation.role}" must not receive the live code`,
+    );
   }
   if (observation.role === "encryptor" && observation.code === undefined) {
     violations.push("encryptor observation is missing the live code");
@@ -84,12 +90,17 @@ export function assertRoleLegal(observation: DecryptoObservation): void {
   for (const round of observation.resolvedRounds) {
     if (round.own.code === null && round.own.clues !== null) {
       // Resolved rounds are public history; codes must be present once resolved.
-      violations.push(`resolved round ${round.roundNumber} is missing its own code`);
+      violations.push(
+        `resolved round ${round.roundNumber} is missing its own code`,
+      );
     }
   }
   const transcript = observation.transcript ?? [];
   for (const line of transcript) {
-    if (line.channel === "team:opponent" && observation.teamChatVisibility === "private") {
+    if (
+      line.channel === "team:opponent" &&
+      observation.teamChatVisibility === "private"
+    ) {
       violations.push(
         "opponent team-chat line present while teamChatVisibility is private",
       );

@@ -8,6 +8,11 @@
     "build": "tsx script/build.ts",
     "start": "NODE_ENV=production node dist/index.cjs",
     "check": "tsc",
+    "test:headless-seating": "tsx scripts/test-headless-seating.ts",
+    "test:strict-failure-truth": "tsx scripts/test-strict-failure-truth.ts",
+    "test:strict-execution": "tsx scripts/test-strict-execution.ts",
+    "test:strict-provider-attempts": "tsx scripts/test-provider-attempt-lifecycle.ts",
+    "test:headless-lineage": "tsx scripts/test-headless-lineage.ts",
     "db:push": "drizzle-kit push"
   },
   "dependencies": {

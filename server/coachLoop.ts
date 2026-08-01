@@ -17,7 +17,8 @@ import type {
   ScratchNotesSnapshot,
   SearchPolicy,
 } from "@shared/schema";
-import { DEFAULT_SEARCH_POLICY, getDefaultConfig } from "@shared/schema";
+import { DEFAULT_SEARCH_POLICY, getConfigForModel } from "@shared/schema";
+import { DEEPSEEK_V4_FLASH_CANONICAL } from "@shared/substrate";
 import { callAI, estimateCost } from "./ai";
 import { runBoundedSettledPool } from "./boundedPool";
 import { compileGenomePrompts } from "./genomeCompiler";
@@ -195,6 +196,8 @@ export interface CoachConfig {
   opponentGenome?: GenomeModules;
   teamSize: 2 | 3;
   budgetCapUsd?: number;
+  /** Contamination-free research execution. Defaults to true. */
+  strictExecution?: boolean;
 }
 
 export interface CoachSprintEnvironment {
@@ -368,11 +371,7 @@ Apply these strategic principles when generating clues, making guesses, attempti
 }
 
 function buildAIConfig(provider: AIProvider, model: string): AIPlayerConfig {
-  return {
-    ...getDefaultConfig(provider),
-    provider,
-    model,
-  };
+  return getConfigForModel(provider, model);
 }
 
 export function createCoachState(seedGenome: GenomeModules, teamId = `coach-${randomUUID().slice(0, 8)}`): CoachState {
@@ -1217,7 +1216,7 @@ export function defaultCoachConfig(overrides: Partial<CoachConfig> = {}): CoachC
   const playerProvider = isAIProvider(overrides.playerProvider) ? overrides.playerProvider : coachProvider;
   const coachModel = typeof overrides.coachModel === "string" && overrides.coachModel.trim()
     ? overrides.coachModel
-    : "deepseek/deepseek-v3.2";
+    : DEEPSEEK_V4_FLASH_CANONICAL.model;
   const playerModel = typeof overrides.playerModel === "string" && overrides.playerModel.trim()
     ? overrides.playerModel
     : coachModel;
@@ -1234,6 +1233,7 @@ export function defaultCoachConfig(overrides: Partial<CoachConfig> = {}): CoachC
     opponentGenome: coerceGenomeModules(overrides.opponentGenome),
     teamSize: overrides.teamSize === 2 ? 2 : 3,
     budgetCapUsd: coerceBudgetCap(overrides.budgetCapUsd),
+    strictExecution: overrides.strictExecution !== false,
   };
 }
 
@@ -1364,6 +1364,10 @@ export async function runCoachSprint(
         ...(env.enablePostMatchReflection != null ? { enablePostMatchReflection: env.enablePostMatchReflection } : {}),
         ...(env.reflectionTokenBudget != null ? { reflectionTokenBudget: env.reflectionTokenBudget } : {}),
         ...matchConfigOverride,
+        strictExecution:
+          matchConfigOverride.strictExecution ??
+          config.strictExecution ??
+          true,
       });
 
       // Capture updated scratch notes for the sprint result
@@ -1404,6 +1408,14 @@ export async function runCoachSprint(
   });
 
   const matchSettlements = await runBoundedSettledPool(scheduledMatches, config.sprintConcurrency);
+  const failedSettlements = matchSettlements.filter(
+    (settlement) => settlement.status === "rejected",
+  );
+  if (failedSettlements.length > 0 && config.strictExecution !== false) {
+    throw new Error(
+      `Strict coach sprint ${sprintNumber} is incomplete: ${failedSettlements.length}/${scheduledMatches.length} match fixtures failed`,
+    );
+  }
   const matchResults = matchSettlements.flatMap((settlement) => settlement.status === "fulfilled" ? [settlement.value] : []);
 
   const wins = matchResults.filter((match) => match.winner === match.ourTeam).length;

@@ -20,7 +20,7 @@ import type {
   SprintEvaluation,
   AnchorABReport,
 } from "@shared/schema";
-import { getDefaultConfig } from "@shared/schema";
+import { getConfigForModel } from "@shared/schema";
 import { callAI } from "./ai";
 import { compileGenomePrompts } from "./genomeCompiler";
 import type { CoachState, SprintResult } from "./coachLoop";
@@ -35,11 +35,7 @@ const MODULE_KEYS: GenomeModuleKey[] = [
 ];
 
 function buildCoachAIConfig(config: CoachConfig): AIPlayerConfig {
-  return {
-    ...getDefaultConfig(config.coachProvider),
-    provider: config.coachProvider,
-    model: config.coachModel,
-  };
+  return getConfigForModel(config.coachProvider, config.coachModel);
 }
 
 function asTrimmedText(value: unknown): string {

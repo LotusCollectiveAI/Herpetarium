@@ -9,7 +9,8 @@ export interface PromptStrategy {
   deliberationInterceptTemplate?: (params: DeliberationInterceptTemplateParams) => string;
 }
 
-import type { AblationFlag } from "@shared/schema";
+import type { AblationFlag, CandidatePolicyArtifact } from "@shared/schema";
+import { composeCandidatePolicyTaskInstruction } from "@shared/substrate";
 
 export interface ClueTemplateParams {
   keywords: string[];
@@ -19,6 +20,7 @@ export interface ClueTemplateParams {
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
   taskDirectives?: string;
+  candidatePolicy?: CandidatePolicyArtifact;
 }
 
 export interface GuessTemplateParams {
@@ -117,6 +119,30 @@ function formatHistory(history: Array<{ clues: string[]; targetCode: [number, nu
 export function formatScratchNotes(notes?: string): string {
   if (!notes) return "";
   return `\n\n--- STRATEGIC NOTES FROM PREVIOUS GAMES ---\nThe following are your accumulated strategic observations from prior games in this series. Reference and build upon your previous notes when making decisions. Explicitly consider what worked and what failed in prior games before choosing your approach:\n\n${notes}\n--- END STRATEGIC NOTES ---`;
+}
+
+export function finalizeCluePrompt(
+  prompt: string,
+  params: ClueTemplateParams,
+  authoritativeActionContract: string,
+  baselineIncludesTaskDirectives = true,
+): string {
+  if (params.candidatePolicy) {
+    const authority = composeCandidatePolicyTaskInstruction({
+      compiledTaskDirectives: params.taskDirectives ?? null,
+      authoritativeActionContract,
+      policy: params.candidatePolicy,
+    });
+    return `${prompt}${formatScratchNotes(params.scratchNotes)}\n\n${authority}`;
+  }
+
+  let finalized = prompt;
+  if (baselineIncludesTaskDirectives && params.taskDirectives) {
+    finalized += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
+  }
+  finalized += formatScratchNotes(params.scratchNotes);
+  finalized += `\n\n${authoritativeActionContract}`;
+  return finalized;
 }
 
 // --- Deliberation prompt builders for 3v3 team chatter ---
@@ -383,13 +409,11 @@ Strategic considerations:
       prompt += `\n\nOpponents have seen these patterns. Shift your approach for any keyword you've clued before.`;
     }
 
-    if (params.taskDirectives) {
-      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
-    }
-
-    prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nANSWER: Respond with exactly 3 words separated by commas on a line starting with "ANSWER:". Example:\nANSWER: ocean,bright,ancient`;
-    return prompt;
+    return finalizeCluePrompt(
+      prompt,
+      params,
+      `ANSWER: Respond with exactly 3 words separated by commas on a line starting with "ANSWER:". Example:\nANSWER: ocean,bright,ancient`,
+    );
   },
   guessTemplate: (params) => {
     const { keywords, clues, history } = params;
@@ -480,12 +504,11 @@ Step 1 — Opponent Model: What do opponents know so far? Which keywords might t
 Step 5 — Final Selection: Choose 3 single-word clues that balance teammate clarity with opponent deception.
 
 RULES: Each clue must be a complete, real English word. No abbreviations, acronyms, fragments, or prefixes. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.`;
-    if (params.taskDirectives) {
-      prompt += `\n\nYour team's strategic approach:\n${params.taskDirectives}`;
-    }
-    prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nPut your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 words separated by commas. Example:\nANSWER: ocean,bright,ancient`;
-    return prompt;
+    return finalizeCluePrompt(
+      prompt,
+      params,
+      `Put your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 words separated by commas. Example:\nANSWER: ocean,bright,ancient`,
+    );
   },
   guessTemplate: (params) => {
     const { keywords, clues, history } = params;
