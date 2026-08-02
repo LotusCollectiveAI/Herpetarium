@@ -552,6 +552,7 @@ export interface MatchQualityEvent {
   type:
     | "fallback_clue"
     | "api_error"
+    | "validation_failure"
     | "deliberation_failure"
     | "match_failure";
   roundNumber: number;
@@ -562,6 +563,9 @@ export interface MatchQualityEvent {
   model?: string;
   timedOut?: boolean;
   usedFallback?: boolean;
+  actionApplied?: boolean;
+  strictExecution?: boolean;
+  validationProblems?: string[];
   error?: string | null;
   detail?: string;
 }
@@ -583,12 +587,17 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   matchId: integer("match_id"),
   gameId: varchar("game_id", { length: 100 }),
   roundNumber: integer("round_number"),
+  team: varchar("team", { length: 10 }).$type<"amber" | "blue" | null>(),
+  actorId: varchar("actor_id", { length: 100 }),
   provider: varchar("provider", { length: 20 }).notNull(),
   model: varchar("model", { length: 100 }).notNull(),
   actionType: varchar("action_type", { length: 30 }).notNull(),
   prompt: text("prompt").notNull(),
   rawResponse: text("raw_response"),
   parsedResult: jsonb("parsed_result"),
+  // null = not yet/not applicable; false = adjudicated but rejected.
+  actionApplied: boolean("action_applied"),
+  validationMetadata: jsonb("validation_metadata"),
   latencyMs: integer("latency_ms"),
   timedOut: boolean("timed_out").notNull().default(false),
   error: text("error"),
@@ -614,6 +623,46 @@ export type ProviderAttemptStatus =
   | "timed_out";
 
 /**
+ * Operator-private receipt for one paid OpenRouter response. The exact HTTP
+ * body is intentionally isolated from gameplay-facing AI-call logs and routes.
+ * A null body is still explicit about why no body was stored.
+ */
+export interface PrivateProviderResponseReceipt {
+  version: "openrouter-private-paid-call-receipt@0.1.0";
+  storageClass: "operator_private";
+  source: "openrouter_http_response";
+  responseBody: {
+    storage:
+      | "stored_exact"
+      | "not_stored_non_2xx"
+      | "unavailable_before_response"
+      | "body_read_failed";
+    text: string | null;
+    sha256: string | null;
+    utf8Bytes: number | null;
+  };
+  reasoning: {
+    presence:
+      | "present"
+      | "absent"
+      | "uninspectable_invalid_json"
+      | "unavailable";
+    storage:
+      | "within_exact_response_body"
+      | "not_returned"
+      | "uninspectable"
+      | "unavailable";
+    providerFields: string[];
+    sha256: string | null;
+    utf8Bytes: number | null;
+    reasoningTokens: number | null;
+  };
+  exactResponseBodyStored: boolean;
+  hiddenReasoningStored: boolean;
+  receiptContentSha256: string;
+}
+
+/**
  * Durable write-ahead truth for strict provider execution. A row left in
  * `started` state is intentionally indeterminate: the process died or lost
  * contact before it could prove a terminal provider outcome.
@@ -623,6 +672,8 @@ export const providerAttempts = pgTable("provider_attempts", {
   matchId: integer("match_id"),
   gameId: varchar("game_id", { length: 100 }),
   roundNumber: integer("round_number"),
+  team: varchar("team", { length: 10 }).$type<"amber" | "blue" | null>(),
+  actorId: varchar("actor_id", { length: 100 }),
   actionType: varchar("action_type", { length: 30 }).notNull(),
   provider: varchar("provider", { length: 20 }).notNull(),
   model: varchar("model", { length: 100 }).notNull(),
@@ -633,8 +684,13 @@ export const providerAttempts = pgTable("provider_attempts", {
     .default("started"),
   requestMetadata: jsonb("request_metadata"),
   terminalMetadata: jsonb("terminal_metadata"),
+  privateResponseReceipt: jsonb("private_response_receipt")
+    .$type<PrivateProviderResponseReceipt | null>(),
   error: text("error"),
   aiCallLogId: integer("ai_call_log_id"),
+  // Mirrors the linked AI-call disposition without erasing attempt lifecycle.
+  actionApplied: boolean("action_applied"),
+  validationMetadata: jsonb("validation_metadata"),
   startedAt: timestamp("started_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -755,6 +811,7 @@ export type AblationFlag =
   | "no_history"
   | "no_scratch_notes"
   | "no_opponent_history"
+  | "no_opponent_transcript"
   | "no_chain_of_thought"
   | "random_clues"
   // Enriched strategy module ablations:
@@ -1610,6 +1667,7 @@ export const experimentConfigSchema = z.object({
   ablations: z.object({
     flags: z.array(z.enum([
       "no_history", "no_scratch_notes", "no_opponent_history",
+      "no_opponent_transcript",
       "no_chain_of_thought", "random_clues",
       "no_persona", "no_semantic_context",
     ])),

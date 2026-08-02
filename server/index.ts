@@ -4,6 +4,9 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { validateApiKeys } from "./ai";
 import { resumeIncompleteRuns } from "./tournament";
+import { log } from "./log";
+
+export { log } from "./log";
 
 const app = express();
 const httpServer = createServer(app);
@@ -29,17 +32,6 @@ app.use(express.urlencoded({ extended: false }));
 app.get("/healthz", (_req, res) => {
   res.status(200).json({ ok: true, service: "herpetarium" });
 });
-
-export function log(message: string, source = "express") {
-  const formattedTime = new Date().toLocaleTimeString("en-US", {
-    hour: "numeric",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: true,
-  });
-
-  console.log(`${formattedTime} [${source}] ${message}`);
-}
 
 app.use((req, res, next) => {
   const start = Date.now();

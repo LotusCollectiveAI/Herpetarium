@@ -21,7 +21,12 @@
     "db:push": "drizzle-kit push",
     "test:cluegiver-ledger": "tsx scripts/test-cluegiver-column-ledger.ts",
     "test:cross-round-v03-postmortem": "tsx scripts/test-cross-round-v03-postmortem.ts",
-    "test:cross-round-v03-repeat": "tsx scripts/test-cross-round-repeat-experiment.ts"
+    "test:cross-round-v03-repeat": "tsx scripts/test-cross-round-repeat-experiment.ts",
+    "test:candidate-policy-ab": "tsx scripts/test-candidate-policy-ab-experiment.ts",
+    "experiment:candidate-policy-ab-db-prepare": "tsx scripts/prepare-candidate-policy-ab-database.ts",
+    "experiment:candidate-policy-ab-canary": "tsx scripts/run-candidate-policy-ab-mechanism-canary.ts",
+    "experiment:candidate-policy-ab-pilot": "tsx scripts/run-candidate-policy-ab-pilot.ts",
+    "experiment:candidate-policy-ab-full": "tsx scripts/run-candidate-policy-ab-experiment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",

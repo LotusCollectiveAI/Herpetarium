@@ -85,6 +85,10 @@ export interface IStorage {
   getMatchRoundsForMatches(matchIds: number[]): Promise<MatchRound[]>;
 
   createAiCallLog(log: InsertAiCallLog): Promise<AiCallLog>;
+  updateAiCallLog(
+    id: number,
+    data: Partial<InsertAiCallLog>,
+  ): Promise<AiCallLog | undefined>;
   getAiCallLogs(matchId: number): Promise<AiCallLog[]>;
   getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]>;
   createProviderAttempt(
@@ -260,14 +264,34 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
+  async updateAiCallLog(
+    id: number,
+    data: Partial<InsertAiCallLog>,
+  ): Promise<AiCallLog | undefined> {
+    const [updated] = await db
+      .update(aiCallLogs)
+      .set(data)
+      .where(eq(aiCallLogs.id, id))
+      .returning();
+    return updated;
+  }
+
   async getAiCallLogs(matchId: number): Promise<AiCallLog[]> {
-    return db.select().from(aiCallLogs).where(eq(aiCallLogs.matchId, matchId)).orderBy(aiCallLogs.createdAt);
+    return db
+      .select()
+      .from(aiCallLogs)
+      .where(eq(aiCallLogs.matchId, matchId))
+      .orderBy(aiCallLogs.createdAt, aiCallLogs.id);
   }
 
   async getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]> {
     if (matchIds && matchIds.length === 0) return [];
     const where = matchIds ? inArray(aiCallLogs.matchId, matchIds) : undefined;
-    return db.select().from(aiCallLogs).where(where).orderBy(aiCallLogs.createdAt);
+    return db
+      .select()
+      .from(aiCallLogs)
+      .where(where)
+      .orderBy(aiCallLogs.createdAt, aiCallLogs.id);
   }
 
   async createProviderAttempt(

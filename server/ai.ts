@@ -1,11 +1,20 @@
 import OpenAI from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import { GoogleGenAI } from "@google/genai";
-import type { AIPlayerConfig, ParseQuality, AblationFlag } from "@shared/schema";
+import type {
+  AIPlayerConfig,
+  ParseQuality,
+  AblationFlag,
+  PrivateProviderResponseReceipt,
+} from "@shared/schema";
 import { getDefaultConfigForProvider, getModelCost, getModelEntry, getModelKey } from "@shared/modelRegistry";
 import { getPromptStrategy, applyAblations } from "./promptStrategies";
 import type { ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
 import type { ModelHealthTracker } from "./modelHealth";
+import {
+  storedPrivateProviderReceipt,
+  unavailablePrivateProviderReceipt,
+} from "./privateProviderReceipt";
 
 let openaiClient: OpenAI | null = null;
 let anthropicClient: Anthropic | null = null;
@@ -99,6 +108,7 @@ export interface ProviderAttemptTelemetry {
   markTerminal(input: {
     status: ProviderAttemptTerminalStatus;
     metadata: Record<string, unknown>;
+    privateResponseReceipt: PrivateProviderResponseReceipt;
     error?: string | null;
   }): Promise<void>;
 }
@@ -285,6 +295,43 @@ export function providerResponseReceiptFromError(
   return typeof candidate.text === "string"
     ? (candidate as RawAIResponse)
     : undefined;
+}
+
+function receivedRawResponse(
+  raw: RawAIResponse | undefined,
+  error: unknown,
+): RawAIResponse | undefined {
+  return raw ?? providerResponseReceiptFromError(error);
+}
+
+function isSuccessfulDeepInfraRouterAttempt(
+  attempt: unknown,
+): boolean {
+  if (!attempt || typeof attempt !== "object" || Array.isArray(attempt)) {
+    return false;
+  }
+  const value = attempt as {
+    provider?: unknown;
+    status?: unknown;
+  };
+  // OpenRouter documents a numeric HTTP status. Some observed metadata
+  // serializes that same code as a decimal string; accept only that lossless
+  // representation, not semantic words such as "success" or contradictory
+  // non-2xx statuses.
+  const status =
+    typeof value.status === "number"
+      ? value.status
+      : typeof value.status === "string" &&
+          /^[0-9]{3}$/.test(value.status)
+        ? Number.parseInt(value.status, 10)
+        : null;
+  return (
+    value.provider === DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY &&
+    status !== null &&
+    Number.isInteger(status) &&
+    status >= 200 &&
+    status < 300
+  );
 }
 
 async function callOpenAI(
@@ -595,6 +642,33 @@ function withProviderResponseReceipt(
   return error;
 }
 
+function withPrivateProviderResponseReceipt(
+  error: Error,
+  receipt: PrivateProviderResponseReceipt,
+): Error {
+  Object.defineProperty(error, "privateProviderResponseReceipt", {
+    value: receipt,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return error;
+}
+
+function privateProviderResponseReceiptFromError(
+  error: unknown,
+): PrivateProviderResponseReceipt | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const receipt = (
+    error as { privateProviderResponseReceipt?: unknown }
+  ).privateProviderResponseReceipt;
+  return receipt &&
+    typeof receipt === "object" &&
+    !Array.isArray(receipt)
+    ? (receipt as PrivateProviderResponseReceipt)
+    : undefined;
+}
+
 function providerMetadataFromError(
   error: unknown,
 ): Record<string, unknown> | undefined {
@@ -658,6 +732,9 @@ async function callOpenRouter(
   }
 
   if (isReasoning) {
+    const retainPrivateReasoning =
+      options.strictExecution === true &&
+      options.providerAttemptTelemetry !== undefined;
     body.reasoning = options.disableReasoning
       ? {
           // Omitting this object does not disable reasoning for models whose
@@ -667,9 +744,11 @@ async function callOpenRouter(
         }
       : {
           effort: openRouterReasoningEffort(config),
-          // Preserve deliberate reasoning while retaining structured outputs
-          // instead of storing provider chain-of-thought in research logs.
-          exclude: true,
+          // Strict paid-call research with a durable operator-private attempt
+          // receipt requests returned reasoning. It is retained only inside
+          // that receipt, never in gameplay-facing AI-call logs. Other callers
+          // continue excluding it from the response.
+          exclude: !retainPrivateReasoning,
         };
   }
 
@@ -682,11 +761,17 @@ async function callOpenRouter(
         : null,
     physicalAttempt: options.physicalAttempt ?? 1,
     requestedReasoningEffort: config.reasoningEffort || "high",
+    maxCompletionTokens: body.max_tokens,
     wireReasoningEffort:
       isReasoning && !options.disableReasoning
         ? openRouterReasoningEffort(config)
         : null,
     reasoningDisabled: isReasoning && options.disableReasoning === true,
+    privateReasoningReceiptRequested:
+      isReasoning &&
+      !options.disableReasoning &&
+      options.strictExecution === true &&
+      options.providerAttemptTelemetry !== undefined,
     routing: body.provider,
     providerAttemptId: options.providerAttemptTelemetry?.attemptId ?? null,
   };
@@ -739,9 +824,47 @@ async function callOpenRouter(
       try {
         errorText = await response.text();
       } catch (error) {
-        throw withProviderMetadata(
+        throw withPrivateProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter error response body read error after HTTP ${response.status}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
+            {
+              ...requestMetadata,
+              httpStatus: response.status,
+              requestId: response.headers.get("x-request-id"),
+              generationId: response.headers.get("x-generation-id"),
+            },
+          ),
+          unavailablePrivateProviderReceipt("body_read_failed"),
+        );
+      }
+      const error: any = withPrivateProviderResponseReceipt(
+        withProviderMetadata(
+          new Error(`OpenRouter API error: ${response.status} ${errorText}`),
+          {
+            ...requestMetadata,
+            httpStatus: response.status,
+            requestId: response.headers.get("x-request-id"),
+            generationId: response.headers.get("x-generation-id"),
+          },
+        ),
+        unavailablePrivateProviderReceipt("not_stored_non_2xx"),
+      );
+      error.status = response.status;
+      throw error;
+    }
+
+    let responseBodyText: string;
+    try {
+      responseBodyText = await response.text();
+    } catch (error) {
+      throw withPrivateProviderResponseReceipt(
+        withProviderMetadata(
           new Error(
-            `OpenRouter error response body read error after HTTP ${response.status}: ${
+            `OpenRouter response body error after HTTP ${response.status}: ${
               error instanceof Error ? error.message : String(error)
             }`,
           ),
@@ -751,42 +874,69 @@ async function callOpenRouter(
             requestId: response.headers.get("x-request-id"),
             generationId: response.headers.get("x-generation-id"),
           },
-        );
-      }
-      const error: any = withProviderMetadata(
-        new Error(`OpenRouter API error: ${response.status} ${errorText}`),
-        {
-          ...requestMetadata,
-          httpStatus: response.status,
-          requestId: response.headers.get("x-request-id"),
-          generationId: response.headers.get("x-generation-id"),
-        },
+        ),
+        unavailablePrivateProviderReceipt("body_read_failed"),
       );
-      error.status = response.status;
-      throw error;
     }
-
     let data: any;
     try {
-      data = await response.json();
+      data = JSON.parse(responseBodyText);
     } catch (error) {
-      throw withProviderMetadata(
-        new Error(
-          `OpenRouter response body error after HTTP ${response.status}: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
+      const providerMetadata = {
+        ...requestMetadata,
+        httpStatus: response.status,
+        requestId: response.headers.get("x-request-id"),
+        generationId: response.headers.get("x-generation-id"),
+        responseBodyFormat: "invalid_json",
+      };
+      const privateReceipt = storedPrivateProviderReceipt({
+        responseBodyText,
+        parsedResponse: null,
+        bodyFormat: "invalid_json",
+      });
+      throw withPrivateProviderResponseReceipt(
+        withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter response JSON parse error after HTTP ${response.status}: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            ),
+            providerMetadata,
+          ),
+          {
+            // The exact unparseable body is retained only by the operator-
+            // private receipt for durable strict calls. Legacy exploratory
+            // calls have no such receipt persistence, so preserve their
+            // existing diagnostic body channel.
+            text:
+              options.providerAttemptTelemetry === undefined
+                ? responseBodyText
+                : "",
+            providerMetadata,
+          },
         ),
-        {
-          ...requestMetadata,
-          httpStatus: response.status,
-          requestId: response.headers.get("x-request-id"),
-          generationId: response.headers.get("x-generation-id"),
-        },
+        privateReceipt,
       );
     }
+    const privateReceipt = storedPrivateProviderReceipt({
+      responseBodyText,
+      parsedResponse: data,
+      bodyFormat: "parsed_json",
+    });
     const choice = data.choices?.[0]?.message;
     const content = choice?.content || "";
-    const reasoningContent = choice?.reasoning_content || data.choices?.[0]?.message?.reasoning || "";
+    const rawReasoning =
+      choice?.reasoning ??
+      choice?.reasoning_content ??
+      choice?.reasoning_details ??
+      null;
+    const reasoningContent =
+      typeof rawReasoning === "string"
+        ? rawReasoning
+        : rawReasoning == null
+          ? ""
+          : JSON.stringify(rawReasoning);
     const finishReason = data.choices?.[0]?.finish_reason;
     const providerMetadata: Record<string, unknown> = {
       ...requestMetadata,
@@ -814,7 +964,12 @@ async function callOpenRouter(
     };
     const providerResponseReceipt: RawAIResponse = {
       text: content,
-      reasoningTrace: reasoningContent || undefined,
+      // When durable strict telemetry is present, provider-returned reasoning
+      // lives only inside the private exact-body receipt.
+      reasoningTrace:
+        options.providerAttemptTelemetry === undefined
+          ? reasoningContent || undefined
+          : undefined,
       promptTokens: data.usage?.prompt_tokens,
       completionTokens: data.usage?.completion_tokens,
       totalTokens: data.usage?.total_tokens,
@@ -823,25 +978,31 @@ async function callOpenRouter(
 
     if (config.model === DEEPSEEK_V4_FLASH_0731) {
       if (data.model !== DEEPSEEK_V4_FLASH_0731) {
-        throw withProviderResponseReceipt(
-          withProviderMetadata(
-            new Error(
-              `OpenRouter served model ${String(data.model)} instead of ${DEEPSEEK_V4_FLASH_0731}`,
+        throw withPrivateProviderResponseReceipt(
+          withProviderResponseReceipt(
+            withProviderMetadata(
+              new Error(
+                `OpenRouter served model ${String(data.model)} instead of ${DEEPSEEK_V4_FLASH_0731}`,
+              ),
+              providerMetadata,
             ),
-            providerMetadata,
+            providerResponseReceipt,
           ),
-          providerResponseReceipt,
+          privateReceipt,
         );
       }
       if (data.provider !== DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY) {
-        throw withProviderResponseReceipt(
-          withProviderMetadata(
-            new Error(
-              `OpenRouter served provider ${String(data.provider)} instead of ${DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY}`,
+        throw withPrivateProviderResponseReceipt(
+          withProviderResponseReceipt(
+            withProviderMetadata(
+              new Error(
+                `OpenRouter served provider ${String(data.provider)} instead of ${DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY}`,
+              ),
+              providerMetadata,
             ),
-            providerMetadata,
+            providerResponseReceipt,
           ),
-          providerResponseReceipt,
+          privateReceipt,
         );
       }
       const routerMetadata =
@@ -850,9 +1011,23 @@ async function callOpenRouter(
         !Array.isArray(data.openrouter_metadata)
           ? data.openrouter_metadata
           : null;
+      const detailedAttemptsPresent =
+        routerMetadata !== null &&
+        Object.prototype.hasOwnProperty.call(
+          routerMetadata,
+          "attempts",
+        );
+      const detailedAttemptsShapeValid =
+        !detailedAttemptsPresent ||
+        Array.isArray(routerMetadata?.attempts);
       const routerAttempts = Array.isArray(routerMetadata?.attempts)
         ? routerMetadata.attempts
         : [];
+      const detailedAttemptsValid =
+        detailedAttemptsShapeValid &&
+        (routerAttempts.length === 0 ||
+          (routerAttempts.length === 1 &&
+            isSuccessfulDeepInfraRouterAttempt(routerAttempts[0])));
       const selectedEndpoints = Array.isArray(
         routerMetadata?.endpoints?.available,
       )
@@ -865,30 +1040,36 @@ async function callOpenRouter(
         : [];
       if (
         routerMetadata?.attempt !== 1 ||
-        routerAttempts.length > 1 ||
+        !detailedAttemptsValid ||
         selectedEndpoints.length !== 1 ||
         selectedEndpoints[0]?.provider !==
           DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY
       ) {
-        throw withProviderResponseReceipt(
-          withProviderMetadata(
-            new Error(
-              "OpenRouter route proof did not show exactly one successful DeepInfra attempt",
+        throw withPrivateProviderResponseReceipt(
+          withProviderResponseReceipt(
+            withProviderMetadata(
+              new Error(
+                "OpenRouter route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt",
+              ),
+              providerMetadata,
             ),
-            providerMetadata,
+            providerResponseReceipt,
           ),
-          providerResponseReceipt,
+          privateReceipt,
         );
       }
       if (finishReason !== "stop") {
-        throw withProviderResponseReceipt(
-          withProviderMetadata(
-            new Error(
-              `OpenRouter DeepSeek call ended with ${String(finishReason)} instead of stop`,
+        throw withPrivateProviderResponseReceipt(
+          withProviderResponseReceipt(
+            withProviderMetadata(
+              new Error(
+                `OpenRouter DeepSeek call ended with ${String(finishReason)} instead of stop`,
+              ),
+              providerMetadata,
             ),
-            providerMetadata,
+            providerResponseReceipt,
           ),
-          providerResponseReceipt,
+          privateReceipt,
         );
       }
     }
@@ -896,6 +1077,7 @@ async function callOpenRouter(
     await options.providerAttemptTelemetry?.markTerminal({
       status: "succeeded",
       metadata: providerMetadata,
+      privateResponseReceipt: privateReceipt,
       error: null,
     });
 
@@ -913,6 +1095,13 @@ async function callOpenRouter(
       error instanceof Error
         ? withProviderMetadata(error, providerMetadata)
         : withProviderMetadata(new Error(String(error)), providerMetadata);
+    const privateResponseReceipt =
+      privateProviderResponseReceiptFromError(error) ??
+      unavailablePrivateProviderReceipt(
+        typeof providerMetadata.httpStatus === "number"
+          ? "body_read_failed"
+          : "unavailable_before_response",
+      );
 
     try {
       await options.providerAttemptTelemetry?.markTerminal({
@@ -931,9 +1120,9 @@ async function callOpenRouter(
               }
             : {}),
         },
-        // The research ai_call_logs row retains the detailed provider error.
-        // This lifecycle table deliberately stores only a bounded summary so
-        // an upstream response body cannot leak prompts, keys, or user data.
+        privateResponseReceipt,
+        // The generic lifecycle error remains bounded. Any exact paid-call
+        // body is isolated in privateResponseReceipt, never interpolated here.
         error: providerAttemptErrorSummary(
           surfacedError,
           providerMetadata,
@@ -1120,6 +1309,74 @@ function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfi
   return configOrProvider;
 }
 
+function usesSimpleAblatedPrompt(
+  config: AIPlayerConfig,
+  ablations: AblationFlag[] | undefined,
+): boolean {
+  return (
+    ablations?.includes("no_chain_of_thought") === true &&
+    ["advanced", "k-level", "enriched"].includes(config.promptStrategy)
+  );
+}
+
+export function buildCluePromptForConfig(
+  configOrProvider: AIPlayerConfig | string,
+  params: ClueTemplateParams,
+): string {
+  const config = resolveConfig(configOrProvider);
+  const ablatedParams = applyAblations(params, params.ablations, "clue");
+  if (ablatedParams.ablations?.includes("random_clues")) {
+    return "ABLATION:random_clues";
+  }
+  const strategy = usesSimpleAblatedPrompt(
+    config,
+    ablatedParams.ablations,
+  )
+    ? getPromptStrategy("default")
+    : getPromptStrategy(config.promptStrategy);
+  const systemPrompt =
+    ablatedParams.systemPromptOverride || strategy.systemPrompt;
+  return `${systemPrompt}\n\n${strategy.clueTemplate(ablatedParams)}`;
+}
+
+export function buildGuessPromptForConfig(
+  configOrProvider: AIPlayerConfig | string,
+  params: GuessTemplateParams,
+): string {
+  const config = resolveConfig(configOrProvider);
+  const ablatedParams = applyAblations(params, params.ablations, "guess");
+  const strategy = usesSimpleAblatedPrompt(
+    config,
+    ablatedParams.ablations,
+  )
+    ? getPromptStrategy("default")
+    : getPromptStrategy(config.promptStrategy);
+  const systemPrompt =
+    ablatedParams.systemPromptOverride || strategy.systemPrompt;
+  return `${systemPrompt}\n\n${strategy.guessTemplate(ablatedParams)}`;
+}
+
+export function buildInterceptionPromptForConfig(
+  configOrProvider: AIPlayerConfig | string,
+  params: InterceptionTemplateParams,
+): string {
+  const config = resolveConfig(configOrProvider);
+  const ablatedParams = applyAblations(
+    params,
+    params.ablations,
+    "interception",
+  );
+  const strategy = usesSimpleAblatedPrompt(
+    config,
+    ablatedParams.ablations,
+  )
+    ? getPromptStrategy("default")
+    : getPromptStrategy(config.promptStrategy);
+  const systemPrompt =
+    ablatedParams.systemPromptOverride || strategy.systemPrompt;
+  return `${systemPrompt}\n\n${strategy.interceptionTemplate(ablatedParams)}`;
+}
+
 export async function generateClues(
   configOrProvider: AIPlayerConfig | string,
   params: ClueTemplateParams,
@@ -1142,9 +1399,12 @@ export async function generateClues(
     return { result: [pick(), pick(), pick()], prompt: "ABLATION:random_clues", rawResponse: "", model: config.model, latencyMs: 0, parseQuality: "fallback_used" };
   }
 
-  const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
-  const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
+  const activeStrategy = usesSimpleAblatedPrompt(
+    config,
+    ablatedParams.ablations,
+  )
+    ? getPromptStrategy("default")
+    : getPromptStrategy(config.promptStrategy);
   const prompt = activeStrategy.clueTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
@@ -1169,25 +1429,26 @@ export async function generateClues(
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
+    const received = receivedRawResponse(raw, err);
     return {
       result: ["hint", "clue", "guess"],
       prompt: fullPrompt,
-      rawResponse: raw?.text ?? "",
+      rawResponse: received?.text ?? "",
       model: config.model,
       latencyMs,
       error: String(err),
       parseQuality: "error",
-      reasoningTrace: raw?.reasoningTrace,
-      promptTokens: raw?.promptTokens,
-      completionTokens: raw?.completionTokens,
-      totalTokens: raw?.totalTokens,
+      reasoningTrace: received?.reasoningTrace,
+      promptTokens: received?.promptTokens,
+      completionTokens: received?.completionTokens,
+      totalTokens: received?.totalTokens,
       estimatedCostUsd: estimateCost(
         config,
-        raw?.promptTokens,
-        raw?.completionTokens,
+        received?.promptTokens,
+        received?.completionTokens,
       ),
       providerMetadata:
-        raw?.providerMetadata ?? providerMetadataFromError(err),
+        received?.providerMetadata ?? providerMetadataFromError(err),
     };
   }
 }
@@ -1199,9 +1460,12 @@ export async function generateGuess(
 ): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "guess");
-  const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
-  const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
+  const activeStrategy = usesSimpleAblatedPrompt(
+    config,
+    ablatedParams.ablations,
+  )
+    ? getPromptStrategy("default")
+    : getPromptStrategy(config.promptStrategy);
   const prompt = activeStrategy.guessTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
@@ -1226,25 +1490,26 @@ export async function generateGuess(
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
+    const received = receivedRawResponse(raw, err);
     return {
       result: [1, 2, 3],
       prompt: fullPrompt,
-      rawResponse: raw?.text ?? "",
+      rawResponse: received?.text ?? "",
       model: config.model,
       latencyMs,
       error: String(err),
       parseQuality: "error",
-      reasoningTrace: raw?.reasoningTrace,
-      promptTokens: raw?.promptTokens,
-      completionTokens: raw?.completionTokens,
-      totalTokens: raw?.totalTokens,
+      reasoningTrace: received?.reasoningTrace,
+      promptTokens: received?.promptTokens,
+      completionTokens: received?.completionTokens,
+      totalTokens: received?.totalTokens,
       estimatedCostUsd: estimateCost(
         config,
-        raw?.promptTokens,
-        raw?.completionTokens,
+        received?.promptTokens,
+        received?.completionTokens,
       ),
       providerMetadata:
-        raw?.providerMetadata ?? providerMetadataFromError(err),
+        received?.providerMetadata ?? providerMetadataFromError(err),
     };
   }
 }
@@ -1336,25 +1601,26 @@ export async function generateReflection(
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
+    const received = receivedRawResponse(raw, err);
     return {
       result: params.currentNotes || "",
       prompt: fullPrompt,
-      rawResponse: raw?.text ?? "",
+      rawResponse: received?.text ?? "",
       model: config.model,
       latencyMs,
       error: String(err),
       parseQuality: "error",
-      reasoningTrace: raw?.reasoningTrace,
-      promptTokens: raw?.promptTokens,
-      completionTokens: raw?.completionTokens,
-      totalTokens: raw?.totalTokens,
+      reasoningTrace: received?.reasoningTrace,
+      promptTokens: received?.promptTokens,
+      completionTokens: received?.completionTokens,
+      totalTokens: received?.totalTokens,
       estimatedCostUsd: estimateCost(
         config,
-        raw?.promptTokens,
-        raw?.completionTokens,
+        received?.promptTokens,
+        received?.completionTokens,
       ),
       providerMetadata:
-        raw?.providerMetadata ?? providerMetadataFromError(err),
+        received?.providerMetadata ?? providerMetadataFromError(err),
     };
   }
 }
@@ -1418,25 +1684,26 @@ export async function generateDeliberationMessage(
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
+    const received = receivedRawResponse(raw, err);
     return {
       result: "",
       prompt: fullPrompt,
-      rawResponse: raw?.text ?? "",
+      rawResponse: received?.text ?? "",
       model: config.model,
       latencyMs,
       error: String(err),
       parseQuality: "error",
-      reasoningTrace: raw?.reasoningTrace,
-      promptTokens: raw?.promptTokens,
-      completionTokens: raw?.completionTokens,
-      totalTokens: raw?.totalTokens,
+      reasoningTrace: received?.reasoningTrace,
+      promptTokens: received?.promptTokens,
+      completionTokens: received?.completionTokens,
+      totalTokens: received?.totalTokens,
       estimatedCostUsd: estimateCost(
         config,
-        raw?.promptTokens,
-        raw?.completionTokens,
+        received?.promptTokens,
+        received?.completionTokens,
       ),
       providerMetadata:
-        raw?.providerMetadata ?? providerMetadataFromError(err),
+        received?.providerMetadata ?? providerMetadataFromError(err),
     };
   }
 }
@@ -1448,9 +1715,12 @@ export async function generateInterception(
 ): Promise<AICallResult<[number, number, number]>> {
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "interception");
-  const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
-  const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
+  const activeStrategy = usesSimpleAblatedPrompt(
+    config,
+    ablatedParams.ablations,
+  )
+    ? getPromptStrategy("default")
+    : getPromptStrategy(config.promptStrategy);
   const prompt = activeStrategy.interceptionTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
@@ -1475,25 +1745,26 @@ export async function generateInterception(
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
+    const received = receivedRawResponse(raw, err);
     return {
       result: [1, 2, 3],
       prompt: fullPrompt,
-      rawResponse: raw?.text ?? "",
+      rawResponse: received?.text ?? "",
       model: config.model,
       latencyMs,
       error: String(err),
       parseQuality: "error",
-      reasoningTrace: raw?.reasoningTrace,
-      promptTokens: raw?.promptTokens,
-      completionTokens: raw?.completionTokens,
-      totalTokens: raw?.totalTokens,
+      reasoningTrace: received?.reasoningTrace,
+      promptTokens: received?.promptTokens,
+      completionTokens: received?.completionTokens,
+      totalTokens: received?.totalTokens,
       estimatedCostUsd: estimateCost(
         config,
-        raw?.promptTokens,
-        raw?.completionTokens,
+        received?.promptTokens,
+        received?.completionTokens,
       ),
       providerMetadata:
-        raw?.providerMetadata ?? providerMetadataFromError(err),
+        received?.providerMetadata ?? providerMetadataFromError(err),
     };
   }
 }
