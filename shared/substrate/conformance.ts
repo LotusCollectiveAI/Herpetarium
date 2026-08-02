@@ -93,7 +93,39 @@ import {
   type ReferentStrength,
 } from "./crossRoundInversion";
 import { assertRoleLegal, type DecryptoObservation } from "./observation";
-import { validateTraceEnvelope, type TraceEnvelope } from "./trace";
+import {
+  mintObservationV2,
+  validateObservationV2,
+  verifyObservationV2,
+  type DecryptoObservationV2Source,
+} from "./observation";
+import {
+  mintTraceEnvelopeV2,
+  validateDecisionChain,
+  validateTraceEnvelope,
+  validateTraceEnvelopeV2,
+  verifyTraceEnvelopeV2,
+  type TraceEnvelope,
+  type TraceEnvelopeV2Source,
+} from "./trace";
+import {
+  findBotBuildRegistryConflicts,
+  mintBotBuildManifest,
+  mintWireConfig,
+  validateBotBuildManifestSource,
+  verifyBotBuildManifest,
+  type BotBuildManifestSource,
+} from "./botBuild";
+import {
+  TABLE_COMPETITIVE_PROTOCOL_ID,
+  TABLE_COMPETITIVE_V1,
+  TABLE_COMPETITIVE_V1_SOURCE,
+  mintCompetitiveProtocol,
+  tableCompetitiveIdentitySet,
+  validateTableCompetitiveIdentities,
+  verifyCompetitiveProtocol,
+} from "./protocol";
+import { identityRef } from "./identity";
 
 export interface ConformanceCheck {
   name: string;
@@ -108,6 +140,10 @@ export interface ConformanceReport {
     sensoryAnchorContentHash: string;
     sensoryAnchorCompiledHash: string;
     intermediateHopsContentHash: string;
+    tableCompetitiveProtocolHash: string;
+    conformanceBotBuildHash: string;
+    conformanceObservationV2Hash: string;
+    conformanceTraceV2Hash: string;
   };
 }
 
@@ -129,6 +165,14 @@ const EXPECTED_CROSS_ROUND_PROMPT_HASH =
   "fe2b98f44292ddd2b212837340b58d7528f839a4babbc19b9b2ddec047e8c476";
 const EXPECTED_CROSS_ROUND_POLICY_HASH =
   "0dde8a93748fea551eb4ea79ae60e6a02733d65719d687a5f2ec4fb94e958be7";
+const EXPECTED_TABLE_COMPETITIVE_PROTOCOL_HASH =
+  "17e20ef1ee3367d53bb3cb11699c51522ace8df7abeeb4c244e6c103ab4f08e4";
+const EXPECTED_CONFORMANCE_BOT_BUILD_HASH =
+  "e81a7caa7c6a07e75ec3bb8dc83f6e19ef8b6c0bb76e07b7272cd4a59c8fa083";
+const EXPECTED_CONFORMANCE_OBSERVATION_V2_HASH =
+  "2820c1acbb29f23ac1564dead906ebca0af6d78f7c7ebc62980efec9d1160988";
+const EXPECTED_CONFORMANCE_TRACE_V2_HASH =
+  "5e8be20491a31fdf92ce706da0e943b8cfb6938d19a30b8cc296ceb605647f0d";
 
 /** Runtime identity comparison that literal types cannot short-circuit. */
 function distinctIds(left: string, right: string): boolean {
@@ -574,8 +618,7 @@ export function runConformance(): ConformanceReport {
   // both raw traces are fixtures here and every check below is driven by them
   // or by the incidents themselves.
   const leak = CROSS_ROUND_COLUMN_LEAK_2026_08_01;
-  const smokeEvents =
-    CROSS_ROUND_PRODUCTION_SMOKE_EVENT_PROVENANCE_2026_08_01;
+  const smokeEvents = CROSS_ROUND_PRODUCTION_SMOKE_EVENT_PROVENANCE_2026_08_01;
   check(
     checks,
     "production incident fixtures bind both observed human interceptions without claiming a reasoning path",
@@ -684,13 +727,17 @@ export function runConformance(): ConformanceReport {
   const v02 = CROSS_ROUND_V02_LIVE_TRACE_2026_08_01;
   const argmaxOf = (
     rows: readonly {
-      readonly slots: readonly { readonly slot: number; readonly confidence: number }[];
+      readonly slots: readonly {
+        readonly slot: number;
+        readonly confidence: number;
+      }[];
     }[],
   ) =>
     rows.map(
       (row) =>
-        [...row.slots].sort((left, right) => right.confidence - left.confidence)[0]!
-          .slot,
+        [...row.slots].sort(
+          (left, right) => right.confidence - left.confidence,
+        )[0]!.slot,
     );
   const v01Argmax = argmaxOf(v01.rankings);
   const v02Argmax = argmaxOf(v02.matrix);
@@ -751,7 +798,8 @@ export function runConformance(): ConformanceReport {
         "cross-round-column-inversion@0.1-probe" &&
       blueTraceRecord.instrumentIdentity.protocolVersion ===
         v01.instrumentIdentity.protocolVersion &&
-      v01.instrumentIdentity.policyId === "cross-round-column-veto@2026-08-01" &&
+      v01.instrumentIdentity.policyId ===
+        "cross-round-column-veto@2026-08-01" &&
       v01.instrumentIdentity.policyHash ===
         "8c1e4e0bc02619c71cd3e8725e6a44e4114716cfd0fb9226f5cc1aa193710218" &&
       v01.instrumentIdentity.auditorPromptHash ===
@@ -833,8 +881,8 @@ export function runConformance(): ConformanceReport {
       blueTraceRecord.competingReferents.every(
         (entry) => entry.ledgerClue === "crown" && entry.slot === 1,
       ) &&
-      new Set(blueTraceRecord.competingReferents.map((entry) => entry.role)).size ===
-        2,
+      new Set(blueTraceRecord.competingReferents.map((entry) => entry.role))
+        .size === 2,
   );
 
   // ---- TIER SHAPE, under an auditor that CAN see the bridges ----
@@ -1240,7 +1288,8 @@ export function runConformance(): ConformanceReport {
     publicLedgerClueCount(depthOneLedger) === 3 &&
       publicLedgerClueCount(depthThreeLedger) === 9 &&
       publicLedgerClueCount(depthFiveLedger) === 15 &&
-      depthOneLedger.filter((column) => column.clues.length === 0).length === 1 &&
+      depthOneLedger.filter((column) => column.clues.length === 0).length ===
+        1 &&
       depthThreeLedger.every((column) => column.clues.length > 0) &&
       depthFiveLedger.every((column) => column.clues.length > 0) &&
       // The identical reply is a hard reject at depth 1 and legal at depth 3.
@@ -1265,7 +1314,7 @@ export function runConformance(): ConformanceReport {
     matches: CLUE_COLUMN_NUMBERS.map((slot) => ({
       slot,
       sharedReferent: slot === top ? "shared parent" : null,
-      publicClue: slot === top ? LEDGER_CLUE[slot] ?? null : null,
+      publicClue: slot === top ? (LEDGER_CLUE[slot] ?? null) : null,
       strength: slot === top ? "plausible" : "none",
     })),
   });
@@ -1437,8 +1486,7 @@ export function runConformance(): ConformanceReport {
   check(
     checks,
     "cross-round parser has one tolerant accept/reject corpus for both apps",
-    JSON.stringify(parsedDirect) ===
-      JSON.stringify(parsedWithTrailingObject) &&
+    JSON.stringify(parsedDirect) === JSON.stringify(parsedWithTrailingObject) &&
       JSON.stringify(parsedDirect) === JSON.stringify(parsedAfterBrokenFence) &&
       parsedDirect.audits.map((audit) => audit.clue).join("|") ===
         sharedParserClues.join("|") &&
@@ -1570,7 +1618,10 @@ export function runConformance(): ConformanceReport {
   // layers, not a product: reading the conjunction as 8.3% x 16.7% is wrong by
   // about an order of magnitude, because the credible set is built FROM the
   // evidence grid and the layers are not independent.
-  const vetoBreadth = (reply: CrossRoundAuditorReply, target: PublicClueLedger) =>
+  const vetoBreadth = (
+    reply: CrossRoundAuditorReply,
+    target: PublicClueLedger,
+  ) =>
     LEGAL_CODE_TRIPLES.filter((code) => {
       try {
         return (
@@ -1603,7 +1654,8 @@ export function runConformance(): ConformanceReport {
     redBreadth >= 1 &&
       // ...and bounded by the credible-set cap, which is the whole point of
       // reading set size explicitly.
-      redBreadth <= CROSS_ROUND_REFERENT_EVIDENCE_VETO_POLICY.hardVetoCredibleSetSizeAtMost &&
+      redBreadth <=
+        CROSS_ROUND_REFERENT_EVIDENCE_VETO_POLICY.hardVetoCredibleSetSizeAtMost &&
       redBreadth <= LEGAL_CODE_TRIPLES.length / 8 &&
       // An opaque reply must veto NOTHING, for any intended code at all. This
       // is a post-incident shaped input that a veto-everything evaluator
@@ -1658,7 +1710,8 @@ export function runConformance(): ConformanceReport {
     permutations.every(
       (evaluation) =>
         evaluation.outcome === permutations[0]!.outcome &&
-        evaluation.dominatingHypotheses === permutations[0]!.dominatingHypotheses,
+        evaluation.dominatingHypotheses ===
+          permutations[0]!.dominatingHypotheses,
     ) &&
       // Two `strong` entries, the intended one among them: rank 2, not 1 or 3.
       permutations[0]!.dominatingHypotheses === 0 &&
@@ -1752,7 +1805,11 @@ export function runConformance(): ConformanceReport {
         {
           ...validReply(),
           codeHypotheses: [
-            { code: [1, 1, 4] as never, support: "strong" as const, rationale: null },
+            {
+              code: [1, 1, 4] as never,
+              support: "strong" as const,
+              rationale: null,
+            },
           ],
         },
         leakCode,
@@ -1826,7 +1883,11 @@ export function runConformance(): ConformanceReport {
             ...audit,
             historyMatches: audit.historyMatches.map((match) =>
               match.number === 2
-                ? { ...match, sharedReferent: "invented", strength: "strong" as const }
+                ? {
+                    ...match,
+                    sharedReferent: "invented",
+                    strength: "strong" as const,
+                  }
                 : match,
             ),
           })),
@@ -1853,7 +1914,9 @@ export function runConformance(): ConformanceReport {
         validReply(),
         leakCode,
         leakLedger.map((column) =>
-          column.number === 1 ? { ...column, clues: ["x".repeat(201)] } : column,
+          column.number === 1
+            ? { ...column, clues: ["x".repeat(201)] }
+            : column,
         ),
       ),
     // Rank thresholds outside 1 <= hard <= soft <= cap.
@@ -1976,7 +2039,9 @@ export function runConformance(): ConformanceReport {
       policy.hardVeto.length === 1 &&
       policy.hardVeto.every((clause) => clause.includes(" AND ")) &&
       policy.softRegenerateOnce.every((clause) => clause.includes(" AND ")) &&
-      policy.falsePositiveFloorIsAMinimumNotAProduct.includes("MIN, not a product") &&
+      policy.falsePositiveFloorIsAMinimumNotAProduct.includes(
+        "MIN, not a product",
+      ) &&
       policy.vetoBreadthControl.includes("all 24 legal triples") &&
       // The frozen blind-inversion record must be untouched by this protocol.
       PROVISIONAL_INVERSION_VETO_POLICY_HASH ===
@@ -1994,12 +2059,13 @@ export function runConformance(): ConformanceReport {
         CROSS_ROUND_COLUMN_VETO_POLICY_ID &&
       CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02.policyHash ===
         contentHash(CROSS_ROUND_REFERENT_EVIDENCE_VETO_POLICY) &&
-      !CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02
-        .changesPolicySemantics &&
-      CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02.corrections
-        .combinatorialBreadth.includes("code-match breadth") &&
-      CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02.corrections
-        .shapedInput.includes("does not establish safety"),
+      !CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02.changesPolicySemantics &&
+      CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02.corrections.combinatorialBreadth.includes(
+        "code-match breadth",
+      ) &&
+      CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02.corrections.shapedInput.includes(
+        "does not establish safety",
+      ),
   );
 
   // One shared instrument, unlike blind-inversion@0.1 where two different
@@ -2327,6 +2393,710 @@ export function runConformance(): ConformanceReport {
       }).length === 0,
   );
 
+  // 10. Exact current-engine protocol identity. The fixed source is smaller than
+  // the eventual full-game protocol: it covers only the rule and visibility
+  // facts needed for decoder/interceptor observations and differential tests.
+  const tableIdentities = tableCompetitiveIdentitySet();
+  check(
+    checks,
+    "table-competitive-v1 is immutable, verifiable, and hash-pinned",
+    TABLE_COMPETITIVE_V1.id === TABLE_COMPETITIVE_PROTOCOL_ID &&
+      verifyCompetitiveProtocol(TABLE_COMPETITIVE_V1) &&
+      TABLE_COMPETITIVE_V1.contentHash ===
+        EXPECTED_TABLE_COMPETITIVE_PROTOCOL_HASH &&
+      Object.isFrozen(TABLE_COMPETITIVE_V1.rules) &&
+      mintCompetitiveProtocol(TABLE_COMPETITIVE_V1_SOURCE).contentHash ===
+        TABLE_COMPETITIVE_V1.contentHash,
+    TABLE_COMPETITIVE_V1.contentHash,
+  );
+  check(
+    checks,
+    "table-competitive-v1 freezes rotation, guess gates, terminal order, and chat lanes",
+    TABLE_COMPETITIVE_V1.rules.cluegiverRotation.seatRoleOrder.join("|") ===
+      "agent_a|agent_b|agent_c" &&
+      !TABLE_COMPETITIVE_V1.rules.guessGates.roundOneIntercepts &&
+      TABLE_COMPETITIVE_V1.rules.guessGates.bothClueSetsBeforeAnyGuess &&
+      TABLE_COMPETITIVE_V1.rules.guessGates.bothInterceptsBeforeAnyOwnDecode &&
+      !TABLE_COMPETITIVE_V1.rules.guessGates.activeCluegiverMayDecode &&
+      !TABLE_COMPETITIVE_V1.rules.guessGates.activeCluegiverMayIntercept &&
+      TABLE_COMPETITIVE_V1.rules.win.terminalCollisionPrecedence.join("|") ===
+        "both_intercept_thresholds_draw|both_miscommunication_thresholds_draw|red_intercept_threshold|blue_intercept_threshold|red_miscommunication_threshold_awards_blue|blue_miscommunication_threshold_awards_red|maximum_rounds_tiebreak" &&
+      TABLE_COMPETITIVE_V1.visibility.lanes.table.readableBy ===
+        "everyone_including_observers" &&
+      TABLE_COMPETITIVE_V1.visibility.lanes.teamOpen.readableBy ===
+        "everyone_including_observers" &&
+      TABLE_COMPETITIVE_V1.visibility.lanes.teamPrivate.readableBy ===
+        "own_team_seats_only",
+  );
+  check(
+    checks,
+    "table protocol and identity validators reject well-formed foreign values",
+    !verifyCompetitiveProtocol({
+      ...TABLE_COMPETITIVE_V1,
+      rules: {
+        ...TABLE_COMPETITIVE_V1.rules,
+        cluegiverRotation: {
+          ...TABLE_COMPETITIVE_V1.rules.cluegiverRotation,
+          seatRoleOrder: ["agent_b", "agent_a", "agent_c"],
+        },
+      },
+    } as unknown as typeof TABLE_COMPETITIVE_V1) &&
+      validateTableCompetitiveIdentities({
+        ...tableIdentities,
+        rules: { ...tableIdentities.rules, contentHash: "0".repeat(64) },
+      }).some((problem) => problem.includes("TABLE_COMPETITIVE_V1")),
+  );
+
+  // 11. Minimal decoder BotBuild. License and seating claims are deliberately
+  // absent until a build-bound evaluation record and trusted issuer exist.
+  const conformanceWireConfig = mintWireConfig({
+    id: "openrouter-chat-completions@2026-08-02",
+    parameters: {
+      provider: { order: ["DeepInfra"], allowFallbacks: false },
+      reasoning: { effort: "max" },
+      responseFormat: "json_object",
+      temperature: 0,
+      maxTokens: 80_000,
+    },
+  });
+  const botBuildSource: BotBuildManifestSource = {
+    manifestVersion: "0.1",
+    name: "sensory-anchor-deepseek-decoder",
+    version: "0.1.0",
+    game: "decrypto",
+    scope: "decoder",
+    strategyArtifact: {
+      id: sensory.id,
+      contentHash: sensory.contentHash,
+    },
+    compilation: {
+      strategyCompiler: identityRef("genome-compiler@2.0.0", {
+        compilerVersion: COMPILER_VERSION,
+      }),
+      contextCompiler: identityRef("decrypto-context-compiler@0.2.0", {
+        observationVersion: "0.2",
+        scope: "decoder",
+      }),
+      compiledCarrier: {
+        id: "compiled-carrier:sensory-anchor@0.1.0",
+        contentHash: compiledHash,
+      },
+    },
+    execution: {
+      responseParser: identityRef("decrypto-decode-parser@0.1.0", {
+        acceptedShape: { guess: "distinct-3-of-4" },
+      }),
+      actionValidator: identityRef("table-decode-validator@0.1.0", {
+        protocol: TABLE_COMPETITIVE_V1.contentHash,
+      }),
+      providerAdapter: identityRef("openrouter-adapter@0.1.0", {
+        transport: "chat-completions",
+      }),
+      orchestrationPolicy: identityRef("table-orchestrator@0.1.0", {
+        unit: "one-logical-action",
+      }),
+      retryPolicy: identityRef("provider-retry-policy@0.1.0", {
+        maximumAttempts: 2,
+      }),
+      fallbackPolicy: identityRef("provider-fallback-policy@0.1.0", {
+        allowFallbacks: false,
+      }),
+    },
+    requestedRoute: {
+      provider: "openrouter",
+      model: "deepseek/deepseek-v4-flash-0731",
+      upstream: "deepinfra",
+      aliasEpoch: null,
+      reasoning: {
+        requestedEffort: "xhigh",
+        wireEffort: "max",
+      },
+      wireConfig: conformanceWireConfig,
+    },
+    gameplay: tableIdentities,
+    provenance: {
+      origin: "shared/substrate/conformance.ts",
+      mintedAt: "2026-08-02T00:00:00.000Z",
+    },
+  };
+  const botBuild = mintBotBuildManifest(botBuildSource);
+  const botBuildIdentity = {
+    id: botBuild.id,
+    contentHash: botBuild.contentHash,
+  };
+  check(
+    checks,
+    "BotBuildManifest binds the exact decoder implementation and route",
+    verifyBotBuildManifest(botBuild) &&
+      botBuild.scope === "decoder" &&
+      botBuild.contentHash === EXPECTED_CONFORMANCE_BOT_BUILD_HASH &&
+      botBuild.gameplay.protocol.contentHash ===
+        TABLE_COMPETITIVE_V1.contentHash &&
+      botBuild.requestedRoute.wireConfig.contentHash ===
+        conformanceWireConfig.contentHash &&
+      Object.isFrozen(botBuild.execution),
+    botBuild.contentHash,
+  );
+  const botBuildRewrite = mintBotBuildManifest({
+    ...botBuildSource,
+    requestedRoute: {
+      ...botBuildSource.requestedRoute,
+      model: "different/model",
+    },
+  });
+  check(
+    checks,
+    "BotBuild rejects tampering, same-id rewrites, unknown keys, secrets, and foreign gameplay",
+    !verifyBotBuildManifest({
+      ...botBuild,
+      requestedRoute: {
+        ...botBuild.requestedRoute,
+        model: "tampered/model",
+      },
+    }) &&
+      findBotBuildRegistryConflicts([botBuild, botBuildRewrite]).join("|") ===
+        botBuild.id &&
+      validateBotBuildManifestSource({
+        ...botBuildSource,
+        requestedRoute: {
+          ...botBuildSource.requestedRoute,
+          wireConfig: {
+            ...conformanceWireConfig,
+            parameters: {
+              ...conformanceWireConfig.parameters,
+              apiKey: "forbidden",
+            },
+          },
+        },
+      }).some((problem) => problem.includes("secret-bearing")) &&
+      validateBotBuildManifestSource({
+        ...botBuildSource,
+        license: "not part of this contract",
+      } as unknown as BotBuildManifestSource).some((problem) =>
+        problem.includes('unknown field "license"'),
+      ) &&
+      validateBotBuildManifestSource({
+        ...botBuildSource,
+        gameplay: {
+          ...botBuildSource.gameplay,
+          visibility: {
+            ...botBuildSource.gameplay.visibility,
+            contentHash: "0".repeat(64),
+          },
+        },
+      }).some((problem) => problem.includes("TABLE_COMPETITIVE_V1")),
+  );
+
+  // 12. Complete live decision observations. Round 2 must carry all of round
+  // 1, and live token counts must agree with that history and remain below
+  // the engine's terminal thresholds.
+  const resolvedRoundOne = {
+    roundNumber: 1,
+    own: {
+      clues: ["kiln", "gale", "raptor"] as [string, string, string],
+      code: [1, 3, 4] as [number, number, number],
+      ownDecode: [1, 3, 4] as [number, number, number],
+      intercept: null,
+      decodedCorrectly: true,
+      wasIntercepted: null,
+    },
+    opponent: {
+      clues: ["stone", "ember", "height"] as [string, string, string],
+      code: [2, 4, 1] as [number, number, number],
+      ownDecode: [2, 4, 1] as [number, number, number],
+      intercept: null,
+      decodedCorrectly: true,
+      wasIntercepted: null,
+    },
+  };
+  const observationV2Source: DecryptoObservationV2Source = {
+    observationVersion: "0.2",
+    decisionId: "decision:game-1:round-2:red:decode:1",
+    logicalActionKey: "game-1/round-2/red/own-decode",
+    gameId: "game-1",
+    roundNumber: 2,
+    actor: {
+      actorId: "bot:red:agent-c",
+      seatId: "seat-red-c",
+      team: "red",
+      role: "decoder",
+    },
+    activeCluegiverSeatId: "seat-red-b",
+    identities: {
+      botBuild: botBuildIdentity,
+      ...tableIdentities,
+    },
+    role: "decoder",
+    team: "red",
+    ownKeywords: [...BASELINE_KEYWORDS.DOpus] as [
+      string,
+      string,
+      string,
+      string,
+    ],
+    ownClues: ["ember", "canopy", "orbit"],
+    opponentClues: ["river", "forge", "summit"],
+    resolvedRounds: [resolvedRoundOne],
+    tokens: {
+      own: { intercepts: 0, miscommunications: 0 },
+      opponent: { intercepts: 0, miscommunications: 0 },
+    },
+    teamChatVisibility: "private",
+    decisionFocus: "Lock the own-team decode after both intercepts.",
+    transcript: [
+      {
+        eventId: "event-table-1",
+        speakerActorId: "human:blue:a",
+        lane: "table",
+        text: "Good luck.",
+      },
+      {
+        eventId: "event-team-1",
+        speakerActorId: "human:red:c",
+        lane: "team:own",
+        text: "I think the second clue belongs to slot 2.",
+      },
+    ],
+  };
+  const observationV2 = mintObservationV2(observationV2Source);
+  check(
+    checks,
+    "Observation v0.2 is deterministic, immutable, complete, and role-legal",
+    verifyObservationV2(observationV2) &&
+      observationV2.contentHash === EXPECTED_CONFORMANCE_OBSERVATION_V2_HASH &&
+      Object.isFrozen(observationV2.actor) &&
+      Object.isFrozen(observationV2.resolvedRounds[0]?.own) &&
+      Object.isFrozen(observationV2.transcript[0]),
+    observationV2.contentHash,
+  );
+
+  const validInterceptor = {
+    ...observationV2Source,
+    decisionId: "decision:game-1:round-2:red:intercept:1",
+    logicalActionKey: "game-1/round-2/blue/intercept",
+    actor: {
+      ...observationV2Source.actor,
+      role: "interceptor" as const,
+    },
+    role: "interceptor" as const,
+    ownKeywords: null,
+    decisionFocus: "Lock the intercept of Blue's clue set.",
+  };
+  check(
+    checks,
+    "Observation v0.2 accepts a round-2 interceptor with both clue sets and no keywords",
+    validateObservationV2(validInterceptor).length === 0,
+  );
+
+  const adversarialObservationProblems = [
+    validateObservationV2({
+      ...validInterceptor,
+      roundNumber: 1,
+      resolvedRounds: [],
+    }).some((problem) => problem.includes("round 1")),
+    validateObservationV2({
+      ...observationV2Source,
+      actor: {
+        ...observationV2Source.actor,
+        seatId: observationV2Source.activeCluegiverSeatId,
+      },
+    }).some((problem) => problem.includes("own-team active cluegiver")),
+    validateObservationV2({
+      ...observationV2Source,
+      ownClues: null,
+    } as unknown as DecryptoObservationV2Source).some((problem) =>
+      problem.includes("ownClues"),
+    ),
+    validateObservationV2({
+      ...validInterceptor,
+      opponentClues: [],
+    } as unknown as DecryptoObservationV2Source).some((problem) =>
+      problem.includes("opponentClues"),
+    ),
+    validateObservationV2({
+      ...observationV2Source,
+      identities: {
+        ...observationV2Source.identities,
+        protocol: {
+          ...observationV2Source.identities.protocol,
+          contentHash: "0".repeat(64),
+        },
+      },
+    }).some((problem) => problem.includes("identities.protocol")),
+    validateObservationV2({
+      ...observationV2Source,
+      identities: {
+        ...observationV2Source.identities,
+        visibility: {
+          ...observationV2Source.identities.visibility,
+          contentHash: "1".repeat(64),
+        },
+      },
+    }).some((problem) => problem.includes("identities.visibility")),
+    validateObservationV2({
+      ...observationV2Source,
+      identities: {
+        ...observationV2Source.identities,
+        rules: {
+          ...observationV2Source.identities.rules,
+          contentHash: "2".repeat(64),
+        },
+      },
+    }).some((problem) => problem.includes("identities.rules")),
+    validateObservationV2({
+      ...observationV2Source,
+      roundNumber: 3,
+    }).some((problem) => problem.includes("completely cover")),
+    validateObservationV2({
+      ...observationV2Source,
+      resolvedRounds: [
+        {
+          ...resolvedRoundOne,
+          own: { ...resolvedRoundOne.own, code: null },
+        },
+      ],
+    } as unknown as DecryptoObservationV2Source).some((problem) =>
+      problem.includes("round 1.own.code"),
+    ),
+    validateObservationV2({
+      ...observationV2Source,
+      tokens: {
+        ...observationV2Source.tokens,
+        own: { intercepts: 2, miscommunications: 0 },
+      },
+    }).some((problem) => problem.includes("terminal threshold")),
+  ];
+  check(
+    checks,
+    "Observation v0.2 closes all ten current-engine adversarial gates",
+    adversarialObservationProblems.length === 10 &&
+      adversarialObservationProblems.every(Boolean),
+    JSON.stringify(adversarialObservationProblems),
+  );
+
+  const openOpponentLine = {
+    eventId: "event-opponent-team-1",
+    speakerActorId: "human:blue:b",
+    lane: "team:opponent:open" as const,
+    text: "We think it is 2-4-1.",
+  };
+  check(
+    checks,
+    "Observation v0.2 projects open/private Team lanes and rejects extra secret shapes",
+    validateObservationV2({
+      ...observationV2Source,
+      transcript: [...observationV2Source.transcript, openOpponentLine],
+    }).some((problem) => problem.includes("requires open chat")) &&
+      validateObservationV2({
+        ...observationV2Source,
+        teamChatVisibility: "open",
+        transcript: [...observationV2Source.transcript, openOpponentLine],
+      }).length === 0 &&
+      validateObservationV2({
+        ...observationV2Source,
+        opponentKeywords: ["must", "never", "enter", "context"],
+      } as unknown as DecryptoObservationV2Source).some((problem) =>
+        problem.includes('unknown field "opponentKeywords"'),
+      ),
+  );
+  check(
+    checks,
+    "Observation v0.1 remains legal through the additive dispatcher",
+    (() => {
+      try {
+        assertRoleLegal(decoderObservation);
+        return true;
+      } catch {
+        return false;
+      }
+    })(),
+  );
+
+  // 13. One successful decoder attempt with evidence that maps directly to
+  // ai_calls plus authoritative game events. Request JSON is not replaced by
+  // a weaker prompt-only hash; prompt content remains inside that exact value.
+  const parsedDecodeAction = {
+    kind: "guess" as const,
+    role: "decode" as const,
+    guess: [1, 3, 4] as [number, number, number],
+  };
+  const actionEvent = {
+    ...identityRef("event:cipher-decode-submitted:42", {
+      sequence: 42,
+      guess: parsedDecodeAction.guess,
+    }),
+    sequence: 42,
+  };
+  const outcomeEvent = {
+    ...identityRef("event:cipher-round-resolved:44", {
+      sequence: 44,
+      roundNumber: 2,
+    }),
+    sequence: 44,
+  };
+  const traceV2Source: TraceEnvelopeV2Source = {
+    traceVersion: "0.2",
+    app: "the-table",
+    gameId: observationV2.gameId,
+    roundNumber: observationV2.roundNumber,
+    decisionId: observationV2.decisionId,
+    attemptId: "ai-call:game-1:round-2:red:decode:1",
+    logicalActionKey: observationV2.logicalActionKey,
+    actor: { ...observationV2.actor, role: "decoder" },
+    role: "decoder",
+    taskKind: "decode",
+    identities: observationV2.identities,
+    inputs: {
+      observation: {
+        contentHash: observationV2.contentHash,
+        blobRef: "observations/game-1/red-decode-1.json",
+        classification: "team_private",
+      },
+      requestJson: {
+        contentHash: contentHash({
+          model: "deepseek/deepseek-v4-flash-0731",
+          messages: [{ role: "user", content: "exact rendered context" }],
+        }),
+        blobRef: "ai-calls/game-1/request-1.json",
+        classification: "operator",
+      },
+    },
+    outputs: {
+      responseText: {
+        contentHash: contentHash('{"rationale":"x","guess":[1,3,4]}'),
+        blobRef: "ai-calls/game-1/response-1.txt",
+        classification: "operator",
+      },
+      responseMeta: {
+        contentHash: contentHash({
+          servedModel: "deepseek/deepseek-v4-flash-0731",
+          upstream: "DeepInfra",
+          routeAttempt: 1,
+        }),
+        blobRef: "ai-calls/game-1/response-meta-1.json",
+        classification: "operator",
+      },
+    },
+    provider: {
+      requested: botBuild.requestedRoute,
+      servedModel: "deepseek/deepseek-v4-flash-0731",
+      upstream: "DeepInfra",
+      routeAttempt: 1,
+      status: "succeeded",
+      failureStage: null,
+    },
+    parsedAction: {
+      action: parsedDecodeAction,
+      contentHash: contentHash(parsedDecodeAction),
+    },
+    validation: {
+      status: "accepted",
+      validator: botBuild.execution.actionValidator,
+      problems: [],
+    },
+    application: {
+      applied: true,
+      logicalActionKey: observationV2.logicalActionKey,
+      parsedActionHash: contentHash(parsedDecodeAction),
+      actionEvent,
+    },
+    outcome: {
+      status: "resolved",
+      outcomeEvent,
+    },
+    telemetry: {
+      recordedAt: "2026-08-02T00:01:04.000Z",
+      latencyMs: 4_000,
+      usage: {
+        tokensIn: 2_000,
+        tokensOut: 500,
+      },
+    },
+  };
+  const traceV2 = mintTraceEnvelopeV2(traceV2Source);
+  check(
+    checks,
+    "Trace v0.2 binds persisted request/response evidence and application truth",
+    verifyTraceEnvelopeV2(traceV2) &&
+      traceV2.contentHash === EXPECTED_CONFORMANCE_TRACE_V2_HASH &&
+      traceV2.inputs.observation.contentHash === observationV2.contentHash &&
+      traceV2.inputs.requestJson !== null &&
+      traceV2.application.actionEvent?.sequence === 42 &&
+      traceV2.outcome.outcomeEvent?.sequence === 44 &&
+      Object.isFrozen(traceV2.provider) &&
+      Object.isFrozen(traceV2.parsedAction?.action),
+    traceV2.contentHash,
+  );
+
+  const failedProviderTrace: TraceEnvelopeV2Source = {
+    ...traceV2Source,
+    attemptId: "ai-call:game-1:round-2:red:decode:failed",
+    inputs: {
+      ...traceV2Source.inputs,
+      requestJson: null,
+    },
+    outputs: {
+      responseText: null,
+      responseMeta: null,
+    },
+    provider: {
+      ...traceV2Source.provider,
+      servedModel: null,
+      upstream: null,
+      routeAttempt: null,
+      status: "failed",
+      failureStage: "provider",
+    },
+    parsedAction: null,
+    validation: {
+      ...traceV2Source.validation,
+      status: "not_run",
+    },
+    application: {
+      applied: false,
+      logicalActionKey: traceV2Source.logicalActionKey,
+      parsedActionHash: null,
+      actionEvent: null,
+    },
+    outcome: {
+      status: "pending",
+      outcomeEvent: null,
+    },
+    telemetry: {
+      ...traceV2Source.telemetry,
+      usage: { tokensIn: null, tokensOut: null },
+    },
+  };
+  check(
+    checks,
+    "Trace v0.2 retains truthful provider failures without invented evidence",
+    validateTraceEnvelopeV2(failedProviderTrace).length === 0,
+  );
+  check(
+    checks,
+    "Trace v0.2 rejects weak evidence classification, URL refs, and incoherent application",
+    validateTraceEnvelopeV2({
+      ...traceV2Source,
+      inputs: {
+        ...traceV2Source.inputs,
+        requestJson: {
+          ...traceV2Source.inputs.requestJson!,
+          classification: "team_private",
+        },
+      },
+    }).some((problem) => problem.includes("classification must be operator")) &&
+      validateTraceEnvelopeV2({
+        ...traceV2Source,
+        outputs: {
+          ...traceV2Source.outputs,
+          responseText: {
+            ...traceV2Source.outputs.responseText!,
+            blobRef: "https://example.invalid/response?token=x",
+          },
+        },
+      }).some((problem) => problem.includes("opaque store key")) &&
+      validateTraceEnvelopeV2({
+        ...traceV2Source,
+        application: {
+          ...traceV2Source.application,
+          parsedActionHash: "0".repeat(64),
+        },
+      }).some((problem) => problem.includes("accepted parsed action hash")),
+  );
+
+  const chainMismatchChecks = [
+    validateDecisionChain(
+      observationV2,
+      mintTraceEnvelopeV2({
+        ...traceV2Source,
+        inputs: {
+          ...traceV2Source.inputs,
+          observation: {
+            ...traceV2Source.inputs.observation,
+            contentHash: "0".repeat(64),
+          },
+        },
+      }),
+    ).some((problem) => problem.includes("observation hash")),
+    validateDecisionChain(
+      observationV2,
+      mintTraceEnvelopeV2({ ...traceV2Source, roundNumber: 3 }),
+    ).some((problem) => problem.includes("roundNumber mismatch")),
+    validateDecisionChain(
+      observationV2,
+      mintTraceEnvelopeV2({
+        ...traceV2Source,
+        decisionId: "different-decision",
+      }),
+    ).some((problem) => problem.includes("decisionId mismatch")),
+    validateDecisionChain(
+      observationV2,
+      mintTraceEnvelopeV2({
+        ...traceV2Source,
+        logicalActionKey: "different-logical-action",
+        application: {
+          ...traceV2Source.application,
+          logicalActionKey: "different-logical-action",
+        },
+      }),
+    ).some((problem) => problem.includes("logicalActionKey mismatch")),
+    validateDecisionChain(
+      observationV2,
+      mintTraceEnvelopeV2({
+        ...traceV2Source,
+        actor: { ...traceV2Source.actor, actorId: "different-actor" },
+      }),
+    ).some((problem) => problem.includes("actor.actorId mismatch")),
+    validateDecisionChain(observationV2, {
+      ...traceV2,
+      role: "interceptor",
+    } as unknown as typeof traceV2).some((problem) =>
+      problem.includes("role mismatch"),
+    ),
+    validateDecisionChain(
+      observationV2,
+      mintTraceEnvelopeV2({
+        ...traceV2Source,
+        identities: {
+          ...traceV2Source.identities,
+          botBuild: {
+            ...traceV2Source.identities.botBuild,
+            contentHash: "3".repeat(64),
+          },
+        },
+      }),
+    ).some((problem) => problem.includes("identities.botBuild mismatch")),
+    validateDecisionChain(observationV2, {
+      ...traceV2,
+      taskKind: "intercept",
+    } as unknown as typeof traceV2).some((problem) =>
+      problem.includes("task mismatch"),
+    ),
+    validateDecisionChain(observationV2, {
+      ...traceV2,
+      application: {
+        ...traceV2.application,
+        logicalActionKey: "different-application",
+      },
+    }).some((problem) => problem.includes("application mismatch")),
+  ];
+  check(
+    checks,
+    "validateDecisionChain rejects all nine observation/trace mismatch mutations",
+    chainMismatchChecks.length === 9 && chainMismatchChecks.every(Boolean),
+    JSON.stringify(chainMismatchChecks),
+  );
+  check(
+    checks,
+    "validateDecisionChain accepts the exact observation and trace",
+    validateDecisionChain(observationV2, traceV2).length === 0,
+  );
+  check(
+    checks,
+    "Trace v0.1 remains valid through the additive dispatcher",
+    validateTraceEnvelope(trace).length === 0,
+  );
+
   return {
     passed: checks.every((c) => c.ok),
     checks,
@@ -2334,6 +3104,10 @@ export function runConformance(): ConformanceReport {
       sensoryAnchorContentHash: sensory.contentHash,
       sensoryAnchorCompiledHash: compiledHash,
       intermediateHopsContentHash: hops.contentHash,
+      tableCompetitiveProtocolHash: TABLE_COMPETITIVE_V1.contentHash,
+      conformanceBotBuildHash: botBuild.contentHash,
+      conformanceObservationV2Hash: observationV2.contentHash,
+      conformanceTraceV2Hash: traceV2.contentHash,
     },
   };
 }
