@@ -6,6 +6,18 @@ export {
   sha256Hex,
 } from "./hash";
 export {
+  SHA256_HEX_PATTERN,
+  assertNoSecretBearingFields,
+  cloneAndDeepFreeze,
+  exactKeys,
+  findSecretBearingPaths,
+  identityRef,
+  sameContentIdentity,
+  validateContentIdentityRef,
+  validateExactContentIdentityRef,
+} from "./identity";
+export type { ContentIdentityRef } from "./identity";
+export {
   CIPHER_ENCRYPT_CANDIDATE_POLICY,
   CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
   CIPHER_ENCRYPT_CANDIDATE_POLICY_HASH,
@@ -61,15 +73,31 @@ export {
   validateModelRef,
 } from "./modelRef";
 export type { AliasMutation, ModelRef, ResolvedModel } from "./modelRef";
-export { assertRoleLegal } from "./observation";
+export {
+  OBSERVATION_V2_VERSION,
+  assertRoleLegal,
+  mintObservationV2,
+  observationV2ContentHash,
+  validateObservationV2,
+  verifyObservationV2,
+} from "./observation";
 export type {
+  AnyDecryptoObservation,
   ChatChannel,
   ChatLine,
   CodeTriple,
   DecryptoObservation,
+  DecryptoObservationV2,
+  DecryptoObservationV2Source,
+  ObservationActorV2,
+  ObservationLane,
+  ObservationLineV2,
   ObservationRole,
+  ObservationV2Role,
   ResolvedRoundView,
+  ResolvedRoundViewV2,
   ResolvedSideView,
+  ResolvedSideViewV2,
   TeamChatVisibility,
   TeamTokens,
 } from "./observation";
@@ -89,14 +117,72 @@ export type {
   DecryptoAction,
   DeliberationMessage,
 } from "./actions";
-export { TRACE_VERSION, validateTraceEnvelope } from "./trace";
+export {
+  TRACE_VERSION,
+  TRACE_V2_VERSION,
+  mintTraceEnvelopeV2,
+  traceV2ContentHash,
+  validateDecisionChain,
+  validateTraceEnvelope,
+  validateTraceEnvelopeV2,
+  verifyTraceEnvelopeV2,
+} from "./trace";
 export type {
+  ActionEventRef,
+  AnyTraceEnvelope,
+  ContentBlobRef,
   ResearchExportStamp,
   TraceApp,
+  TraceClassification,
   TraceEnvelope,
+  TraceEnvelopeV2,
+  TraceEnvelopeV2Source,
   TraceOutcome,
+  TraceOutcomeV2,
   TraceTaskKind,
+  TraceTaskKindV2,
+  TraceUsageV2,
 } from "./trace";
+export {
+  BOT_BUILD_MANIFEST_VERSION,
+  botBuildContentHash,
+  findBotBuildRegistryConflicts,
+  mintBotBuildManifest,
+  mintWireConfig,
+  validateBotBuildManifestSource,
+  validateRequestedModelRoute,
+  validateWireConfigSource,
+  verifyBotBuildManifest,
+  verifyWireConfig,
+} from "./botBuild";
+export type {
+  BotBuildManifest,
+  BotBuildManifestSource,
+  JsonScalar,
+  JsonValue,
+  RequestedModelRoute,
+  WireConfig,
+  WireConfigSource,
+} from "./botBuild";
+export {
+  COMPETITIVE_PROTOCOL_SCHEMA_VERSION,
+  TABLE_COMPETITIVE_PROTOCOL_ID,
+  TABLE_COMPETITIVE_V1,
+  TABLE_COMPETITIVE_V1_SOURCE,
+  competitiveProtocolContentHash,
+  mintCompetitiveProtocol,
+  tableCompetitiveIdentitySet,
+  validateCompetitiveProtocolSource,
+  validateTableCompetitiveIdentities,
+  verifyCompetitiveProtocol,
+} from "./protocol";
+export type {
+  CompetitiveIdentitySet,
+  CompetitiveProtocol,
+  CompetitiveProtocolSource,
+  TableCompetitiveRules,
+  TableCompetitiveVisibility,
+} from "./protocol";
 export {
   BASELINE_GAME_CLUES,
   BASELINE_GAME_ID,
