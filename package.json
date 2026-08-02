@@ -28,6 +28,8 @@
     "experiment:candidate-policy-ab-canary": "tsx scripts/run-candidate-policy-ab-mechanism-canary.ts",
     "experiment:candidate-policy-ab-pilot": "tsx scripts/run-candidate-policy-ab-pilot.ts",
     "experiment:candidate-policy-ab-full": "tsx scripts/run-candidate-policy-ab-experiment.ts",
+    "experiment:static-position-bench-dry-run": "tsx scripts/run-decrypto-static-position-bench.ts",
+    "test:static-position-bench": "tsx scripts/test-decrypto-static-position-bench.ts",
     "test:substrate-conformance": "tsx scripts/substrate-conformance.ts",
     "import:table-decrypto": "tsx scripts/import-table-decrypto-export.ts",
     "test:table-decrypto-import": "tsx scripts/test-table-decrypto-import.ts"
