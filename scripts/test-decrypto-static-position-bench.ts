@@ -763,7 +763,7 @@ try {
   );
   equal(
     sha256Hex(canonicalIndexSource),
-    "aaf9f9aa63a5b8921de30aefcd1c708d47e417021243fe32b1efb82585692b93",
+    "2758439569362b451915359516e3c8d9cbc798f903dc317d7426f4a32cd1c5ab",
     "shared substrate index remains byte-identical to both canonical twins",
   );
   ok(
