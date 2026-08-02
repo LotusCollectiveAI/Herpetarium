@@ -26,6 +26,35 @@ export {
 } from "./candidatePolicy";
 export type { CandidatePolicyArtifact } from "./candidatePolicy";
 export {
+  JOINT_ASSIGNMENT_DECODER_COMPILER_HASH,
+  JOINT_ASSIGNMENT_DECODER_COMPILER_ID,
+  JOINT_ASSIGNMENT_DECODER_POLICY,
+  JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
+  JOINT_ASSIGNMENT_DECODER_POLICY_HASH,
+  JOINT_ASSIGNMENT_DECODER_POLICY_ID,
+  JOINT_ASSIGNMENT_DECODER_SYSTEM_PROMPT,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ARTIFACT,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
+  MAX_JOINT_ASSIGNMENT_ABS_SCORE,
+  compileJointAssignmentDecoderPrompt,
+  formatJointAssignmentPublicationSafeClaim,
+  solveGlobalInjectiveAssignment,
+  validateJointAssignmentAction,
+  verifyCompiledJointAssignmentDecoderPrompt,
+  verifyJointAssignmentDecoderPolicy,
+} from "./jointAssignmentDecoder";
+export type {
+  CompiledJointAssignmentDecoderPrompt,
+  CompiledJointAssignmentDecoderPromptSource,
+  JointAssignmentDecoderPolicyArtifact,
+  JointAssignmentPublicationSafeClaim,
+  JointAssignmentScoreMatrix,
+  JointAssignmentScoreRow,
+  JointAssignmentSolution,
+  RankedJointAssignment,
+} from "./jointAssignmentDecoder";
+export {
   DIRECTIVE_MODULES,
   GENOME_MODULE_KEYS,
   MODULE_TITLES,
