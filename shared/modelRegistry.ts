@@ -290,7 +290,11 @@ const MODEL_SPECS = [
     reasoningMode: "openrouter_reasoning",
     supportsTemperature: false,
     defaults: {
-      timeoutMs: 900000,
+      // Full-strength max-reasoning draws have already taken close to ten
+      // minutes. Forty-five minutes is a generous bounded ceiling for variance
+      // without letting one hung five-wide wave stall a repeat run for hours.
+      // Strict execution still performs exactly one physical attempt.
+      timeoutMs: 45 * 60 * 1000,
       promptStrategy: "advanced",
       reasoningEffort: "xhigh",
     },

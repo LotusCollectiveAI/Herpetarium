@@ -29,6 +29,25 @@ import {
   auditBlindClues,
   evaluateBlindInversion,
 } from "../server/blindInversion";
+import {
+  auditCrossRoundColumns,
+  ledgerFromTeamHistory,
+  parseCrossRoundAuditorReply,
+} from "../server/crossRoundInversion";
+import {
+  CROSS_ROUND_AUDITOR_BATCH_SIZE,
+  CROSS_ROUND_AUDITOR_PROMPT_HASH,
+  CROSS_ROUND_AUDITOR_SYSTEM_PROMPT,
+  CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01,
+  CROSS_ROUND_COLUMN_LEAK_2026_08_01,
+  CROSS_ROUND_COLUMN_VETO_POLICY_HASH,
+  CROSS_ROUND_COLUMN_VETO_POLICY_ID,
+  CROSS_ROUND_INVERSION_PROTOCOL_VERSION,
+  PROVISIONAL_INVERSION_VETO_POLICY_ID,
+  buildPublicClueLedger,
+  combineInversionOutcomes,
+  evaluateCrossRoundInversion,
+} from "@shared/substrate";
 import { validateModels } from "../server/modelValidation";
 
 const EXACT_MODEL = "deepseek/deepseek-v4-flash-0731";
@@ -208,6 +227,487 @@ function assertPinnedRoute(body: Record<string, unknown>): void {
   );
 }
 
+/**
+ * The cross-round column instrument: the history-aware audit that the 0.1
+ * roadmap named as the only reachable route to the accumulated-history leak
+ * class, driven by the exact 2026-08-01 production incident.
+ */
+async function testCrossRoundColumnInversionProtocol(): Promise<void> {
+  const leak = CROSS_ROUND_COLUMN_LEAK_2026_08_01;
+  const ledger = ledgerFromTeamHistory(
+    leak.resolvedRounds.map((round) => ({
+      clues: [...round.clues],
+      targetCode: [...round.code] as [number, number, number],
+    })),
+  );
+  const code = leak.leakingRound.code as unknown as [number, number, number];
+  const clues = leak.leakingRound.clues as unknown as [string, string, string];
+
+  // 1. The instrument is shared with The Table, not merely similar to it.
+  equal(
+    CROSS_ROUND_INVERSION_PROTOCOL_VERSION,
+    "cross-round-referent-evidence@0.3-probe",
+    "cross-round protocol version is pinned",
+  );
+  ok(
+    CROSS_ROUND_COLUMN_VETO_POLICY_ID !== PROVISIONAL_INVERSION_VETO_POLICY_ID,
+    "cross-round veto policy does not reuse the frozen blind-inversion id",
+  );
+  equal(
+    CROSS_ROUND_AUDITOR_BATCH_SIZE,
+    3,
+    "cross-round auditor batch size is fixed at one submission",
+  );
+  ok(
+    /^[a-f0-9]{64}$/.test(CROSS_ROUND_AUDITOR_PROMPT_HASH) &&
+      /^[a-f0-9]{64}$/.test(CROSS_ROUND_COLUMN_VETO_POLICY_HASH),
+    "cross-round prompt and policy hashes are sha-256 digests",
+  );
+
+  // 2. The provider call carries public state only, at full strength.
+  const captured = installFetchMock([
+    {
+      content: JSON.stringify({
+        historyMatches: code.map((slot, index) => ({
+          clueIndex: index + 1,
+          matches: [1, 2, 3, 4].map((candidate) => ({
+            slot: candidate,
+            sharedReferent: candidate === slot ? "shared parent" : null,
+            publicClue:
+              candidate === slot
+                ? (leak.resolvedRounds[0]!.clues[
+                    leak.resolvedRounds[0]!.code.indexOf(slot)
+                  ] ?? null)
+                : null,
+            strength: candidate === slot ? "strong" : "none",
+          })),
+        })),
+        codeHypotheses: [
+          { code: [...code], support: "strong", rationale: null },
+        ],
+      }),
+    },
+  ]);
+  const run = await auditCrossRoundColumns(ledger, clues, {
+    config: deepSeekConfig,
+    now: () => new Date("2026-08-01T12:00:00.000Z"),
+  });
+  equal(captured.length, 1, "cross-round inversion makes one strict call");
+  deepEqual(
+    captured[0].body.reasoning,
+    // The registry maps this route's xhigh onto the wire's max tier, so this
+    // asserts the auditor really is dispatched at full strength.
+    { effort: "max", exclude: true },
+    "cross-round inversion does not weaken full-strength reasoning",
+  );
+  const requestText = JSON.stringify(captured[0].body);
+  for (const keyword of leak.ownKeywords) {
+    ok(
+      !requestText.includes(keyword) &&
+        !requestText.toLowerCase().includes(keyword.toLowerCase()),
+      `cross-round request withholds the secret keyword ${keyword}`,
+    );
+  }
+  ok(
+    !requestText.includes(JSON.stringify(code)),
+    "cross-round request withholds the intended code",
+  );
+  for (const publicClue of leak.resolvedRounds[0].clues) {
+    ok(
+      requestText.includes(publicClue),
+      `cross-round request carries the public ledger clue ${publicClue}`,
+    );
+  }
+  ok(
+    requestText.includes(CROSS_ROUND_AUDITOR_SYSTEM_PROMPT.slice(0, 60)),
+    "cross-round request uses the shared substrate auditor prompt",
+  );
+  equal(
+    run.auditorPromptHash,
+    CROSS_ROUND_AUDITOR_PROMPT_HASH,
+    "cross-round run records the shared instrument prompt hash",
+  );
+  equal(run.ledgerClueCount, 3, "cross-round run records ledger depth");
+
+  // 3. The regression itself: the single-clue gate passes, this one vetoes.
+  const conceptEvaluations = evaluateBlindInversion(
+    leak.blindConceptAudit.map((audit) => ({
+      clue: audit.clue,
+      concepts: audit.concepts.map((concept) => ({ ...concept })),
+      definitionShaped: audit.definitionShaped,
+      directness: audit.directness,
+    })),
+    code.map((slot) => leak.ownKeywords[slot - 1]!),
+  );
+  ok(
+    conceptEvaluations.every((evaluation) => evaluation.outcome === "pass"),
+    "the honest single-clue audit still passes the 2026-08-01 clues",
+  );
+  const leakEvaluation = evaluateCrossRoundInversion(run.reply, code, ledger);
+  equal(
+    leakEvaluation.outcome,
+    "hard_veto",
+    "cross-round audit hard-vetoes the 2026-08-01 production leak",
+  );
+  equal(
+    leakEvaluation.actionableIntendedEdges,
+    3,
+    "all three history-bearing columns carry an actionable shared referent",
+  );
+  equal(
+    combineInversionOutcomes([
+      conceptEvaluations[0].outcome,
+      leakEvaluation.outcome,
+    ]),
+    "hard_veto",
+    "the strictest of the two independent gates wins",
+  );
+
+  // Every scripted reply below satisfies the 0.2 contract: a complete 3x4
+  // association matrix plus a committed legal triple. A partial row is a hard
+  // parse reject now, because the omitted cell is exactly the one the global
+  // assignment needs.
+  // v0.3 replies: a per-clue-per-slot evidence grid plus a support-tiered,
+  // array-order-independent credible set. `historyBearing` guards the
+  // empty-column invariant — a slot with no
+  // public clues can never host a referent, and the evaluator rejects any
+  // reply that claims one.
+  const clueFor = (
+    target: typeof ledger,
+    slot: number,
+  ): string | null => target.find((c) => c.number === slot)?.clues[0] ?? null;
+  const scriptedReplyFor = (
+    target: typeof ledger,
+    rows: readonly (readonly [number, string, "plausible" | "strong"][])[],
+    codes: readonly (readonly [number, number, number])[],
+    support: "weak" | "plausible" | "strong" = "strong",
+  ) =>
+    JSON.stringify({
+      historyMatches: rows.map((row, index) => ({
+        clueIndex: index + 1,
+        matches: [1, 2, 3, 4].map((slot) => {
+          const edge = row.find((candidate) => candidate[0] === slot);
+          const quote = edge ? clueFor(target, slot) : null;
+          return {
+            slot,
+            sharedReferent: edge && quote ? edge[1] : null,
+            publicClue: edge && quote ? quote : null,
+            strength: edge && quote ? edge[2] : "none",
+          };
+        }),
+      })),
+      codeHypotheses: codes.map((code) => ({
+        code,
+        support,
+        rationale: null,
+      })),
+    });
+  const scriptedReply = (
+    rows: readonly (readonly [number, string, "plausible" | "strong"][])[],
+    codes: readonly (readonly [number, number, number])[],
+    support: "weak" | "plausible" | "strong" = "strong",
+  ) => scriptedReplyFor(ledger, rows, codes, support);
+  const recoveringReplyFor = (
+    target: typeof ledger,
+    slots: readonly [number, number, number],
+    historyBearing: readonly number[],
+  ) =>
+    scriptedReplyFor(
+      target,
+      slots.map((slot) =>
+        historyBearing.includes(slot)
+          ? ([[slot, "shared parent", "strong"]] as [
+              number,
+              string,
+              "strong",
+            ][])
+          : [],
+      ),
+      [slots],
+    );
+  const recoveringReply = (
+    slots: readonly [number, number, number],
+    historyBearing: readonly number[],
+  ) => recoveringReplyFor(ledger, slots, historyBearing);
+
+  // The Blue half of the production smoke proves that a live code position
+  // with no resolved clue history remains a negative control.
+  const blue = CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01;
+  const blueLedger = ledgerFromTeamHistory(
+    blue.resolvedRounds.map((round) => ({
+      clues: [...round.clues],
+      targetCode: [...round.code] as [number, number, number],
+    })),
+  );
+  const blueCode = [...blue.leakingRound.code] as [number, number, number];
+  const blueClues = [...blue.leakingRound.clues] as [
+    string,
+    string,
+    string,
+  ];
+  // Blue's slot 4 carries no public history, so only slots 1 and 3 can host
+  // evidence; the veto must rest on those two alone.
+  const blueAudits = parseCrossRoundAuditorReply(
+    recoveringReplyFor(blueLedger, blueCode, [1, 2, 3]),
+    blueClues,
+  );
+  const blueEvaluation = evaluateCrossRoundInversion(
+    blueAudits,
+    blueCode,
+    blueLedger,
+  );
+  equal(
+    blueEvaluation.outcome,
+    "hard_veto",
+    "the exact Blue production leak hard-vetoes",
+  );
+  equal(
+    blueEvaluation.actionableIntendedEdges,
+    2,
+    "Blue locks only the two columns with resolved history",
+  );
+  equal(
+    blueEvaluation.positions[0]!.columnHadHistory,
+    false,
+    "Blue slot 4 is the history-free negative control",
+  );
+  equal(
+    blueEvaluation.positions[0]!.intendedHistoryEdge,
+    false,
+    "a correct slot-4 guess is not misattributed to cross-round history",
+  );
+
+  // 4. Non-leaking counterexamples must not regenerate ordinary play.
+  const missed = parseCrossRoundAuditorReply(
+    scriptedReply([[], [], []], [[2, 1, 3]], "weak"),
+    clues,
+  );
+  equal(
+    evaluateCrossRoundInversion(missed, code, ledger).outcome,
+    "pass",
+    "a cross-round audit that misses every slot does not regenerate",
+  );
+  // Two actionable history bridges with the intended code ranked first is the
+  // hard tier. No numeric confidence appears anywhere in v0.3.
+  const recovering = parseCrossRoundAuditorReply(
+    recoveringReply(code, [1, 3, 4]),
+    clues,
+  );
+  equal(
+    evaluateCrossRoundInversion(recovering, code, ledger).outcome,
+    "hard_veto",
+    "two ranked, evidenced history bridges hard-veto with no confidence term",
+  );
+  // One evidenced bridge with the code ranked high is the soft tier.
+  const oneEdge = parseCrossRoundAuditorReply(
+    scriptedReply([[[code[0], "shared parent", "strong"]], [], []], [
+      [...code] as [number, number, number],
+    ]),
+    clues,
+  );
+  const oneEdgeEvaluation = evaluateCrossRoundInversion(oneEdge, code, ledger);
+  equal(
+    oneEdgeEvaluation.outcome,
+    "soft_regenerate_once",
+    "one ranked, evidenced history bridge still costs one regeneration",
+  );
+  equal(
+    oneEdgeEvaluation.actionableIntendedEdges,
+    1,
+    "the soft tier counts evidence, not a confidence floor",
+  );
+  // Evidence with the code UNRANKED is not actionable at any strength: the
+  // evidence-only clause carried a model-independent 16.7% false-positive
+  // floor and was removed before shipping.
+  const unranked = parseCrossRoundAuditorReply(
+    scriptedReply(
+      [
+        [[code[0], "shared parent", "strong"]],
+        [[code[1], "shared parent", "strong"]],
+        [],
+      ],
+      [[2, 1, 3]],
+    ),
+    clues,
+  );
+  equal(
+    evaluateCrossRoundInversion(unranked, code, ledger).outcome,
+    "pass",
+    "two strong bridges with the code unranked do not veto",
+  );
+  // A slot with no public history can never host evidence, and the evaluator
+  // rejects a reply that claims one rather than silently zeroing it.
+  let emptySlotRejected = false;
+  try {
+    parseCrossRoundAuditorReply(
+      JSON.stringify({
+        historyMatches: [1, 2, 3].map((clueIndex) => ({
+          clueIndex,
+          matches: [1, 2, 3, 4].map((slot) => ({
+            slot,
+            sharedReferent: slot === 2 ? "invented" : null,
+            publicClue: slot === 2 ? "Aggregate" : null,
+            strength: slot === 2 ? "strong" : "none",
+          })),
+        })),
+        codeHypotheses: [
+          { code: [...code], support: "strong", rationale: null },
+        ],
+      }),
+      clues,
+    );
+    evaluateCrossRoundInversion(
+      parseCrossRoundAuditorReply(
+        JSON.stringify({
+          historyMatches: [1, 2, 3].map((clueIndex) => ({
+            clueIndex,
+            matches: [1, 2, 3, 4].map((slot) => ({
+              slot,
+              sharedReferent: slot === 2 ? "invented" : null,
+              publicClue: slot === 2 ? "Aggregate" : null,
+              strength: slot === 2 ? "strong" : "none",
+            })),
+          })),
+          codeHypotheses: [
+            { code: [...code], support: "strong", rationale: null },
+          ],
+        }),
+        clues,
+      ),
+      code,
+      ledger,
+    );
+  } catch {
+    emptySlotRejected = true;
+  }
+  ok(
+    emptySlotRejected,
+    "a referent claimed on a history-free column fails closed",
+  );
+  const emptyLedgerEvaluation = evaluateCrossRoundInversion(
+    parseCrossRoundAuditorReply(
+      scriptedReply([[], [], []], [[...code] as [number, number, number]], "weak"),
+      clues,
+    ),
+    code,
+    buildPublicClueLedger([]),
+  );
+  equal(
+    emptyLedgerEvaluation.outcome,
+    "pass",
+    "an empty public ledger makes the cross-round veto structurally inert",
+  );
+
+  // 5. Malformed and inapplicable inputs fail closed rather than passing.
+  const malformed: Array<[string, string]> = [
+    ['{"assignments":[]}', "wrong assignment count"],
+    [
+      JSON.stringify({
+        assignments: [0, 1, 2].map(() => ({
+          ranking: [{ slot: 9, confidence: 0.4 }],
+        })),
+      }),
+      "slot outside 1-4",
+    ],
+    [
+      JSON.stringify({
+        assignments: [0, 1, 2].map(() => ({
+          ranking: [
+            { slot: 1, confidence: 0.4 },
+            { slot: 1, confidence: 0.3 },
+          ],
+        })),
+      }),
+      "repeated slot",
+    ],
+    [
+      JSON.stringify({
+        assignments: [0, 1, 2].map(() => ({
+          ranking: [{ slot: 1, confidence: 1.5 }],
+        })),
+      }),
+      "confidence outside 0-1",
+    ],
+    ["not json", "non-JSON body"],
+  ];
+  for (const [text, label] of malformed) {
+    let threw = false;
+    try {
+      parseCrossRoundAuditorReply(text, clues);
+    } catch {
+      threw = true;
+    }
+    ok(threw, `cross-round parser rejects ${label}`);
+  }
+  const canonicalReply = JSON.stringify({
+    historyMatches: code.map((slot, index) => ({
+      clueIndex: index + 1,
+      matches: [1, 2, 3, 4].map((candidate) => ({
+        slot: candidate,
+        sharedReferent: candidate === slot ? "shared parent" : null,
+        publicClue:
+          candidate === slot
+            ? (leak.resolvedRounds[0]!.clues[
+                leak.resolvedRounds[0]!.code.indexOf(slot)
+              ] ?? null)
+            : null,
+        strength: candidate === slot ? "plausible" : "none",
+      })),
+      ignoredEntryField: true,
+    })),
+    codeHypotheses: [
+      { code: [...code], support: "strong", rationale: null },
+    ],
+    ignoredEnvelopeField: true,
+  });
+  const parsedCanonical = parseCrossRoundAuditorReply(canonicalReply, clues);
+  deepEqual(
+    parseCrossRoundAuditorReply(
+      `${canonicalReply}\n{"ignoredTrailingObject":true}`,
+      clues,
+    ),
+    parsedCanonical,
+    "shared parser accepts a valid first object followed by trailing JSON",
+  );
+  deepEqual(
+    parseCrossRoundAuditorReply(
+      `\`\`\`json\nbroken example\n\`\`\`\n${canonicalReply}`,
+      clues,
+    ),
+    parsedCanonical,
+    "shared parser skips a malformed fence and accepts the later valid object",
+  );
+  let emptyLedgerThrew = false;
+  try {
+    await auditCrossRoundColumns(buildPublicClueLedger([]), clues, {
+      config: deepSeekConfig,
+    });
+  } catch {
+    emptyLedgerThrew = true;
+  }
+  ok(
+    emptyLedgerThrew,
+    "cross-round auditor refuses to spend a call with no public history",
+  );
+  const lowEffortConfig: AIPlayerConfig = {
+    ...deepSeekConfig,
+    reasoningEffort: "high",
+  };
+  let lowEffortThrew = false;
+  try {
+    await auditCrossRoundColumns(ledger, clues, {
+      config: lowEffortConfig,
+    });
+  } catch (error) {
+    lowEffortThrew =
+      error instanceof Error && /xhigh.*wire max/i.test(error.message);
+  }
+  ok(
+    lowEffortThrew,
+    "cross-round protocol refuses lower reasoning under the same identity",
+  );
+}
+
 async function testGameplayRequestContract(): Promise<void> {
   const captured = installFetchMock([{ content: "ANSWER: 1,2,3" }]);
   resetProviderThrottleState();
@@ -272,7 +772,7 @@ function testExactModelDefaults(): void {
   equal(config.model, EXACT_MODEL, "exact 0731 model defaults retain model ID");
   equal(
     config.timeoutMs,
-    900_000,
+    45 * 60 * 1000,
     "exact 0731 model defaults retain the deliberate timeout",
   );
   equal(
@@ -978,6 +1478,7 @@ async function main(): Promise<void> {
   try {
     testExactModelDefaults();
     await testBlindInversionRegistryTelemetryAndVetoPolicy();
+    await testCrossRoundColumnInversionProtocol();
     await testGameplayRequestContract();
     await testValidationDisablesReasoning();
     await testRouteProofIsMandatory();

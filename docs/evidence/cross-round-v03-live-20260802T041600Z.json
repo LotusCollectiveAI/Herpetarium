@@ -1,0 +1,860 @@
+{
+  "reportVersion": "herpetarium-cross-round-fixture-canary-report@0.1",
+  "generatedAt": "2026-08-02T04:37:50.240Z",
+  "mode": "real_provider_fixture_mechanism_canary",
+  "treatmentMutation": "none",
+  "databaseAccess": "none",
+  "researchStatus": "mechanism_canary_only_not_calibration_or_tournament_evidence",
+  "repeatCount": 1,
+  "controlQualification": "The synthetic control is a post-incident, hand-authored shaped-input check. PASS is required only as a two-sided mechanism boundary against an always-veto auditor; it is not a false-positive estimate, held-out evidence, calibration, or a history-independent research control.",
+  "cases": [
+    {
+      "id": "red-production-incident-2026-08-01",
+      "kind": "exact_shared_production_incident",
+      "provenance": "Exact CROSS_ROUND_COLUMN_LEAK_2026_08_01 shared fixture: the Red production incident.",
+      "expectedOutcome": "hard_veto"
+    },
+    {
+      "id": "blue-production-incident-2026-08-01",
+      "kind": "exact_shared_production_incident",
+      "provenance": "Exact CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01 shared fixture: the Blue production incident, including its history-free slot-4 boundary.",
+      "expectedOutcome": "hard_veto"
+    },
+    {
+      "id": "synthetic-opaque-negative-control",
+      "kind": "synthetic_non_research_negative_control",
+      "provenance": "Hand-authored opaque words (kettle/meridian/sable) evaluated against the Red fixture ledger. This was selected after the incident and is not held-out, history-independent research evidence, a false-positive estimate, or calibration. PASS is required only as a two-sided mechanism check against an always-veto auditor.",
+      "expectedOutcome": "pass"
+    }
+  ],
+  "runs": [
+    {
+      "repeat": 1,
+      "caseId": "red-production-incident-2026-08-01",
+      "caseKind": "exact_shared_production_incident",
+      "provenance": "Exact CROSS_ROUND_COLUMN_LEAK_2026_08_01 shared fixture: the Red production incident.",
+      "expectedOutcome": "hard_veto",
+      "ledger": [
+        {
+          "number": 1,
+          "clues": [
+            "Aggregate"
+          ]
+        },
+        {
+          "number": 2,
+          "clues": []
+        },
+        {
+          "number": 3,
+          "clues": [
+            "Bengal"
+          ]
+        },
+        {
+          "number": 4,
+          "clues": [
+            "Firetruck"
+          ]
+        }
+      ],
+      "candidate": {
+        "clues": [
+          "blast",
+          "orange",
+          "ascent"
+        ],
+        "intendedCode": [
+          1,
+          3,
+          4
+        ]
+      },
+      "instrument": {
+        "protocolVersion": "cross-round-referent-evidence@0.3-probe",
+        "policyId": "cross-round-referent-evidence-veto@2026-08-01",
+        "policyHash": "0dde8a93748fea551eb4ea79ae60e6a02733d65719d687a5f2ec4fb94e958be7",
+        "auditorPromptHash": "fe2b98f44292ddd2b212837340b58d7528f839a4babbc19b9b2ddec047e8c476",
+        "auditorBatchSize": 3
+      },
+      "route": {
+        "requested": {
+          "provider": "openrouter",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "upstream": "deepinfra",
+          "reasoningEffort": "xhigh",
+          "wireReasoningEffort": "max"
+        },
+        "resolved": {
+          "httpStatus": 200,
+          "requestId": null,
+          "generationId": "gen-1785644199-iISCYUHTsyDM4AxzSgtc",
+          "servedModel": "deepseek/deepseek-v4-flash-0731",
+          "upstreamProvider": "DeepInfra",
+          "requestedUpstream": "deepinfra",
+          "requestedReasoningEffort": "xhigh",
+          "wireReasoningEffort": "max",
+          "physicalAttempt": 1,
+          "finishReason": "stop",
+          "routing": {
+            "only": [
+              "deepinfra"
+            ],
+            "allowFallbacks": false,
+            "requireParameters": true,
+            "dataCollection": "deny"
+          },
+          "openRouter": {
+            "attempt": 1,
+            "strategy": "direct",
+            "selectedProvider": "DeepInfra",
+            "recordedAttemptCount": 0
+          },
+          "usage": {
+            "promptTokens": 1346,
+            "completionTokens": 30150,
+            "totalTokens": 31496,
+            "reasoningTokens": 27116,
+            "costUsd": 0.005543532
+          }
+        }
+      },
+      "audit": {
+        "status": "probe",
+        "auditedAt": "2026-08-02T04:22:44.265Z",
+        "historyMatches": [
+          {
+            "clueIndex": 1,
+            "clue": "blast",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": "quarry",
+                "publicClue": "Aggregate",
+                "strength": "plausible"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 4,
+                "sharedReferent": "fire",
+                "publicClue": "Firetruck",
+                "strength": "strong"
+              }
+            ]
+          },
+          {
+            "clueIndex": 2,
+            "clue": "orange",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": "fruit",
+                "publicClue": "Aggregate",
+                "strength": "weak"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": "tiger",
+                "publicClue": "Bengal",
+                "strength": "strong"
+              },
+              {
+                "number": 4,
+                "sharedReferent": "fire",
+                "publicClue": "Firetruck",
+                "strength": "plausible"
+              }
+            ]
+          },
+          {
+            "clueIndex": 3,
+            "clue": "ascent",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": "cat",
+                "publicClue": "Bengal",
+                "strength": "weak"
+              },
+              {
+                "number": 4,
+                "sharedReferent": "ladder",
+                "publicClue": "Firetruck",
+                "strength": "plausible"
+              }
+            ]
+          }
+        ],
+        "codeHypotheses": [
+          {
+            "code": [
+              4,
+              3,
+              2
+            ],
+            "support": "plausible",
+            "rationale": "blast->fire/Firetruck; orange->tiger/Bengal; ascent left to empty slot 2."
+          },
+          {
+            "code": [
+              1,
+              3,
+              4
+            ],
+            "support": "plausible",
+            "rationale": "blast->quarry/Aggregate; orange->tiger/Bengal; ascent->ladder/Firetruck."
+          }
+        ],
+        "evaluation": {
+          "outcome": "hard_veto",
+          "positions": [
+            {
+              "clue": "blast",
+              "intendedNumber": 1,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "quarry",
+              "intendedPublicClue": "Aggregate",
+              "intendedStrength": "plausible",
+              "intendedHistoryEdge": true,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 1
+            },
+            {
+              "clue": "orange",
+              "intendedNumber": 3,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "tiger",
+              "intendedPublicClue": "Bengal",
+              "intendedStrength": "strong",
+              "intendedHistoryEdge": true,
+              "intendedStrongHistoryEdge": true,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 2
+            },
+            {
+              "clue": "ascent",
+              "intendedNumber": 4,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "ladder",
+              "intendedPublicClue": "Firetruck",
+              "intendedStrength": "plausible",
+              "intendedHistoryEdge": true,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 1
+            }
+          ],
+          "historyBearingPositions": 3,
+          "dominatingHypotheses": 0,
+          "coDominatingHypotheses": 1,
+          "intendedSupport": "plausible",
+          "credibleSetSize": 2,
+          "actionableIntendedEdges": 3,
+          "strongIntendedEdges": 1,
+          "eliminationOnlyPositions": 0,
+          "hardVeto": true,
+          "softRegenerateOnce": false
+        }
+      },
+      "usage": {
+        "promptTokens": 1346,
+        "completionTokens": 30150,
+        "totalTokens": 31496,
+        "estimatedCostUsd": "0.005548140",
+        "providerReportedCostUsd": 0.005543532,
+        "effectiveCostUsd": 0.005543532,
+        "costSource": "provider_reported",
+        "latencyMs": 365453
+      }
+    },
+    {
+      "repeat": 1,
+      "caseId": "blue-production-incident-2026-08-01",
+      "caseKind": "exact_shared_production_incident",
+      "provenance": "Exact CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01 shared fixture: the Blue production incident, including its history-free slot-4 boundary.",
+      "expectedOutcome": "hard_veto",
+      "ledger": [
+        {
+          "number": 1,
+          "clues": [
+            "crown"
+          ]
+        },
+        {
+          "number": 2,
+          "clues": [
+            "pillow"
+          ]
+        },
+        {
+          "number": 3,
+          "clues": [
+            "telescope"
+          ]
+        },
+        {
+          "number": 4,
+          "clues": []
+        }
+      ],
+      "candidate": {
+        "clues": [
+          "treetop",
+          "turret",
+          "nebula"
+        ],
+        "intendedCode": [
+          4,
+          1,
+          3
+        ]
+      },
+      "instrument": {
+        "protocolVersion": "cross-round-referent-evidence@0.3-probe",
+        "policyId": "cross-round-referent-evidence-veto@2026-08-01",
+        "policyHash": "0dde8a93748fea551eb4ea79ae60e6a02733d65719d687a5f2ec4fb94e958be7",
+        "auditorPromptHash": "fe2b98f44292ddd2b212837340b58d7528f839a4babbc19b9b2ddec047e8c476",
+        "auditorBatchSize": 3
+      },
+      "route": {
+        "requested": {
+          "provider": "openrouter",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "upstream": "deepinfra",
+          "reasoningEffort": "xhigh",
+          "wireReasoningEffort": "max"
+        },
+        "resolved": {
+          "httpStatus": 200,
+          "requestId": null,
+          "generationId": "gen-1785644564-9FLyP4k0oilZ86RTXojg",
+          "servedModel": "deepseek/deepseek-v4-flash-0731",
+          "upstreamProvider": "DeepInfra",
+          "requestedUpstream": "deepinfra",
+          "requestedReasoningEffort": "xhigh",
+          "wireReasoningEffort": "max",
+          "physicalAttempt": 1,
+          "finishReason": "stop",
+          "routing": {
+            "only": [
+              "deepinfra"
+            ],
+            "allowFallbacks": false,
+            "requireParameters": true,
+            "dataCollection": "deny"
+          },
+          "openRouter": {
+            "attempt": 1,
+            "strategy": "direct",
+            "selectedProvider": "DeepInfra",
+            "recordedAttemptCount": 0
+          },
+          "usage": {
+            "promptTokens": 1349,
+            "completionTokens": 28758,
+            "totalTokens": 30107,
+            "reasoningTokens": 25261,
+            "costUsd": 0.005293242
+          }
+        }
+      },
+      "audit": {
+        "status": "probe",
+        "auditedAt": "2026-08-02T04:28:21.703Z",
+        "historyMatches": [
+          {
+            "clueIndex": 1,
+            "clue": "treetop",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": "tree",
+                "publicClue": "crown",
+                "strength": "strong"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 4,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              }
+            ]
+          },
+          {
+            "clueIndex": 2,
+            "clue": "turret",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 2,
+                "sharedReferent": "fort",
+                "publicClue": "pillow",
+                "strength": "plausible"
+              },
+              {
+                "number": 3,
+                "sharedReferent": "warship",
+                "publicClue": "telescope",
+                "strength": "weak"
+              },
+              {
+                "number": 4,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              }
+            ]
+          },
+          {
+            "clueIndex": 3,
+            "clue": "nebula",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 2,
+                "sharedReferent": "cloud",
+                "publicClue": "pillow",
+                "strength": "weak"
+              },
+              {
+                "number": 3,
+                "sharedReferent": "astronomy",
+                "publicClue": "telescope",
+                "strength": "strong"
+              },
+              {
+                "number": 4,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              }
+            ]
+          }
+        ],
+        "codeHypotheses": [
+          {
+            "code": [
+              1,
+              2,
+              3
+            ],
+            "support": "plausible",
+            "rationale": "Best combination: treetop/crown via tree, turret/pillow via fort, nebula/telescope via astronomy."
+          }
+        ],
+        "evaluation": {
+          "outcome": "pass",
+          "positions": [
+            {
+              "clue": "treetop",
+              "intendedNumber": 4,
+              "columnHadHistory": false,
+              "intendedSharedReferent": null,
+              "intendedPublicClue": null,
+              "intendedStrength": "none",
+              "intendedHistoryEdge": false,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 0
+            },
+            {
+              "clue": "turret",
+              "intendedNumber": 1,
+              "columnHadHistory": true,
+              "intendedSharedReferent": null,
+              "intendedPublicClue": null,
+              "intendedStrength": "none",
+              "intendedHistoryEdge": false,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 0
+            },
+            {
+              "clue": "nebula",
+              "intendedNumber": 3,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "astronomy",
+              "intendedPublicClue": "telescope",
+              "intendedStrength": "strong",
+              "intendedHistoryEdge": true,
+              "intendedStrongHistoryEdge": true,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 1
+            }
+          ],
+          "historyBearingPositions": 2,
+          "dominatingHypotheses": null,
+          "coDominatingHypotheses": null,
+          "intendedSupport": null,
+          "credibleSetSize": 1,
+          "actionableIntendedEdges": 1,
+          "strongIntendedEdges": 1,
+          "eliminationOnlyPositions": 0,
+          "hardVeto": false,
+          "softRegenerateOnce": false
+        }
+      },
+      "usage": {
+        "promptTokens": 1349,
+        "completionTokens": 28758,
+        "totalTokens": 30107,
+        "estimatedCostUsd": "0.005297850",
+        "providerReportedCostUsd": 0.005293242,
+        "effectiveCostUsd": 0.005293242,
+        "costSource": "provider_reported",
+        "latencyMs": 337436
+      }
+    },
+    {
+      "repeat": 1,
+      "caseId": "synthetic-opaque-negative-control",
+      "caseKind": "synthetic_non_research_negative_control",
+      "provenance": "Hand-authored opaque words (kettle/meridian/sable) evaluated against the Red fixture ledger. This was selected after the incident and is not held-out, history-independent research evidence, a false-positive estimate, or calibration. PASS is required only as a two-sided mechanism check against an always-veto auditor.",
+      "expectedOutcome": "pass",
+      "ledger": [
+        {
+          "number": 1,
+          "clues": [
+            "Aggregate"
+          ]
+        },
+        {
+          "number": 2,
+          "clues": []
+        },
+        {
+          "number": 3,
+          "clues": [
+            "Bengal"
+          ]
+        },
+        {
+          "number": 4,
+          "clues": [
+            "Firetruck"
+          ]
+        }
+      ],
+      "candidate": {
+        "clues": [
+          "kettle",
+          "meridian",
+          "sable"
+        ],
+        "intendedCode": [
+          1,
+          3,
+          4
+        ]
+      },
+      "instrument": {
+        "protocolVersion": "cross-round-referent-evidence@0.3-probe",
+        "policyId": "cross-round-referent-evidence-veto@2026-08-01",
+        "policyHash": "0dde8a93748fea551eb4ea79ae60e6a02733d65719d687a5f2ec4fb94e958be7",
+        "auditorPromptHash": "fe2b98f44292ddd2b212837340b58d7528f839a4babbc19b9b2ddec047e8c476",
+        "auditorBatchSize": 3
+      },
+      "route": {
+        "requested": {
+          "provider": "openrouter",
+          "model": "deepseek/deepseek-v4-flash-0731",
+          "upstream": "deepinfra",
+          "reasoningEffort": "xhigh",
+          "wireReasoningEffort": "max"
+        },
+        "resolved": {
+          "httpStatus": 200,
+          "requestId": null,
+          "generationId": "gen-1785644901-l3eXrUWwus8xT0Gb04yg",
+          "servedModel": "deepseek/deepseek-v4-flash-0731",
+          "upstreamProvider": "DeepInfra",
+          "requestedUpstream": "deepinfra",
+          "requestedReasoningEffort": "xhigh",
+          "wireReasoningEffort": "max",
+          "physicalAttempt": 1,
+          "finishReason": "stop",
+          "routing": {
+            "only": [
+              "deepinfra"
+            ],
+            "allowFallbacks": false,
+            "requireParameters": true,
+            "dataCollection": "deny"
+          },
+          "openRouter": {
+            "attempt": 1,
+            "strategy": "direct",
+            "selectedProvider": "DeepInfra",
+            "recordedAttemptCount": 0
+          },
+          "usage": {
+            "promptTokens": 1348,
+            "completionTokens": 45482,
+            "totalTokens": 46830,
+            "reasoningTokens": 38662,
+            "costUsd": 0.008303472
+          }
+        }
+      },
+      "audit": {
+        "status": "probe",
+        "auditedAt": "2026-08-02T04:37:50.239Z",
+        "historyMatches": [
+          {
+            "clueIndex": 1,
+            "clue": "kettle",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": "pot",
+                "publicClue": "Aggregate",
+                "strength": "weak"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 4,
+                "sharedReferent": "red",
+                "publicClue": "Firetruck",
+                "strength": "strong"
+              }
+            ]
+          },
+          {
+            "clueIndex": 2,
+            "clue": "meridian",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": "line",
+                "publicClue": "Bengal",
+                "strength": "weak"
+              },
+              {
+                "number": 4,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              }
+            ]
+          },
+          {
+            "clueIndex": 3,
+            "clue": "sable",
+            "historyMatches": [
+              {
+                "number": 1,
+                "sharedReferent": "black",
+                "publicClue": "Aggregate",
+                "strength": "weak"
+              },
+              {
+                "number": 2,
+                "sharedReferent": null,
+                "publicClue": null,
+                "strength": "none"
+              },
+              {
+                "number": 3,
+                "sharedReferent": "animal",
+                "publicClue": "Bengal",
+                "strength": "plausible"
+              },
+              {
+                "number": 4,
+                "sharedReferent": "color",
+                "publicClue": "Firetruck",
+                "strength": "weak"
+              }
+            ]
+          }
+        ],
+        "codeHypotheses": [
+          {
+            "code": [
+              4,
+              2,
+              3
+            ],
+            "support": "plausible",
+            "rationale": "kettle strongly matches slot 4 via red; sable plausibly matches slot 3 via animal; meridian is left to slot 2 by elimination."
+          },
+          {
+            "code": [
+              4,
+              3,
+              1
+            ],
+            "support": "weak",
+            "rationale": "kettle matches slot 4 strongly, but meridian-to-3 and sable-to-1 are weaker bridges."
+          },
+          {
+            "code": [
+              1,
+              2,
+              3
+            ],
+            "support": "weak",
+            "rationale": "kettle to slot 1 via pot is only weak; sable to slot 3 via animal is stronger; meridian is placed by elimination."
+          }
+        ],
+        "evaluation": {
+          "outcome": "pass",
+          "positions": [
+            {
+              "clue": "kettle",
+              "intendedNumber": 1,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "pot",
+              "intendedPublicClue": "Aggregate",
+              "intendedStrength": "weak",
+              "intendedHistoryEdge": false,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 1
+            },
+            {
+              "clue": "meridian",
+              "intendedNumber": 3,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "line",
+              "intendedPublicClue": "Bengal",
+              "intendedStrength": "weak",
+              "intendedHistoryEdge": false,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 1
+            },
+            {
+              "clue": "sable",
+              "intendedNumber": 4,
+              "columnHadHistory": true,
+              "intendedSharedReferent": "color",
+              "intendedPublicClue": "Firetruck",
+              "intendedStrength": "weak",
+              "intendedHistoryEdge": false,
+              "intendedStrongHistoryEdge": false,
+              "eliminationOnly": false,
+              "hypothesesOnIntendedSlot": 0
+            }
+          ],
+          "historyBearingPositions": 3,
+          "dominatingHypotheses": null,
+          "coDominatingHypotheses": null,
+          "intendedSupport": null,
+          "credibleSetSize": 3,
+          "actionableIntendedEdges": 0,
+          "strongIntendedEdges": 0,
+          "eliminationOnlyPositions": 0,
+          "hardVeto": false,
+          "softRegenerateOnce": false
+        }
+      },
+      "usage": {
+        "promptTokens": 1348,
+        "completionTokens": 45482,
+        "totalTokens": 46830,
+        "estimatedCostUsd": "0.008308080",
+        "providerReportedCostUsd": 0.008303472,
+        "effectiveCostUsd": 0.008303472,
+        "costSource": "provider_reported",
+        "latencyMs": 568535
+      }
+    }
+  ],
+  "summary": {
+    "redOutcomes": [
+      "hard_veto"
+    ],
+    "blueOutcomes": [
+      "pass"
+    ],
+    "controlOutcomes": [
+      "pass"
+    ],
+    "releaseBoundarySatisfied": false
+  },
+  "lineage": {
+    "runner": {
+      "runnerVersion": "herpetarium-cross-round-fixture-canary-runner@0.1",
+      "runnerSourceHash": "25c909ee9048f8ff98d6460c6888f156b968416fb10d3e56cf1949a168d9de44",
+      "gitCommitSha": null
+    },
+    "fixtureInputHash": "5bfd4ff432ab1c6c76fb4be5790e1ea7dc5b05d5180ae719b84424d76ead5e73",
+    "reportContentHash": "98b8f0c555be673e2186548f5002b0a69f69dde8a9348dd16430cd4059864eae"
+  }
+}

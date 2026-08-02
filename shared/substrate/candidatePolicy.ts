@@ -9,8 +9,33 @@
  */
 import { contentHash } from "./hash";
 
+/**
+ * 0.3.0, 2026-08-01. A TREATMENT-IDENTITY change, not a paraphrase: results
+ * measured under 0.1.0 or 0.2.0 may not be pooled with results measured under
+ * this id.
+ *
+ * 0.2.0 fixed the verb — item 4 was the only check whose verb was not a
+ * rejection, and the mandatory final sweep re-ran item 2 alone, so an actor
+ * could satisfy the policy in full and still ship the 2026-08-01 leak.
+ *
+ * 0.3.0 fixes something worse that 0.2.0 introduced: a TAUTOLOGY. Item 4 read
+ * "if both are natural clues for the same hidden keyword, an opponent can
+ * match them". By construction that is true of EVERY legitimate reuse of a
+ * slot — both clues really do target the same keyword, always — so the rule
+ * as written rejected every candidate for every previously-clued number and
+ * made cluegiving after round 1 impossible. A rule that cannot be satisfied
+ * is not a safety rule; it is a denial of service that an actor must either
+ * ignore or deadlock on.
+ *
+ * The test is BLIND PUBLIC DISCOVERABILITY, not shared private truth: hide
+ * your keywords and the code, and ask what a capable opponent could do with
+ * the candidate plus the exact old public clue and nothing else. Sharing a
+ * hidden parent is necessary but nowhere near sufficient; what matters is
+ * whether the route between the two public words is one an opponent would
+ * readily propose.
+ */
 export const CIPHER_ENCRYPT_CANDIDATE_POLICY_ID =
-  "within-call-blind-inversion-selection@0.1.0";
+  "within-call-blind-inversion-selection@0.3.0";
 
 export const CIPHER_ENCRYPT_CANDIDATE_POLICY = [
   "Candidate selection is mandatory; do not jump from keyword to final clue.",
@@ -25,13 +50,27 @@ export const CIPHER_ENCRYPT_CANDIDATE_POLICY = [
   "definition is the obvious reconstruction, reject the candidate.",
   "3. Cross-keyword ambiguity: reject a candidate that points comparably to",
   "another one of your four keywords.",
-  "4. History exposure: compare resolved clue-to-number history. Penalize an",
-  "association family that lets opponents match this clue to an established",
-  "number pattern.",
+  "4. History exposure — a BLIND test, not a private one. Read your public",
+  "column ledger: your resolved clues filed under the number each one encoded,",
+  "which the opposing team also holds. For each candidate, take it together",
+  "with each exact clue already public under the number it would encode, hide",
+  "your keywords and the code, and ask what an opponent could do with just",
+  "those two public words. Reject the candidate if a capable opponent would",
+  "readily propose one salient ordinary shared referent or route linking them,",
+  "or would place the candidate into that column on that basis. Changing the",
+  "surface word while keeping an obvious route does not clear this.",
+  "The fact that both clues really do point at the same hidden keyword is NOT",
+  "by itself a reason to reject — that is true of every clue you will ever",
+  "write for a number you have clued before, so it cannot be the test. What",
+  "disqualifies a candidate is a publicly findable route, not a privately",
+  "shared target. A genuinely different route to the same keyword, with no",
+  "salient public bridge to the old clue, is exactly what you are looking for.",
   "Choose the candidate with the best teammate-clarity / opponent-opacity",
-  "tradeoff, not merely the clearest association. Then repeat the blind",
-  "inversion test on the final three clues together; replace any clue that",
-  "still gives away its target from public language alone.",
+  "tradeoff, not merely the clearest association. Then repeat BOTH the blind",
+  "inversion test and the blind history-exposure test on the final three clues",
+  "together; replace any clue that still gives away its target from public",
+  "language alone, or whose route from an established column's public clue an",
+  "opponent would readily find.",
   "Return only the final action envelope. Keep candidates, scores, simulated",
   "reads, and private reasoning out of the response.",
 ].join(" ");

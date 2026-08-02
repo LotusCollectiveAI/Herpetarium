@@ -254,13 +254,37 @@ export function estimateCost(
   return total.toFixed(6);
 }
 
-interface RawAIResponse {
+export interface RawAIResponse {
   text: string;
   reasoningTrace?: string;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
   providerMetadata?: Record<string, unknown>;
+}
+
+/**
+ * Return the provider response that was received before an exact-route
+ * validation error was raised.
+ *
+ * A route/model/upstream/finish mismatch makes a strict research call invalid,
+ * but it does not make the already-received assistant text disappear. Keeping
+ * this receipt on the error lets the experiment runner persist the exact
+ * visible response and usage without treating it as a valid draw.
+ */
+export function providerResponseReceiptFromError(
+  error: unknown,
+): RawAIResponse | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const receipt = (error as { providerResponseReceipt?: unknown })
+    .providerResponseReceipt;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    return undefined;
+  }
+  const candidate = receipt as Partial<RawAIResponse>;
+  return typeof candidate.text === "string"
+    ? (candidate as RawAIResponse)
+    : undefined;
 }
 
 async function callOpenAI(
@@ -555,6 +579,22 @@ function withProviderMetadata(
   return error;
 }
 
+function withProviderResponseReceipt(
+  error: Error,
+  response: RawAIResponse,
+): Error {
+  // Keep the potentially large/private assistant text out of generic Error
+  // serialization. Research callers recover it only through the explicit
+  // helper above.
+  Object.defineProperty(error, "providerResponseReceipt", {
+    value: response,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return error;
+}
+
 function providerMetadataFromError(
   error: unknown,
 ): Record<string, unknown> | undefined {
@@ -772,22 +812,36 @@ async function callOpenRouter(
           }
         : null,
     };
+    const providerResponseReceipt: RawAIResponse = {
+      text: content,
+      reasoningTrace: reasoningContent || undefined,
+      promptTokens: data.usage?.prompt_tokens,
+      completionTokens: data.usage?.completion_tokens,
+      totalTokens: data.usage?.total_tokens,
+      providerMetadata,
+    };
 
     if (config.model === DEEPSEEK_V4_FLASH_0731) {
       if (data.model !== DEEPSEEK_V4_FLASH_0731) {
-        throw withProviderMetadata(
-          new Error(
-            `OpenRouter served model ${String(data.model)} instead of ${DEEPSEEK_V4_FLASH_0731}`,
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter served model ${String(data.model)} instead of ${DEEPSEEK_V4_FLASH_0731}`,
+            ),
+            providerMetadata,
           ),
-          providerMetadata,
+          providerResponseReceipt,
         );
       }
       if (data.provider !== DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY) {
-        throw withProviderMetadata(
-          new Error(
-            `OpenRouter served provider ${String(data.provider)} instead of ${DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY}`,
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter served provider ${String(data.provider)} instead of ${DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY}`,
+            ),
+            providerMetadata,
           ),
-          providerMetadata,
+          providerResponseReceipt,
         );
       }
       const routerMetadata =
@@ -816,19 +870,25 @@ async function callOpenRouter(
         selectedEndpoints[0]?.provider !==
           DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY
       ) {
-        throw withProviderMetadata(
-          new Error(
-            "OpenRouter route proof did not show exactly one successful DeepInfra attempt",
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              "OpenRouter route proof did not show exactly one successful DeepInfra attempt",
+            ),
+            providerMetadata,
           ),
-          providerMetadata,
+          providerResponseReceipt,
         );
       }
       if (finishReason !== "stop") {
-        throw withProviderMetadata(
-          new Error(
-            `OpenRouter DeepSeek call ended with ${String(finishReason)} instead of stop`,
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter DeepSeek call ended with ${String(finishReason)} instead of stop`,
+            ),
+            providerMetadata,
           ),
-          providerMetadata,
+          providerResponseReceipt,
         );
       }
     }
@@ -839,14 +899,7 @@ async function callOpenRouter(
       error: null,
     });
 
-    return {
-      text: content,
-      reasoningTrace: reasoningContent || undefined,
-      promptTokens: data.usage?.prompt_tokens,
-      completionTokens: data.usage?.completion_tokens,
-      totalTokens: data.usage?.total_tokens,
-      providerMetadata,
-    };
+    return providerResponseReceipt;
   } catch (error) {
     const providerMetadata =
       providerMetadataFromError(error) ?? requestMetadata;
@@ -888,7 +941,7 @@ async function callOpenRouter(
         ),
       });
     } catch (telemetryError) {
-      throw withProviderMetadata(
+      const telemetryFailure = withProviderMetadata(
         new Error(
           `OpenRouter provider-attempt telemetry failed: ${
             telemetryError instanceof Error
@@ -898,6 +951,10 @@ async function callOpenRouter(
         ),
         providerMetadata,
       );
+      const receivedResponse = providerResponseReceiptFromError(error);
+      throw receivedResponse
+        ? withProviderResponseReceipt(telemetryFailure, receivedResponse)
+        : telemetryFailure;
     }
 
     throw surfacedError;

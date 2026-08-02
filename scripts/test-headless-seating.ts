@@ -32,7 +32,7 @@ import { getPromptStrategy } from "../server/promptStrategies";
 
 const EXACT_MODEL = "deepseek/deepseek-v4-flash-0731";
 const EXPECTED_MODEL_DEFAULTS = {
-  timeoutMs: 900_000,
+  timeoutMs: 45 * 60 * 1000,
   promptStrategy: "advanced",
   reasoningEffort: "xhigh",
 } as const;

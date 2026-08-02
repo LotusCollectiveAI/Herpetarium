@@ -13,7 +13,15 @@
     "test:strict-execution": "tsx scripts/test-strict-execution.ts",
     "test:strict-provider-attempts": "tsx scripts/test-provider-attempt-lifecycle.ts",
     "test:headless-lineage": "tsx scripts/test-headless-lineage.ts",
-    "db:push": "drizzle-kit push"
+    "test:cross-round-probe": "tsx scripts/test-cross-round-probe.ts",
+    "probe:cross-round": "tsx scripts/run-cross-round-probe.ts",
+    "test:cross-round-fixture-canary": "tsx scripts/test-cross-round-fixture-canary.ts",
+    "canary:cross-round": "tsx scripts/run-cross-round-fixture-canary.ts",
+    "experiment:cross-round-v03-repeat": "tsx scripts/run-cross-round-repeat-experiment.ts",
+    "db:push": "drizzle-kit push",
+    "test:cluegiver-ledger": "tsx scripts/test-cluegiver-column-ledger.ts",
+    "test:cross-round-v03-postmortem": "tsx scripts/test-cross-round-v03-postmortem.ts",
+    "test:cross-round-v03-repeat": "tsx scripts/test-cross-round-repeat-experiment.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
