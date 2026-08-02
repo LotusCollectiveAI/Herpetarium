@@ -2,7 +2,7 @@
 
 **Status:** shared contracts implemented (v0.5.0, 2026-08-01); runtime adoption is partial — `shared/substrate/` here, vendored twin at `the-table-handoff/lib/decrypto-substrate/src/`.
 **Motivation:** `docs/DECRYPTO_TRANSFER_DIAGNOSTIC_2026-08-01.md` — no artifact boundary existed between research and product; this is that boundary.
-**Validation today:** `npx tsx scripts/substrate-conformance.ts` (61 deterministic checks, runs against either copy), `scripts/substrate-parity.sh` (byte parity), `npm run check` / `pnpm -w run typecheck`, and `npm run test:cross-round-probe`.
+**Validation today:** `npx tsx scripts/substrate-conformance.ts` (deterministic checks, runs against either copy), `scripts/substrate-parity.sh <explicit-table-checkout>` (byte parity), `npm run check` / `pnpm -w run typecheck`, and `npm run test:cross-round-probe`.
 
 ## 1. What it is
 
@@ -21,7 +21,7 @@ A dependency-free TypeScript vocabulary both applications compile against, defin
 | Model identity | `modelRef.ts` | Pinned `ModelRef` (provider, canonical slug, pinned upstream, alias epoch); `KNOWN_ALIAS_MUTATIONS` ledger (entry #1: DeepSeek `deepseek-v4-flash` → 0731 on 2026-07-31); the two sanctioned DeepSeek lanes (dated OpenRouter slug + upstream pin as canonical treatment; direct alias as provenance canary) |
 | Trace envelope | `trace.ts` | Target contract for one record per model decision: artifact id+hash, requested AND served model, observation/prompt hashes, outcome, usage. `responseText` is provider-visible text only. Dialogue may be referenced by `transcriptRef` and carried inline only under an `operator_research` export stamp. Runtime projection/export/ingestion is not wired yet, and actor-vs-system-auditor plus artifact-validation semantics must be frozen first. |
 | Goldens | `fixtures.ts` | First named artifacts (`sensory-anchor@0.1.0`, `intermediate-hops@0.1.0`, minted verbatim from P4-D seeds, provenance marked unvalidated); the 20610f90 baseline game (six rule-legal definition clues, all intercepted — the bar every promoted artifact must beat); the 2026-08-01 blind-inversion **live probe** (all six recovered blind at .60–.99, $0.000155/4.8s) and **calibration probe** (30 clues: 5/6 baseline flagged at 0.60 with FACTORY the known miss at rank 2/conf .35; 24 proxy controls: 1 flagged, 8 recovered; $0.003187/133s — both explicitly probes, not validated benchmarks); the **provisional veto policy** (hard veto = confidence or definition branch at 0.60; soft regenerate-once = rank-1 recovery or definition-shaped recovery; recovery-anywhere is never a veto — 8/24 good clues were blind-recoverable); expected hashes |
-| Conformance | `conformance.ts` | 61 pure checks, including exact candidate-treatment hash/composition, authoritative event provenance for both human interceptions, the runtime-enforcement interlock, both Red and Blue production leak regressions, shared parser acceptance, malformed-input rejection, tie handling, and both inversion-policy vectors; same goldens in both copies ⇒ passing twice proves behavioral parity |
+| Conformance | `conformance.ts` | Pure deterministic checks, including exact candidate-treatment hash/composition, authoritative event provenance for both human interceptions, the runtime-enforcement interlock, both Red and Blue production leak regressions, shared parser acceptance, malformed-input rejection, tie handling, and both inversion-policy vectors; same goldens in both copies ⇒ passing twice proves behavioral parity |
 
 ## 2. The loop it is designed to enable
 
