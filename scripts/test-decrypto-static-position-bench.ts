@@ -38,17 +38,26 @@ try {
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
     JOINT_ASSIGNMENT_DECODER_POLICY_HASH,
     JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
+    contentHash,
+    sha256Hex,
+    solveGlobalInjectiveAssignment,
+    validateJointAssignmentAction,
+  } = substrate;
+  const experimentPolicies = await import(
+    "./lib/decrypto-static-decoder-policies"
+  );
+  const {
+    PAIRED_DECODER_POLICY_ACTION_CONTRACT,
     PAIRED_DECODER_POLICY_COMPILER_HASH,
-    PAIRED_DECODER_POLICY_SECTION_HEADING,
+    PAIRED_DECODER_POLICY_COMPILER_ID,
+    PAIRED_DECODER_POLICY_SECTION_HEADINGS,
     TABLE_GREEDY_DECODER_POLICY_ARTIFACT,
     TABLE_GREEDY_DECODER_POLICY_HASH,
     TABLE_GREEDY_DECODER_STRATEGY_EXCERPT,
     compilePairedDecoderPolicyPrompt,
-    contentHash,
-    solveGlobalInjectiveAssignment,
-    validateJointAssignmentAction,
     verifyCompiledPairedDecoderPolicyPrompt,
-  } = substrate;
+  } = experimentPolicies;
   const bench = await import("./run-decrypto-static-position-bench");
   equal(
     process.env.DATABASE_URL,
@@ -84,11 +93,16 @@ try {
   );
   equal(
     PAIRED_DECODER_POLICY_COMPILER_HASH,
-    "80b26737fbbc284810bcb65a5ee18a203d1901beb2001a3405083d3f968f18d8",
+    "3e81778bde358e93cc40979aa5b696c4fbcd9ec9e153aaea21d236c73ab40b0d",
     "neutral paired compiler identity is pinned",
   );
   equal(
-    PAIRED_DECODER_POLICY_SECTION_HEADING,
+    PAIRED_DECODER_POLICY_COMPILER_ID,
+    "paired-decoder-policy-compiler@0.2.0",
+    "experiment compiler is versioned independently of shared substrate",
+  );
+  equal(
+    PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
     "## Operative decoder policy",
     "provider-visible policy heading is pinned to neutral text",
   );
@@ -127,13 +141,26 @@ try {
   );
   equal(fixture.positions.length, 4, "fixture has exactly four positions");
   equal(
-    fixture.source.artifactSha256,
+    fixture.source.uncommittedSourceArtifactSha256,
     "54f1f34c61246b5a4042a86a276ea51587ddfccd7023f2239492e512a8f8d9ff",
-    "fixture provenance pins the successful all-bot source artifact",
+    "fixture provenance records the successful all-bot source artifact hash",
+  );
+  deepEqual(
+    {
+      availability: fixture.source.sourceArtifactAvailability,
+      dependency: fixture.source.sourceArtifactDependency,
+      reconstructionAuthority: fixture.source.reconstructionAuthority,
+    },
+    {
+      availability: "uncommitted_provenance_only",
+      dependency: "none",
+      reconstructionAuthority: "content_hashed_sanitized_fixture",
+    },
+    "fixture truthfully treats the uncommitted source as provenance, never a runtime dependency",
   );
   equal(
     fixture.contentHash,
-    "7ecb16898bd6607f2583479999d7541ac378e0b3d489cfdda4f3a01c3262c865",
+    "a0f8c89ca38ea3e020d3abaf2a7942a8e45faf56243cd4f42777dc6d8c4c1134",
     "fixture identity remains pinned",
   );
   equal(
@@ -248,14 +275,16 @@ try {
     "both arms receive byte-identical action contracts",
   );
   equal(
-    greedyPrompt.taskPrompt.split(PAIRED_DECODER_POLICY_SECTION_HEADING)
-      .length - 1,
+    greedyPrompt.taskPrompt.split(
+      PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
+    ).length - 1,
     1,
     "greedy prompt has exactly one neutral carrier heading",
   );
   equal(
-    jointPrompt.taskPrompt.split(PAIRED_DECODER_POLICY_SECTION_HEADING)
-      .length - 1,
+    jointPrompt.taskPrompt.split(
+      PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
+    ).length - 1,
     1,
     "joint prompt has exactly one neutral carrier heading",
   );
@@ -270,6 +299,26 @@ try {
       neutralPolicyText,
     ),
     "all provider-visible task bytes outside policy text are identical",
+  );
+  for (const prompt of [greedyPrompt, jointPrompt]) {
+    const providerVisibleHeadings = prompt.taskPrompt
+      .split("\n")
+      .filter((line) => line.startsWith("## "));
+    ok(
+      providerVisibleHeadings.every(
+        (heading) =>
+          !heading.includes("@") &&
+          !/\b[0-9a-f]{32,}\b/i.test(heading),
+      ),
+      "provider-visible headings expose no artifact ids or hashes",
+    );
+  }
+  ok(
+    greedyPrompt.actionContract ===
+      PAIRED_DECODER_POLICY_ACTION_CONTRACT &&
+      jointPrompt.actionContract ===
+        PAIRED_DECODER_POLICY_ACTION_CONTRACT,
+    "both arms use the local experiment contract validated by the canonical action validator",
   );
   const providerVisiblePrompts = [
     greedyPrompt.systemPrompt,
@@ -287,6 +336,8 @@ try {
       .substrateIntegrationCommit,
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.id,
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.contentHash,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
     "table_greedy",
     "joint_assignment",
     "treatment",
@@ -489,7 +540,7 @@ try {
   );
   equal(
     firstPreregistration.preregistrationContentHash,
-    "54cd950b8021fa8e06f0f5769633e7faa365f62f6092b5b9c5099d206b805e2c",
+    "19706b719f0f0a4837c7dbad2fa405744c89fbb8c4b2112d6fda44d0659dd0f3",
     "preregistration identity remains pinned",
   );
   equal(
@@ -551,9 +602,9 @@ try {
   deepEqual(
     firstPreregistration.compiler,
     {
-      id: "paired-decoder-policy-compiler@0.1.0",
+      id: "paired-decoder-policy-compiler@0.2.0",
       contentHash:
-        "80b26737fbbc284810bcb65a5ee18a203d1901beb2001a3405083d3f968f18d8",
+        "3e81778bde358e93cc40979aa5b696c4fbcd9ec9e153aaea21d236c73ab40b0d",
       kind: "neutral_experiment_only",
       productionCompilerParity: "not_claimed",
     },
@@ -584,6 +635,25 @@ try {
     firstPreregistration.fixture.sourceCluegiverArmsByPosition,
     ["treatment", "control", "treatment", "control"],
     "preregistration preserves neutral source cluegiver arms by position",
+  );
+  deepEqual(
+    {
+      sha256:
+        firstPreregistration.fixture.uncommittedSourceArtifactSha256,
+      availability:
+        firstPreregistration.fixture.sourceArtifactAvailability,
+      dependency: firstPreregistration.fixture.sourceArtifactDependency,
+      reconstructionAuthority:
+        firstPreregistration.fixture.reconstructionAuthority,
+    },
+    {
+      sha256:
+        "54f1f34c61246b5a4042a86a276ea51587ddfccd7023f2239492e512a8f8d9ff",
+      availability: "uncommitted_provenance_only",
+      dependency: "none",
+      reconstructionAuthority: "content_hashed_sanitized_fixture",
+    },
+    "preregistration carries truthful self-contained fixture provenance",
   );
   deepEqual(
     firstPreregistration.claims,
@@ -637,6 +707,53 @@ try {
       runnerSource,
     ),
     "runner source has no provider or headless dispatch call",
+  );
+  ok(
+    !runnerSource.includes("/private/tmp") &&
+      !runnerSource.includes("herp-decrypto-ab-canary"),
+    "runner has no private temporary source-artifact dependency",
+  );
+  const experimentPolicySource = await readFile(
+    new URL(
+      "./lib/decrypto-static-decoder-policies.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  ok(
+    !/\bcompileJointAssignmentDecoderPrompt\s*\(/.test(
+      experimentPolicySource,
+    ) &&
+      !/\b(?:buildColumnLedger|renderComparisonTargets|ACTION_CONTRACTS)\b/.test(
+        experimentPolicySource,
+      ),
+    "experiment compiler neither invokes production compilation nor duplicates its private helpers",
+  );
+  const canonicalJointSource = await readFile(
+    new URL(
+      "../shared/substrate/jointAssignmentDecoder.ts",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  const canonicalIndexSource = await readFile(
+    new URL("../shared/substrate/index.ts", import.meta.url),
+    "utf8",
+  );
+  equal(
+    sha256Hex(canonicalJointSource),
+    "d12e079c4dd9fd8e770ec51c74508b7f477d3f32cd4b8aa46ff4ec045517e63e",
+    "jointAssignmentDecoder remains byte-identical to both canonical twins",
+  );
+  equal(
+    sha256Hex(canonicalIndexSource),
+    "aaf9f9aa63a5b8921de30aefcd1c708d47e417021243fe32b1efb82585692b93",
+    "shared substrate index remains byte-identical to both canonical twins",
+  );
+  ok(
+    !canonicalJointSource.includes("PAIRED_DECODER_POLICY") &&
+      !canonicalIndexSource.includes("PAIRED_DECODER_POLICY"),
+    "experiment-only paired compiler does not enter canonical shared substrate",
   );
   equal(
     providerInvocations,

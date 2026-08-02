@@ -1,7 +1,10 @@
 {
-  "fixtureVersion": "decrypto-static-decoder-positions@0.1.0",
+  "fixtureVersion": "decrypto-static-decoder-positions@0.2.0",
   "source": {
-    "artifactSha256": "54f1f34c61246b5a4042a86a276ea51587ddfccd7023f2239492e512a8f8d9ff",
+    "uncommittedSourceArtifactSha256": "54f1f34c61246b5a4042a86a276ea51587ddfccd7023f2239492e512a8f8d9ff",
+    "sourceArtifactAvailability": "uncommitted_provenance_only",
+    "sourceArtifactDependency": "none",
+    "reconstructionAuthority": "content_hashed_sanitized_fixture",
     "allBot": true,
     "noHumanSource": true
   },
@@ -102,5 +105,5 @@
       }
     }
   ],
-  "contentHash": "7ecb16898bd6607f2583479999d7541ac378e0b3d489cfdda4f3a01c3262c865"
+  "contentHash": "a0f8c89ca38ea3e020d3abaf2a7942a8e45faf56243cd4f42777dc6d8c4c1134"
 }

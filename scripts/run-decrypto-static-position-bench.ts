@@ -14,29 +14,33 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
-  PAIRED_DECODER_POLICY_COMPILER_HASH,
-  PAIRED_DECODER_POLICY_COMPILER_ID,
-  PAIRED_DECODER_POLICY_SECTION_HEADING,
-  TABLE_GREEDY_DECODER_POLICY_ARTIFACT,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
   cloneAndDeepFreeze,
-  compilePairedDecoderPolicyPrompt,
   contentHash,
   exactKeys,
   mintObservationV2,
   sha256Hex,
   tableCompetitiveIdentitySet,
   validateJointAssignmentAction,
-  verifyCompiledPairedDecoderPolicyPrompt,
   verifyObservationV2,
   type CodeTriple,
   type DecryptoObservationV2,
-  type PairedDecoderPolicyCarrier,
 } from "@shared/substrate";
+import {
+  PAIRED_DECODER_POLICY_COMPILER_HASH,
+  PAIRED_DECODER_POLICY_COMPILER_ID,
+  PAIRED_DECODER_POLICY_SECTION_HEADINGS,
+  TABLE_GREEDY_DECODER_POLICY_ARTIFACT,
+  compilePairedDecoderPolicyPrompt,
+  verifyCompiledPairedDecoderPolicyPrompt,
+  type PairedDecoderPolicyCarrier,
+} from "./lib/decrypto-static-decoder-policies";
 
 export const STATIC_POSITION_FIXTURE_VERSION =
-  "decrypto-static-decoder-positions@0.1.0";
+  "decrypto-static-decoder-positions@0.2.0";
 export const STATIC_POSITION_PREREGISTRATION_VERSION =
-  "decrypto-static-decoder-preregistration@0.1.0";
+  "decrypto-static-decoder-preregistration@0.2.0";
 export const STATIC_POSITION_BENCH_BASE_COMMIT =
   "72b622e79baf0e23a5633f2b243b0c9b82d90ca6";
 export const STATIC_POSITION_COUNT = 4;
@@ -76,7 +80,7 @@ export const STATIC_POSITION_CLAIMS = cloneAndDeepFreeze({
 
 const DEFAULT_FIXTURE_PATH = fileURLToPath(
   new URL(
-    "./fixtures/decrypto-static-decoder-positions-v0.1.json",
+    "./fixtures/decrypto-static-decoder-positions-v0.2.json",
     import.meta.url,
   ),
 );
@@ -125,8 +129,17 @@ export interface SanitizedDecoderPosition {
 
 export interface SanitizedStaticPositionFixtureSource {
   readonly fixtureVersion: typeof STATIC_POSITION_FIXTURE_VERSION;
+  /**
+   * The source match artifact was an uncommitted operator artifact and is not
+   * a repository dependency. Its SHA is retained as provenance only. This
+   * content-hashed repository fixture is the complete reconstruction authority
+   * consumed by the benchmark.
+   */
   readonly source: {
-    readonly artifactSha256: string;
+    readonly uncommittedSourceArtifactSha256: string;
+    readonly sourceArtifactAvailability: "uncommitted_provenance_only";
+    readonly sourceArtifactDependency: "none";
+    readonly reconstructionAuthority: "content_hashed_sanitized_fixture";
     readonly allBot: true;
     readonly noHumanSource: true;
   };
@@ -156,7 +169,7 @@ const STATIC_BENCH_ARMS: readonly StaticBenchArm[] = Object.freeze([
 ]);
 
 const NEUTRAL_BOT_BUILD_SOURCE = {
-  id: "static-decoder-policy-bench@0.1.0",
+  id: "static-decoder-policy-bench@0.2.0",
   scope: "provider-free-decoder-mechanism",
   compiler: {
     id: PAIRED_DECODER_POLICY_COMPILER_ID,
@@ -515,7 +528,14 @@ export function validateSanitizedStaticPositionFixture(
     ),
     ...exactKeys(
       source,
-      ["artifactSha256", "allBot", "noHumanSource"],
+      [
+        "uncommittedSourceArtifactSha256",
+        "sourceArtifactAvailability",
+        "sourceArtifactDependency",
+        "reconstructionAuthority",
+        "allBot",
+        "noHumanSource",
+      ],
       "fixture.source",
     ),
     ...evidenceLimitationsProblems(fixture?.evidenceLimitations),
@@ -527,10 +547,23 @@ export function validateSanitizedStaticPositionFixture(
     );
   }
   if (
-    typeof source?.artifactSha256 !== "string" ||
-    !SHA256_PATTERN.test(source.artifactSha256)
+    typeof source?.uncommittedSourceArtifactSha256 !== "string" ||
+    !SHA256_PATTERN.test(source.uncommittedSourceArtifactSha256)
   ) {
-    problems.push("fixture.source.artifactSha256 must be lowercase sha-256");
+    problems.push(
+      "fixture.source.uncommittedSourceArtifactSha256 must be lowercase sha-256",
+    );
+  }
+  if (
+    source?.sourceArtifactAvailability !==
+      "uncommitted_provenance_only" ||
+    source?.sourceArtifactDependency !== "none" ||
+    source?.reconstructionAuthority !==
+      "content_hashed_sanitized_fixture"
+  ) {
+    problems.push(
+      "fixture must truthfully record the uncommitted source as provenance-only with no runtime dependency",
+    );
   }
   if (source?.allBot !== true || source?.noHumanSource !== true) {
     problems.push(
@@ -764,7 +797,10 @@ export interface StaticPositionPreregistration {
   readonly fixture: {
     readonly version: typeof STATIC_POSITION_FIXTURE_VERSION;
     readonly contentHash: string;
-    readonly sourceArtifactSha256: string;
+    readonly uncommittedSourceArtifactSha256: string;
+    readonly sourceArtifactAvailability: "uncommitted_provenance_only";
+    readonly sourceArtifactDependency: "none";
+    readonly reconstructionAuthority: "content_hashed_sanitized_fixture";
     readonly allBot: true;
     readonly noHumanSource: true;
     readonly positionCount: typeof STATIC_POSITION_COUNT;
@@ -830,11 +866,24 @@ function assertNeutralProviderVisiblePolicyCarrier(
   },
 ): void {
   const headingOccurrences =
-    compiled.taskPrompt.split(PAIRED_DECODER_POLICY_SECTION_HEADING).length -
-    1;
+    compiled.taskPrompt.split(
+      PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
+    ).length - 1;
   if (headingOccurrences !== 1) {
     throw new Error(
       "provider-visible task must contain exactly one neutral policy heading",
+    );
+  }
+  const providerVisibleHeadings = compiled.taskPrompt
+    .split("\n")
+    .filter((line) => line.startsWith("## "));
+  const identityBearingHeading = providerVisibleHeadings.find(
+    (heading) =>
+      heading.includes("@") || /\b[0-9a-f]{32,}\b/i.test(heading),
+  );
+  if (identityBearingHeading) {
+    throw new Error(
+      `provider-visible heading exposes artifact identity "${identityBearingHeading}"`,
     );
   }
   const providerVisibleBytes = [
@@ -850,6 +899,8 @@ function assertNeutralProviderVisiblePolicyCarrier(
       .substrateIntegrationCommit,
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.id,
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.contentHash,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
     "table_greedy",
     "joint_assignment",
     "treatment",
@@ -976,7 +1027,12 @@ export function buildStaticPositionPreregistration(
     fixture: {
       version: fixture.fixtureVersion,
       contentHash: fixture.contentHash,
-      sourceArtifactSha256: fixture.source.artifactSha256,
+      uncommittedSourceArtifactSha256:
+        fixture.source.uncommittedSourceArtifactSha256,
+      sourceArtifactAvailability:
+        fixture.source.sourceArtifactAvailability,
+      sourceArtifactDependency: fixture.source.sourceArtifactDependency,
+      reconstructionAuthority: fixture.source.reconstructionAuthority,
       allBot: fixture.source.allBot,
       noHumanSource: fixture.source.noHumanSource,
       positionCount: STATIC_POSITION_COUNT,
