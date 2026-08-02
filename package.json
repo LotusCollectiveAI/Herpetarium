@@ -12,6 +12,7 @@
     "test:strict-failure-truth": "tsx scripts/test-strict-failure-truth.ts",
     "test:strict-execution": "tsx scripts/test-strict-execution.ts",
     "test:strict-provider-attempts": "tsx scripts/test-provider-attempt-lifecycle.ts",
+    "test:guess-legality": "tsx scripts/test-guess-legality-fail-closed.ts",
     "test:headless-lineage": "tsx scripts/test-headless-lineage.ts",
     "test:cross-round-probe": "tsx scripts/test-cross-round-probe.ts",
     "probe:cross-round": "tsx scripts/run-cross-round-probe.ts",

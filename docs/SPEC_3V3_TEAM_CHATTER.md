@@ -200,9 +200,9 @@ Rules:
 - **Both players must signal READY for deliberation to end.** If Player A signals READY but Player B disagrees, discussion continues. Player A may revise their READY signal in a subsequent message.
 - The **last READY signal** from each player is the one that counts. Players can change their mind.
 - When both players have signaled READY with the **same answer**, deliberation ends immediately.
-- When both players have signaled READY with **different answers**, discussion continues -- they may revise their READY signals in subsequent messages. If they still disagree after 2 additional exchanges, the answer from the **last player to signal READY** is used (recency = conviction).
+- When both players have signaled READY with **different answers**, discussion continues -- they may revise their READY signals in subsequent messages.
 - Maximum **10 exchange rounds** (20 total messages: 10 per player) as a safety cap. This is a ceiling, not a target. Models naturally self-terminate much sooner.
-- If the safety cap is hit without consensus, the most recent READY signal from either player is used. If no READY signal exists at all, fall back to `[1, 2, 3]`.
+- If the safety cap is hit without consensus, the deliberation fails and no guess or interception is applied. Timeout, provider error, malformed numeric READY triples, and parser fallbacks likewise fail closed without a retry or replacement action.
 
 ### 5.2 Turn structure
 
@@ -216,14 +216,25 @@ The order of Player A / Player B is determined by player array order within the 
 
 ### 5.3 READY signal parsing
 
-Extract READY signals with:
+Extract the first numeric READY candidate from prose or Markdown, then validate
+the returned triple through the shared code-action boundary before accepting
+it:
 ```typescript
-function parseReadySignal(content: string): [number, number, number] | null {
-  const match = content.match(/READY:\s*([1-4])\s*,\s*([1-4])\s*,\s*([1-4])/i);
-  if (!match) return null;
-  return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
+function parseReadyCodeSignal(content: string) {
+  const match = content.match(
+    /\bREADY:\s*([+-]?\d+)\s*,\s*([+-]?\d+)\s*,\s*([+-]?\d+)(?=$|[\s.!?;:)\]}>*—-])/i,
+  );
+  if (!match) return { present: false, candidate: null };
+  return {
+    present: true,
+    candidate: [Number(match[1]), Number(match[2]), Number(match[3])],
+  };
 }
 ```
+
+Nonnumeric or incomplete READY mentions are not fabricated into actions.
+Numeric candidates remain subject to the same distinct-digits-in-1..4
+validation as ordinary guesses and interceptions.
 
 ---
 
@@ -582,10 +593,23 @@ async function processDeliberation(
       const raw = await callAI(config, systemPrompt, prompt);
       const latencyMs = Date.now() - startTime;
 
-      // Parse READY signal if present
-      const readySignal = parseReadySignal(raw.text);
+      // Extract a numeric READY candidate, then apply the same fail-closed
+      // legality boundary used by ordinary guesses and interceptions.
+      const readyAttempt = parseReadyCodeSignal(raw.text);
+      const readySignal = readyAttempt.present
+        ? readyAttempt.candidate
+        : null;
       if (readySignal) {
-        readySignals.set(currentPlayer.id, readySignal);
+        const problems = validateCodeGuess(readySignal);
+        if (problems.length > 0) {
+          throw new Error(
+            `Invalid READY action; no retry or replacement: ${problems.join("; ")}`,
+          );
+        }
+        readySignals.set(
+          currentPlayer.id,
+          readySignal as [number, number, number],
+        );
       }
 
       const message: ChatterMessage = {
@@ -638,16 +662,11 @@ async function processDeliberation(
     }
   }
 
-  // Safety cap reached -- extract best answer
-  // Priority: last READY signal from either player, or fallback
-  const lastReady = [...readySignals.values()].pop() || [1, 2, 3] as [number, number, number];
-
-  return {
-    answer: lastReady,
-    messages,
-    totalExchanges: MAX_EXCHANGES,
-    consensusReached: false,
-  };
+  // Safety cap reached without two matching legal READY signals.
+  // Preserve the call/message telemetry, but never synthesize or apply a code.
+  throw new Error(
+    "Deliberation exhausted without consensus; no retry or replacement action",
+  );
 }
 ```
 
@@ -1150,8 +1169,8 @@ Not built now, but a natural addition: forces 3v3 games to use single-shot guess
 
 ### 17.1 Unit tests
 
-- `parseReadySignal()` -- test various formats: `READY: 3,1,4`, `READY:3,1,4`, `ready: 3, 1, 4`, embedded in longer text, multiple READY signals in one message
-- Consensus detection logic -- both agree, both disagree, one ready one not, cap hit with no ready signals
+- `parseReadyCodeSignal()` -- test bare, prose-embedded, Markdown, blockquote, punctuation, and commentary forms; numeric repeats/out-of-range remain visible to validation; incomplete/nonnumeric mentions never become actions
+- Consensus detection logic -- both agree, both disagree, one ready one not, and cap hit with no matching legal signals; every non-consensus path applies no code
 - Clue-giver rotation with 3 players across multiple rounds
 - Phase flow: verify 2v2 still goes through old phases, 3v3 goes through new phases
 
