@@ -1376,8 +1376,30 @@ async function testStrictMatchFailureContract(): Promise<void> {
     "taint is persisted before the annotated match error escapes",
   );
 
-  for (const functionName of [
+  const clueBody = await loadFunctionBody(
+    "server/headlessRunner.ts",
     "processClues",
+  );
+  ok(
+    /strictExecution[\s\S]*?callResult\.parseQuality\s*!==\s*"clean"/m.test(
+      clueBody,
+    ),
+    "processClues blocks non-clean strict results before game submission",
+  );
+  occursBefore(
+    clueBody,
+    "await logAiCall(",
+    "throw new Error(",
+    "processClues persists failed-call telemetry before invalidation",
+  );
+  occursBefore(
+    clueBody,
+    "throw new Error(",
+    "game = submitClues",
+    "processClues invalidates before a strict synthetic result reaches game state",
+  );
+
+  for (const functionName of [
     "processGuesses",
     "processInterceptions",
   ]) {
@@ -1386,26 +1408,25 @@ async function testStrictMatchFailureContract(): Promise<void> {
       functionName,
     );
     ok(
-      /strictExecution[\s\S]*?callResult\.parseQuality\s*!==\s*"clean"/m.test(
-        phaseBody,
-      ),
-      `${functionName} blocks non-clean strict results before game submission`,
+      phaseBody.includes("resolveCodeActionValidationDisposition("),
+      `${functionName} uses the all-mode code-action gate`,
     );
     occursBefore(
       phaseBody,
       "await logAiCall(",
-      "throw new Error(",
-      `${functionName} persists failed-call telemetry before invalidation`,
+      "resolveCodeActionValidationDisposition(",
+      `${functionName} persists failed-call telemetry before validation`,
     );
     occursBefore(
       phaseBody,
-      "throw new Error(",
-      functionName === "processClues"
-        ? "game = submitClues"
-        : functionName === "processGuesses"
-          ? "game = submitOwnTeamGuess"
-          : "game = submitInterception",
-      `${functionName} invalidates before any synthetic result reaches game state`,
+      "resolveCodeActionValidationDisposition(",
+      "applyValidatedCodeAction(",
+      `${functionName} validates before any result reaches game state`,
+    );
+    ok(
+      !phaseBody.includes("submitOwnTeamGuess(") &&
+        !phaseBody.includes("submitInterception("),
+      `${functionName} cannot bypass the validated application helper`,
     );
   }
 
@@ -1429,10 +1450,12 @@ async function testStrictMatchFailureContract(): Promise<void> {
     "processDeliberation",
   );
   ok(
-    /context\.strictExecution\s*&&\s*terminationReason\s*!==\s*null/m.test(
-      deliberationBody,
-    ),
-    "strict deliberation rejects incomplete termination",
+    deliberationBody.includes("rejectDeliberation") &&
+      deliberationBody.includes(
+        'rejectDeliberation("max_exchanges", null, false)',
+      ) &&
+      !deliberationBody.includes("fallbackAnswer"),
+    "deliberation rejects incomplete termination in every mode without a synthetic answer",
   );
 
   const reflectionLogBody = await loadFunctionBody(

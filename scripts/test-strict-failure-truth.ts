@@ -243,16 +243,22 @@ async function testStrictFailureIsNotReportedAsAppliedFallback(): Promise<void> 
     "AI logging identifies strict invalid results",
   );
   ok(
-    /parsedResult:\s*strictFailure\s*\?\s*null\s*:\s*callResult\.result/m.test(
+    /const rejectedCodePlaceholder[\s\S]*?const suppressParsedResult\s*=\s*strictFailure\s*\|\|\s*rejectedCodePlaceholder/m.test(
       logBody,
     ),
-    "strict invalid calls do not persist a synthetic parsed result",
+    "code timeout/error placeholders are suppressed in every mode",
   );
   ok(
-    /usedFallback:\s*strictExecution\s*\?\s*false\s*:\s*usedFallback/m.test(
+    /parsedResult:\s*suppressParsedResult\s*\?\s*null\s*:\s*callResult\.result/m.test(
       logBody,
     ),
-    "strict invalid calls are never persisted as used fallbacks",
+    "invalid calls do not persist a synthetic parsed result",
+  );
+  ok(
+    /usedFallback:\s*strictExecution\s*\|\|\s*rejectedCodePlaceholder\s*\?\s*false\s*:\s*usedFallback/m.test(
+      logBody,
+    ),
+    "rejected code placeholders are never persisted as applied fallbacks",
   );
 
   for (const functionName of [
@@ -292,12 +298,10 @@ async function testStrictFailureIsNotReportedAsAppliedFallback(): Promise<void> 
     "strict deliberation does not label its empty candidate as used",
   );
   ok(
-    (
-      deliberationBody.match(
-        /if\s*\(!context\.strictExecution\)\s*\{[\s\S]*?type:\s*"deliberation_failure"/g,
-      ) ?? []
-    ).length >= 2,
-    "strict deliberation leaves failure/fallback accounting to api_error and match_failure",
+    /const rejectDeliberation[\s\S]*?type:\s*"deliberation_failure"[\s\S]*?actionApplied:\s*false[\s\S]*?usedFallback:\s*false/m.test(
+      deliberationBody,
+    ),
+    "deliberation records failure without claiming a fallback action",
   );
 }
 

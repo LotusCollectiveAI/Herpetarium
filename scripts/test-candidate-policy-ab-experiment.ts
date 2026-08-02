@@ -31,6 +31,7 @@ import {
   hasActionValidationFailure,
   rejectedHeadlessCallResult,
   resolveActionValidationDisposition,
+  resolveCodeActionValidationDisposition,
 } from "../server/headlessValidationPolicy";
 import type { HeadlessMatchConfig } from "@shared/schema";
 import { getConfigForModel } from "@shared/modelRegistry";
@@ -2651,28 +2652,41 @@ async function testStrictAndNonStrictValidationCompatibility(): Promise<void> {
   ] as const) {
     const problems = validateCodeGuess([1, 1, 2]);
     ok(problems.length > 0, `${actionType} duplicate tuple is invalid`);
-    const nonStrict = resolveActionValidationDisposition(
-      {
-        validator: "shared.validateCodeGuess@substrate",
-        actionType,
-        passed: false,
-        problems,
-      },
-      false,
-    );
+    const nonStrict = resolveCodeActionValidationDisposition({
+      actionType,
+      candidate: [1, 1, 2],
+      parseQuality: "partial_recovery",
+      timedOut: false,
+      error: null,
+      strictExecution: false,
+    });
     equal(
       nonStrict.actionApplied,
-      true,
-      `${actionType} invalid exploratory tuple preserves continuity`,
+      false,
+      `${actionType} invalid exploratory tuple fails closed`,
     );
-    const strictCode = resolveActionValidationDisposition(
-      nonStrict.validationMetadata,
+    equal(
+      nonStrict.rejectMatch,
       true,
+      `${actionType} invalid exploratory tuple rejects the match`,
     );
+    const strictCode = resolveCodeActionValidationDisposition({
+      actionType,
+      candidate: [1, 1, 2],
+      parseQuality: "partial_recovery",
+      timedOut: false,
+      error: null,
+      strictExecution: true,
+    });
     equal(
       strictCode.actionApplied,
       false,
       `${actionType} invalid strict tuple is rejected`,
+    );
+    deepEqual(
+      strictCode.validationMetadata,
+      nonStrict.validationMetadata,
+      `${actionType} invalid tuple has identical cross-mode evidence`,
     );
   }
 
