@@ -43,8 +43,7 @@ export const CLUEGIVER_S1_RESERVED_C2_ARM =
   "c2_exact_no_history_ablation_future";
 
 export type CluegiverS1Arm =
-  | typeof CLUEGIVER_S1_C0_ARM
-  | typeof CLUEGIVER_S1_C1_ARM;
+  typeof CLUEGIVER_S1_C0_ARM | typeof CLUEGIVER_S1_C1_ARM;
 
 export const CLUEGIVER_S1_SOURCE_RANGE_FIXTURE = cloneAndDeepFreeze({
   path: "scripts/fixtures/table-cipher-encrypt-7dde-lines-248-293.txt" as const,
@@ -192,6 +191,9 @@ export const CLUEGIVER_S1_LEDGER_SOURCE = cloneAndDeepFreeze({
   sourceLineRange: "294-344" as const,
   sourceFileSha256:
     "4ecbe51fcd8aa27e2f33c03a015b6f8e812000c066c8d71bd57b3cab89dd95cd" as const,
+  provenanceRole: "metadata_only_not_runtime_byte_authority" as const,
+  runtimeAuthority:
+    "local_compiler_implementation_and_shared_buildPublicClueLedger" as const,
   treatment: "byte_identical_public_ledger_in_c0_and_c1" as const,
 });
 

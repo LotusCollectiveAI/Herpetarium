@@ -19,14 +19,12 @@ import {
   CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01,
   CROSS_ROUND_COLUMN_LEAK_2026_08_01,
   CROSS_ROUND_PRODUCTION_SMOKE_EVENT_PROVENANCE_2026_08_01,
-  DEEPSEEK_V4_FLASH_CANONICAL,
   JOINT_ASSIGNMENT_DECODER_COMPILER_HASH,
   JOINT_ASSIGNMENT_DECODER_COMPILER_ID,
   JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
   TABLE_BOT_CLUE_RULES,
   canonicalJson,
   cloneAndDeepFreeze,
-  compileJointAssignmentDecoderPrompt,
   contentHash,
   exactKeys,
   mintBotBuildManifest,
@@ -44,10 +42,8 @@ import {
   verifyBotBuildManifest,
   verifyCluegiverBotBuildManifest,
   verifyCluegiverObservation,
-  verifyCompiledJointAssignmentDecoderPrompt,
   verifyObservationV2,
   type BotBuildManifest,
-  type BotBuildManifestForDecision,
   type CluegiverBotBuildManifest,
   type CluegiverBotBuildManifestSource,
   type CodeTriple,
@@ -62,6 +58,54 @@ import {
   type TeamTokens,
 } from "@shared/substrate";
 import {
+  CLUEGIVER_S1_CLUE_PLACEHOLDERS,
+  CLUEGIVER_S1_CONCURRENCY,
+  CLUEGIVER_S1_DISPATCH_INVARIANTS,
+  CLUEGIVER_S1_EXECUTION_CONTROL_PLAN,
+  CLUEGIVER_S1_EXECUTION_PREPARATION_VERSION,
+  CLUEGIVER_S1_EXECUTION_PREPARATION_IMPLEMENTATION_SOURCE,
+  CLUEGIVER_S1_EXECUTOR_CONTRACT,
+  CLUEGIVER_S1_HARD_STOP_MS,
+  CLUEGIVER_S1_HISTORICAL_V02_RECEIPT_BYTES_SHA256,
+  CLUEGIVER_S1_JOB_EXECUTION_PLAN,
+  CLUEGIVER_S1_MAX_TOKENS,
+  CLUEGIVER_S1_ORDERING_SEED,
+  CLUEGIVER_S1_PARENT_TERMINAL_RECORD_VERSION,
+  CLUEGIVER_S1_PREPARED_DISPATCH_VERSION,
+  CLUEGIVER_S1_RECEIPT_VERSION,
+  CLUEGIVER_S1_REVIEWED_BOTBUILD_IDENTITIES,
+  CLUEGIVER_S1_REVIEWED_BOTBUILD_IDENTITY_SOURCE,
+  CLUEGIVER_S1_REVIEWED_PROVIDER_VISIBLE_PROMPT_PROJECTION_HASH,
+  CLUEGIVER_S1_ROUTE_PLAN,
+  CLUEGIVER_S1_ROUTE_PLAN_HASH,
+  CLUEGIVER_S1_SAMPLING_CONTRACT,
+  CLUEGIVER_S1_WARNING_MS,
+  assertCluegiverS1PreregistrationDispatchContracts,
+  buildCluegiverS1DryRunReceipt,
+  cluegiverS1AssessorPlaceholderIndependentContentHash,
+  cluegiverS1AssessorProviderPayload,
+  cluegiverS1ProviderVisiblePromptProjection,
+  cluegiverS1ProviderVisiblePromptProjectionHash,
+  compileCluegiverS1AssessorPrompt,
+  makeCluegiverS1AssessorJobId,
+  makeCluegiverS1AssessorMatchedPositionKey,
+  makeCluegiverS1CellId,
+  makeCluegiverS1CellOrderingKey,
+  makeCluegiverS1ParentJobId,
+  materializeAssessorObservationFromParentAction,
+  mintCluegiverS1ExecutorContract,
+  mintCluegiverS1ParentTerminalRecord,
+  prepareCluegiverS1Dispatch,
+  renderCluegiverS1DryRunReceipt,
+  verifyCluegiverS1PreparedDispatchArtifact,
+  type CluegiverS1DryRunReceipt,
+  type CluegiverS1ParentTerminalRecord,
+  type CluegiverS1PreparedAssessorDispatchArtifact,
+  type CluegiverS1PreparedDispatchArtifact,
+  type CluegiverS1PreparedParentDispatchArtifact,
+  type SourceByteIdentity,
+} from "./lib/decrypto-cluegiver-s1-execution-preparation";
+import {
   CLUEGIVER_S1_ACTION_CONTRACT_HASH,
   CLUEGIVER_S1_ACTION_CONTRACT_ID,
   CLUEGIVER_S1_C0_ARM,
@@ -70,6 +114,7 @@ import {
   CLUEGIVER_S1_C1_ARM,
   CLUEGIVER_S1_COMPILER_ID,
   CLUEGIVER_S1_COMPILER_SPEC_HASH,
+  CLUEGIVER_S1_EXPLICIT_CANDIDATE_BLOCK,
   CLUEGIVER_S1_LEDGER_SOURCE,
   CLUEGIVER_S1_NO_EXPLICIT_CANDIDATE_POLICY,
   CLUEGIVER_S1_RESERVED_C2_ARM,
@@ -81,6 +126,57 @@ import {
   type CluegiverS1Arm,
   type CluegiverS1CompilerIdentity,
 } from "./lib/decrypto-cluegiver-s1-policies";
+
+export {
+  CLUEGIVER_S1_CLUE_PLACEHOLDERS,
+  CLUEGIVER_S1_CONCURRENCY,
+  CLUEGIVER_S1_DISPATCH_INVARIANTS,
+  CLUEGIVER_S1_EXECUTION_CONTROL_PLAN,
+  CLUEGIVER_S1_EXECUTION_PREPARATION_IMPLEMENTATION_SOURCE,
+  CLUEGIVER_S1_EXECUTION_PREPARATION_VERSION,
+  CLUEGIVER_S1_EXECUTOR_CONTRACT,
+  CLUEGIVER_S1_HARD_STOP_MS,
+  CLUEGIVER_S1_HISTORICAL_V02_RECEIPT_BYTES_SHA256,
+  CLUEGIVER_S1_JOB_EXECUTION_PLAN,
+  CLUEGIVER_S1_MAX_TOKENS,
+  CLUEGIVER_S1_ORDERING_SEED,
+  CLUEGIVER_S1_PARENT_TERMINAL_RECORD_VERSION,
+  CLUEGIVER_S1_PREPARED_DISPATCH_VERSION,
+  CLUEGIVER_S1_RECEIPT_VERSION,
+  CLUEGIVER_S1_REVIEWED_BOTBUILD_IDENTITIES,
+  CLUEGIVER_S1_REVIEWED_BOTBUILD_IDENTITY_SOURCE,
+  CLUEGIVER_S1_REVIEWED_PROVIDER_VISIBLE_PROMPT_PROJECTION_HASH,
+  CLUEGIVER_S1_ROUTE_PLAN,
+  CLUEGIVER_S1_ROUTE_PLAN_HASH,
+  CLUEGIVER_S1_SAMPLING_CONTRACT,
+  CLUEGIVER_S1_WARNING_MS,
+  assertCluegiverS1PreregistrationDispatchContracts,
+  buildCluegiverS1DryRunReceipt,
+  cluegiverS1AssessorPlaceholderIndependentContentHash,
+  cluegiverS1AssessorProviderPayload,
+  cluegiverS1ProviderVisiblePromptProjection,
+  cluegiverS1ProviderVisiblePromptProjectionHash,
+  compileCluegiverS1AssessorPrompt,
+  makeCluegiverS1AssessorJobId,
+  makeCluegiverS1AssessorMatchedPositionKey,
+  makeCluegiverS1CellId,
+  makeCluegiverS1CellOrderingKey,
+  makeCluegiverS1ParentJobId,
+  materializeAssessorObservationFromParentAction,
+  mintCluegiverS1ExecutorContract,
+  mintCluegiverS1ParentTerminalRecord,
+  prepareCluegiverS1Dispatch,
+  renderCluegiverS1DryRunReceipt,
+  verifyCluegiverS1PreparedDispatchArtifact,
+};
+export type {
+  CluegiverS1DryRunReceipt,
+  CluegiverS1ParentTerminalRecord,
+  CluegiverS1PreparedAssessorDispatchArtifact,
+  CluegiverS1PreparedDispatchArtifact,
+  CluegiverS1PreparedParentDispatchArtifact,
+  SourceByteIdentity,
+};
 
 const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
 const REPOSITORY_ROOT = resolve(MODULE_DIRECTORY, "..");
@@ -95,6 +191,18 @@ const SOURCE_RANGE_FIXTURE_PATH = resolve(
 const POLICY_IMPLEMENTATION_PATH = resolve(
   MODULE_DIRECTORY,
   "lib/decrypto-cluegiver-s1-policies.ts",
+);
+const EXECUTION_PREPARATION_IMPLEMENTATION_PATH = resolve(
+  MODULE_DIRECTORY,
+  "lib/decrypto-cluegiver-s1-execution-preparation.ts",
+);
+const REVIEWED_BOTBUILD_IDENTITY_SOURCE_PATH = resolve(
+  MODULE_DIRECTORY,
+  "lib/decrypto-cluegiver-s1-reviewed-botbuild-identities.ts",
+);
+const HISTORICAL_V02_RECEIPT_PATH = resolve(
+  MODULE_DIRECTORY,
+  "fixtures/decrypto-cluegiver-s1-prereg-dry-run-receipt-v0.2.json",
 );
 const JOINT_ASSIGNMENT_SOURCE_PATH = resolve(
   REPOSITORY_ROOT,
@@ -120,9 +228,11 @@ const CLUEGIVER_BUILD_SOURCE_PATH = resolve(
 export const CLUEGIVER_S1_FIXTURE_VERSION =
   "decrypto-cluegiver-s1-positions@0.2.0";
 export const CLUEGIVER_S1_PREREGISTRATION_VERSION =
-  "decrypto-cluegiver-s1-preregistration@0.2.0";
+  "decrypto-cluegiver-s1-preregistration@0.4.0";
 export const CLUEGIVER_S1_BASE_COMMIT =
   "6fe13f87fb97fa0fc27e0c3ef4ea588a92471110";
+export const CLUEGIVER_S1_REVIEWED_PREREGISTRATION_PARENT_COMMIT =
+  "e729624dff0c024a7ca152cc423392ca8ccbac0a";
 export const CLUEGIVER_S1_REVIEWED_CONTRACT_COMMIT =
   "86207c58d10eb6ed0deb8830335249f936e11525";
 export const CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256 =
@@ -140,21 +250,15 @@ export const CLUEGIVER_S1_ASSESSOR_REPLICATIONS = 3;
 export const CLUEGIVER_S1_JOBS_PER_CELL = 7;
 export const CLUEGIVER_S1_PLANNED_PROVIDER_CALLS_LATER = 56;
 export const CLUEGIVER_S1_PROVIDER_CALLS_THIS_RUN = 0;
-export const CLUEGIVER_S1_WARNING_MS = 300_000;
-export const CLUEGIVER_S1_HARD_STOP_MS = 600_000;
-export const CLUEGIVER_S1_ORDERING_SEED =
-  "decrypto-cluegiver-s1-dag-order@2026-08-02.2";
-
 export const CLUEGIVER_S1_ARMS = cloneAndDeepFreeze([
   CLUEGIVER_S1_C0_ARM,
   CLUEGIVER_S1_C1_ARM,
 ] as const);
 
-export const CLUEGIVER_S1_CLUE_PLACEHOLDERS = cloneAndDeepFreeze([
-  "PARENTCLUEONE",
-  "PARENTCLUETWO",
-  "PARENTCLUETHREE",
-] as [string, string, string]);
+export const CLUEGIVER_S1_C1_PROMPT_LENGTH_DELTA_UTF8_BYTES = Buffer.byteLength(
+  CLUEGIVER_S1_EXPLICIT_CANDIDATE_BLOCK,
+  "utf8",
+);
 
 const EXPECTED_FIXTURE_GENERATION = cloneAndDeepFreeze({
   method:
@@ -287,22 +391,19 @@ export interface CluegiverS1Fixture extends CluegiverS1FixtureSource {
   readonly contentHash: string;
 }
 
-export interface SourceByteIdentity {
-  readonly path: string;
-  readonly sha256: string;
-  readonly bytes: number;
-}
-
 export interface CluegiverS1SourceIdentities {
   readonly exactTable7ddeRange: SourceByteIdentity & {
     readonly extractedInstructionSha256: string;
   };
   readonly experimentCompilerImplementation: SourceByteIdentity;
+  readonly executionPreparationImplementation: SourceByteIdentity;
+  readonly reviewedBotBuildIdentitySource: SourceByteIdentity;
   readonly jointAssignmentCompilerImplementation: SourceByteIdentity;
   readonly sharedActionsImplementation: SourceByteIdentity;
   readonly sharedCandidatePolicyImplementation: SourceByteIdentity;
   readonly sharedCluegiverObservationImplementation: SourceByteIdentity;
   readonly sharedCluegiverBuildImplementation: SourceByteIdentity;
+  readonly historicalReceiptV02: SourceByteIdentity;
 }
 
 export interface CluegiverS1CompilerBinding extends CluegiverS1CompilerIdentity {
@@ -789,19 +890,25 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
   const [
     sourceRangeBytes,
     experimentCompilerBytes,
+    executionPreparationBytes,
+    reviewedBotBuildIdentityBytes,
     jointAssignmentBytes,
     actionsBytes,
     candidatePolicyBytes,
     cluegiverObservationBytes,
     cluegiverBuildBytes,
+    historicalReceiptV02Bytes,
   ] = await Promise.all([
     readFile(SOURCE_RANGE_FIXTURE_PATH, "utf8"),
     readFile(POLICY_IMPLEMENTATION_PATH, "utf8"),
+    readFile(EXECUTION_PREPARATION_IMPLEMENTATION_PATH, "utf8"),
+    readFile(REVIEWED_BOTBUILD_IDENTITY_SOURCE_PATH, "utf8"),
     readFile(JOINT_ASSIGNMENT_SOURCE_PATH, "utf8"),
     readFile(ACTIONS_SOURCE_PATH, "utf8"),
     readFile(CANDIDATE_POLICY_SOURCE_PATH, "utf8"),
     readFile(CLUEGIVER_OBSERVATION_SOURCE_PATH, "utf8"),
     readFile(CLUEGIVER_BUILD_SOURCE_PATH, "utf8"),
+    readFile(HISTORICAL_V02_RECEIPT_PATH, "utf8"),
   ]);
   const extractedInstruction =
     extractTable7ddeInstructionFromSourceRange(sourceRangeBytes);
@@ -816,6 +923,14 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
     experimentCompilerImplementation: sourceByteIdentity(
       "scripts/lib/decrypto-cluegiver-s1-policies.ts",
       experimentCompilerBytes,
+    ),
+    executionPreparationImplementation: sourceByteIdentity(
+      "scripts/lib/decrypto-cluegiver-s1-execution-preparation.ts",
+      executionPreparationBytes,
+    ),
+    reviewedBotBuildIdentitySource: sourceByteIdentity(
+      "scripts/lib/decrypto-cluegiver-s1-reviewed-botbuild-identities.ts",
+      reviewedBotBuildIdentityBytes,
     ),
     jointAssignmentCompilerImplementation: sourceByteIdentity(
       "shared/substrate/jointAssignmentDecoder.ts",
@@ -837,6 +952,10 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
       "shared/substrate/cluegiverBotBuild.ts",
       cluegiverBuildBytes,
     ),
+    historicalReceiptV02: sourceByteIdentity(
+      "scripts/fixtures/decrypto-cluegiver-s1-prereg-dry-run-receipt-v0.2.json",
+      historicalReceiptV02Bytes,
+    ),
   };
   if (
     identities.exactTable7ddeRange.sha256 !==
@@ -857,7 +976,13 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
     identities.sharedCluegiverObservationImplementation.sha256 !==
       CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256 ||
     identities.sharedCluegiverBuildImplementation.sha256 !==
-      CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256
+      CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256 ||
+    canonicalJson(identities.executionPreparationImplementation) !==
+      canonicalJson(CLUEGIVER_S1_EXECUTION_PREPARATION_IMPLEMENTATION_SOURCE) ||
+    canonicalJson(identities.reviewedBotBuildIdentitySource) !==
+      canonicalJson(CLUEGIVER_S1_REVIEWED_BOTBUILD_IDENTITY_SOURCE) ||
+    identities.historicalReceiptV02.sha256 !==
+      CLUEGIVER_S1_HISTORICAL_V02_RECEIPT_BYTES_SHA256
   ) {
     throw new Error(
       "reviewed shared assessor/cluegiver contract source bytes drifted",
@@ -881,35 +1006,6 @@ export function mintCluegiverS1CompilerBinding(
   });
 }
 
-export const CLUEGIVER_S1_ROUTE_PLAN = cloneAndDeepFreeze({
-  requestedModel: {
-    provider: DEEPSEEK_V4_FLASH_CANONICAL.provider,
-    model: DEEPSEEK_V4_FLASH_CANONICAL.model,
-    upstream: DEEPSEEK_V4_FLASH_CANONICAL.upstream,
-  },
-  route: {
-    upstreamOrder: ["deepinfra"] as const,
-    allowFallbacks: false as const,
-    requireParameters: true as const,
-    maximumAttempts: 1 as const,
-  },
-  reasoning: {
-    applicationEffort: "xhigh" as const,
-    wireEffort: "max" as const,
-    mode: "full_strength_async" as const,
-  },
-  timeout: {
-    warningMs: CLUEGIVER_S1_WARNING_MS,
-    hardStopMs: CLUEGIVER_S1_HARD_STOP_MS,
-    behaviorAtWarning: "record_warning_and_continue" as const,
-    behaviorAtHardStop: "record_timeout_no_retry_no_fallback" as const,
-  },
-});
-
-export const CLUEGIVER_S1_ROUTE_PLAN_HASH = contentHash(
-  CLUEGIVER_S1_ROUTE_PLAN,
-);
-
 const REQUESTED_WIRE_CONFIG = mintWireConfig({
   id: "openrouter-deepinfra-deepseek-v4-flash-0731-s1@0.1.0",
   parameters: {
@@ -920,13 +1016,14 @@ const REQUESTED_WIRE_CONFIG = mintWireConfig({
     warningMs: CLUEGIVER_S1_WARNING_MS,
     hardStopMs: CLUEGIVER_S1_HARD_STOP_MS,
     maximumAttempts: 1,
+    maxTokens: CLUEGIVER_S1_MAX_TOKENS,
   },
 });
 
 const REQUESTED_MODEL_ROUTE: RequestedModelRoute = cloneAndDeepFreeze({
-  provider: DEEPSEEK_V4_FLASH_CANONICAL.provider,
-  model: DEEPSEEK_V4_FLASH_CANONICAL.model,
-  upstream: DEEPSEEK_V4_FLASH_CANONICAL.upstream ?? null,
+  provider: CLUEGIVER_S1_ROUTE_PLAN.requestedModel.provider,
+  model: CLUEGIVER_S1_ROUTE_PLAN.requestedModel.model,
+  upstream: CLUEGIVER_S1_ROUTE_PLAN.requestedModel.upstream ?? null,
   aliasEpoch: null,
   reasoning: {
     requestedEffort: "xhigh",
@@ -953,6 +1050,8 @@ export interface CluegiverS1ImplementationBindings {
   readonly jointAssignmentPromptCompilerContract: ContentIdentityRef;
   readonly jointAssignmentPromptCompilerImplementation: ContentIdentityRef;
   readonly jointAssignmentActionValidator: ContentIdentityRef;
+  readonly executionPreparationImplementation: SourceByteIdentity;
+  readonly reviewedBotBuildIdentitySource: SourceByteIdentity;
   readonly sourceBytes: CluegiverS1SourceIdentities;
 }
 
@@ -993,6 +1092,9 @@ function implementationBindings(
         sources.sharedActionsImplementation,
       ],
     ),
+    executionPreparationImplementation:
+      sources.executionPreparationImplementation,
+    reviewedBotBuildIdentitySource: sources.reviewedBotBuildIdentitySource,
     sourceBytes: sources,
   });
 }
@@ -1021,12 +1123,27 @@ function sharedExecutionIdentities(
     providerAdapter: identity("future-openrouter-json-adapter@0.1.0", {
       status: "descriptor_only_no_dispatcher_in_this_scaffold",
       routeHash: CLUEGIVER_S1_ROUTE_PLAN_HASH,
+      acceptedInputOnly: "CluegiverS1PreparedDispatchArtifact",
+      samplingContract: CLUEGIVER_S1_SAMPLING_CONTRACT,
+      executionPreparationImplementation:
+        bindings.executionPreparationImplementation,
     }),
-    orchestrationPolicy: identity("s1-one-attempt-dag-orchestration@0.2.0", {
+    orchestrationPolicy: identity("s1-one-attempt-dag-orchestration@0.4.0", {
       maximumAttempts: 1,
+      maxTokens: CLUEGIVER_S1_MAX_TOKENS,
+      concurrency: CLUEGIVER_S1_CONCURRENCY,
+      concurrencyScope: "worker_limit_only",
       warningMs: CLUEGIVER_S1_WARNING_MS,
       hardStopMs: CLUEGIVER_S1_HARD_STOP_MS,
       dependenciesRequired: true,
+      dependencyScheduling:
+        "child_preparation_requires_hash_bound_succeeded_parent_terminal_record",
+      durableLoadProof:
+        "deferred_to_separately_reviewed_concrete_executor_persistence",
+      persistenceIdempotencyKeyField: "jobId",
+      dispatchPreparationEntrypoint: "prepareCluegiverS1Dispatch",
+      providerAdapterInputOnly: "CluegiverS1PreparedDispatchArtifact",
+      implementationSource: bindings.executionPreparationImplementation,
     }),
     retryPolicy: identity("s1-no-retry@0.1.0", {
       maximumAttempts: 1,
@@ -1224,12 +1341,6 @@ function resolvedAssessorSide(
   };
 }
 
-function assessorMatchedPositionKey(position: CluegiverS1Position): string {
-  return sha256Hex(
-    `${CLUEGIVER_S1_ORDERING_SEED}\u0000matched-assessor\u0000${position.positionId}`,
-  ).slice(0, 20);
-}
-
 function mintAssessorObservationTemplate(input: {
   readonly position: CluegiverS1Position;
   readonly arm: CluegiverS1Arm;
@@ -1238,7 +1349,9 @@ function mintAssessorObservationTemplate(input: {
   readonly assessorBuild: BotBuildManifest;
 }): DecryptoObservationV2 {
   const { position, role, replication, assessorBuild } = input;
-  const matchedPosition = assessorMatchedPositionKey(position);
+  const matchedPosition = makeCluegiverS1AssessorMatchedPositionKey(
+    position.positionId,
+  );
   const decisionId = `s1-assess:${matchedPosition}:${role}:${replication}`;
   const ownOrientation = role === "decoder";
   const source: DecryptoObservationV2Source = {
@@ -1315,71 +1428,6 @@ function mintAssessorObservationTemplate(input: {
   return observation;
 }
 
-export function compileCluegiverS1AssessorPrompt(
-  observation: DecryptoObservationV2,
-  assessorBuild: BotBuildManifestForDecision,
-) {
-  const contextProblems = validateGuessDecisionContext(
-    observation,
-    assessorBuild,
-  );
-  if (contextProblems.length > 0) {
-    throw new Error(
-      `invalid S1 guess decision context: ${contextProblems.join("; ")}`,
-    );
-  }
-  const compiled = compileJointAssignmentDecoderPrompt(observation);
-  if (!verifyCompiledJointAssignmentDecoderPrompt(compiled, observation)) {
-    throw new Error(
-      `${observation.decisionId} joint-assignment prompt failed verification`,
-    );
-  }
-  return compiled;
-}
-
-export function materializeAssessorObservationFromParentAction(
-  template: DecryptoObservationV2,
-  parentAction: unknown,
-  assessorBuild: BotBuildManifestForDecision,
-): DecryptoObservationV2 {
-  const templateContextProblems = validateGuessDecisionContext(
-    template,
-    assessorBuild,
-  );
-  if (templateContextProblems.length > 0) {
-    throw new Error(
-      `cannot materialize invalid S1 guess decision context: ${templateContextProblems.join("; ")}`,
-    );
-  }
-  const record = recordValue(parentAction);
-  if (
-    !Array.isArray(record?.clues) ||
-    record.clues.length !== 3 ||
-    !record.clues.every((clue) => typeof clue === "string")
-  ) {
-    throw new Error("parent action must expose exactly one three-clue array");
-  }
-  const clues = [...record.clues] as [string, string, string];
-  const { contentHash: _discardedHash, ...source } = template;
-  const materialized: DecryptoObservationV2Source = {
-    ...source,
-    ownClues: template.role === "decoder" ? clues : [...template.ownClues],
-    opponentClues:
-      template.role === "interceptor" ? clues : [...template.opponentClues],
-  };
-  const observation = mintObservationV2(materialized);
-  const materializedContextProblems = validateGuessDecisionContext(
-    observation,
-    assessorBuild,
-  );
-  if (materializedContextProblems.length > 0) {
-    throw new Error(
-      `materialized S1 guess decision context failed: ${materializedContextProblems.join("; ")}`,
-    );
-  }
-  return observation;
-}
-
 export function historyStrataForPosition(
   position: CluegiverS1Position,
 ): readonly ("history_bearing" | "history_free")[] {
@@ -1389,66 +1437,143 @@ export function historyStrataForPosition(
   );
 }
 
+export interface CluegiverS1FixtureBalance {
+  readonly focalCodeDigitCounts: {
+    readonly digit1: number;
+    readonly digit2: number;
+    readonly digit3: number;
+    readonly digit4: number;
+  };
+  readonly historyStratumSlotCounts: {
+    readonly slot1: {
+      readonly historyBearing: number;
+      readonly historyFree: number;
+    };
+    readonly slot2: {
+      readonly historyBearing: number;
+      readonly historyFree: number;
+    };
+    readonly slot3: {
+      readonly historyBearing: number;
+      readonly historyFree: number;
+    };
+    readonly overall: {
+      readonly historyBearing: number;
+      readonly historyFree: number;
+    };
+  };
+}
+
+/**
+ * Derive every disclosed digit/history imbalance directly from the checked-in
+ * fixture. This remains a pure calculation so an executor review can rerun it
+ * without provider, credential, network, or database access.
+ */
+export function deriveCluegiverS1FixtureBalance(
+  positions: readonly CluegiverS1Position[],
+): CluegiverS1FixtureBalance {
+  const focalCodeDigitCounts = {
+    digit1: 0,
+    digit2: 0,
+    digit3: 0,
+    digit4: 0,
+  };
+  const slots = [
+    { historyBearing: 0, historyFree: 0 },
+    { historyBearing: 0, historyFree: 0 },
+    { historyBearing: 0, historyFree: 0 },
+  ];
+  for (const position of positions) {
+    for (const digit of position.focal.code) {
+      focalCodeDigitCounts[
+        `digit${digit}` as keyof typeof focalCodeDigitCounts
+      ] += 1;
+    }
+    for (const [slotIndex, stratum] of historyStrataForPosition(
+      position,
+    ).entries()) {
+      slots[slotIndex]![
+        stratum === "history_bearing" ? "historyBearing" : "historyFree"
+      ] += 1;
+    }
+  }
+  const overall = slots.reduce(
+    (total, slot) => ({
+      historyBearing: total.historyBearing + slot.historyBearing,
+      historyFree: total.historyFree + slot.historyFree,
+    }),
+    { historyBearing: 0, historyFree: 0 },
+  );
+  return cloneAndDeepFreeze({
+    focalCodeDigitCounts,
+    historyStratumSlotCounts: {
+      slot1: slots[0]!,
+      slot2: slots[1]!,
+      slot3: slots[2]!,
+      overall,
+    },
+  });
+}
+
 /** ECMAScript relational string comparison: UTF-16 code-unit order. */
 export function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
 }
 
-export const CLUEGIVER_S1_OUTCOME_SPEC = cloneAndDeepFreeze({
-  statusInThisScaffold: "schema_only_no_outcomes_collected" as const,
-  independentUnit: "position" as const,
-  matchedCellMetrics: {
-    decodeRate: "mean_of_three_teammate_decoder_exact_code_indicators",
-    interceptRate: "mean_of_three_opponent_interceptor_exact_code_indicators",
-    net: "decodeRate_minus_interceptRate",
-  },
-  descriptivePairedContrast: {
-    contrast: "C1_minus_C0",
-    unit: "position",
-    inferentialTest: null,
-    promotionDecision: null,
-  },
-  interceptorSlotDescription: {
-    outcome: "per_slot_correct",
-    strata: ["history_bearing", "history_free"] as const,
-    stratumAuthority:
-      "focal_round_two_code_digit_membership_in_focal_resolved_round_one_code",
-  },
-  teammateDecodeGuardrail: {
-    minimumAbsoluteC1DecodeRate: 0.75 as const,
-    maximumC1DecodeRateDeficitVersusC0: 0.1 as const,
-    bothConditionsRequired: true as const,
-  },
-  assessorReplication: {
-    replicationsPerRolePerCell: 3 as const,
-    clustering:
-      "three assessor calls share one clue set and are not independent units",
-  },
-  mechanismCanaryLimitations: {
-    positionCount: 4 as const,
-    notBalancedForEfficacy: true as const,
-    focalCodeDigitCounts: {
-      digit1: 2 as const,
-      digit2: 3 as const,
-      digit3: 3 as const,
-      digit4: 4 as const,
+export function buildCluegiverS1OutcomeSpec(fixture: CluegiverS1Fixture) {
+  const fixtureBalance = deriveCluegiverS1FixtureBalance(fixture.positions);
+  return cloneAndDeepFreeze({
+    statusInThisScaffold: "schema_only_no_outcomes_collected" as const,
+    independentUnit: "position" as const,
+    matchedCellMetrics: {
+      decodeRate: "mean_of_three_teammate_decoder_exact_code_indicators",
+      interceptRate: "mean_of_three_opponent_interceptor_exact_code_indicators",
+      net: "decodeRate_minus_interceptRate",
     },
-    historyStratumSlotCounts: {
-      slot1: { historyBearing: 2 as const, historyFree: 2 as const },
-      slot2: { historyBearing: 3 as const, historyFree: 1 as const },
-      slot3: { historyBearing: 4 as const, historyFree: 0 as const },
-      overall: { historyBearing: 9 as const, historyFree: 3 as const },
+    descriptivePairedContrast: {
+      contrast: "C1_minus_C0",
+      unit: "position",
+      inferentialTest: null,
+      promotionDecision: null,
     },
-    interpretation:
-      "digit, slot, and history-stratum imbalance precludes efficacy inference",
-  },
-  interpretation: {
-    descriptiveOnly: true as const,
-    inference: "forbidden" as const,
-    promotion: "forbidden" as const,
-    strengthClaim: "forbidden" as const,
-  },
-});
+    interceptorSlotDescription: {
+      outcome: "per_slot_correct",
+      strata: ["history_bearing", "history_free"] as const,
+      stratumAuthority:
+        "focal_round_two_code_digit_membership_in_focal_resolved_round_one_code",
+    },
+    teammateDecodeGuardrail: {
+      minimumAbsoluteC1DecodeRate: 0.75 as const,
+      maximumC1DecodeRateDeficitVersusC0: 0.1 as const,
+      bothConditionsRequired: true as const,
+    },
+    assessorReplication: {
+      replicationsPerRolePerCell: 3 as const,
+      clustering:
+        "three assessor calls share one clue set and are not independent units",
+      sampling: CLUEGIVER_S1_SAMPLING_CONTRACT,
+    },
+    mechanismCanaryLimitations: {
+      positionCount: fixture.positions.length,
+      notBalancedForEfficacy: true as const,
+      derivation:
+        "computed_from_fixture_focal_codes_and_resolved_round_one_codes" as const,
+      ...fixtureBalance,
+      interpretation:
+        "digit, slot, and history-stratum imbalance precludes efficacy inference",
+    },
+    interpretation: {
+      descriptiveOnly: true as const,
+      inference: "forbidden" as const,
+      promotion: "forbidden" as const,
+      strengthClaim: "forbidden" as const,
+    },
+  });
+}
+
+export type CluegiverS1OutcomeSpec = ReturnType<
+  typeof buildCluegiverS1OutcomeSpec
+>;
 
 export const CLUEGIVER_S1_CLAIMS = cloneAndDeepFreeze({
   efficacy: "none" as const,
@@ -1460,15 +1585,14 @@ export const CLUEGIVER_S1_CLAIMS = cloneAndDeepFreeze({
   purpose: "provider_free_preregistration_and_dag_smoke_only" as const,
 });
 
-interface JobExecutionPlan {
-  readonly status: "planned_unlicensed";
-  readonly providerDispatches: 0;
-  readonly outcome: null;
-  readonly maximumAttempts: 1;
-  readonly retries: 0;
-  readonly fallbacks: 0;
-  readonly warningMs: 300000;
-  readonly hardStopMs: 600000;
+type JobExecutionPlan = typeof CLUEGIVER_S1_JOB_EXECUTION_PLAN;
+
+interface JobPersistencePlan {
+  readonly idempotencyKey: string;
+  readonly keySource: "jobId";
+  readonly uniquenessScope: "entire_preregistered_dag";
+  readonly decisionIdMayKeyPersistence: false;
+  readonly logicalActionKeyMayKeyPersistence: false;
 }
 
 interface BaseDryRunJob {
@@ -1481,6 +1605,7 @@ interface BaseDryRunJob {
   readonly dependencies: readonly string[];
   readonly route: typeof CLUEGIVER_S1_ROUTE_PLAN;
   readonly execution: JobExecutionPlan;
+  readonly persistence: JobPersistencePlan;
 }
 
 export interface CluegiverS1ParentJob extends BaseDryRunJob {
@@ -1525,9 +1650,19 @@ export interface CluegiverS1AssessorJob extends BaseDryRunJob {
       readonly requiredBotBuildManifest: ContentIdentityRef;
     };
   };
+  readonly templateBinding: {
+    readonly cellId: string;
+    readonly arm: CluegiverS1Arm;
+    readonly role: "teammate_decoder" | "opponent_interceptor";
+    readonly assessorReplication: 1 | 2 | 3;
+    readonly observationTemplateContentHash: string;
+  };
   readonly compiledPromptTemplate: {
     readonly id: string;
     readonly contentHash: string;
+    readonly observationTemplateContentHash: string;
+    readonly placeholderIndependentContentHash: string;
+    readonly providerPayloadContentHash: string;
     readonly systemPromptSha256: string;
     readonly taskPromptSha256: string;
     readonly actionContractSha256: string;
@@ -1535,8 +1670,7 @@ export interface CluegiverS1AssessorJob extends BaseDryRunJob {
 }
 
 export type CluegiverS1DryRunJob =
-  | CluegiverS1ParentJob
-  | CluegiverS1AssessorJob;
+  CluegiverS1ParentJob | CluegiverS1AssessorJob;
 
 export interface CluegiverS1DryRunCell {
   readonly ordinal: number;
@@ -1556,6 +1690,11 @@ export interface CluegiverS1Preregistration {
   readonly preregistrationVersion: typeof CLUEGIVER_S1_PREREGISTRATION_VERSION;
   readonly status: "provider_free_shared_contracts_satisfied";
   readonly baseCommit: typeof CLUEGIVER_S1_BASE_COMMIT;
+  readonly amendmentProvenance: {
+    readonly reviewedPreregistrationParentCommit: typeof CLUEGIVER_S1_REVIEWED_PREREGISTRATION_PARENT_COMMIT;
+    readonly relationship: "reviewed_preregistration_scaffold_parent";
+    readonly amendmentCommit: "not_recorded_to_avoid_self_reference";
+  };
   readonly integrationGate: {
     readonly status: "satisfied_at_reviewed_integration_head";
     readonly reviewedIntegrationHead: typeof CLUEGIVER_S1_BASE_COMMIT;
@@ -1598,6 +1737,11 @@ export interface CluegiverS1Preregistration {
       readonly scheduledJobs: 0;
       readonly futureContrast: "only_future_C1_minus_C2_may_isolate_item_4";
     };
+    readonly promptLength: {
+      readonly includedInTreatmentPackage: true;
+      readonly heldConstant: false;
+      readonly c1MinusC0UserPromptUtf8Bytes: number;
+    };
   };
   readonly implementationBindings: CluegiverS1ImplementationBindings;
   readonly botBuilds: {
@@ -1607,17 +1751,8 @@ export interface CluegiverS1Preregistration {
     >;
   };
   readonly route: typeof CLUEGIVER_S1_ROUTE_PLAN;
-  readonly execution: {
-    readonly mode: "dry_run";
-    readonly providerDispatch: "forbidden";
-    readonly databaseAccess: "forbidden";
-    readonly networkAccess: "forbidden";
-    readonly providerCallsThisRun: 0;
-    readonly plannedProviderCallsAfterReview: 56;
-    readonly maximumAttemptsPerJob: 1;
-    readonly retries: 0;
-    readonly fallbacks: 0;
-    readonly providerCallLicense: "unlicensed";
+  readonly execution: typeof CLUEGIVER_S1_EXECUTION_CONTROL_PLAN & {
+    readonly executorContract: typeof CLUEGIVER_S1_EXECUTOR_CONTRACT;
   };
   readonly dag: {
     readonly independentUnit: "position";
@@ -1630,44 +1765,20 @@ export interface CluegiverS1Preregistration {
     readonly cells: readonly CluegiverS1DryRunCell[];
     readonly jobs: readonly CluegiverS1DryRunJob[];
   };
-  readonly outcomeSpec: typeof CLUEGIVER_S1_OUTCOME_SPEC;
+  readonly outcomeSpec: CluegiverS1OutcomeSpec;
   readonly claims: typeof CLUEGIVER_S1_CLAIMS;
-  readonly invariants: {
-    readonly oneCluegiverParentPerCell: true;
-    readonly allSixAssessorsShareParentClueTriple: true;
-    readonly parentRationaleVisibleDownstream: false;
-    readonly childObservationTemplatesVerify: true;
-    readonly sharedAssessorPolicyCompilerAndValidator: true;
-    readonly sharedRegistryAwareDecisionContexts: true;
-    readonly providerInvocations: 0;
-    readonly c2Jobs: 0;
-  };
+  readonly invariants: typeof CLUEGIVER_S1_DISPATCH_INVARIANTS;
   readonly preregistrationContentHash: string;
 }
 
-const JOB_EXECUTION_PLAN = cloneAndDeepFreeze({
-  status: "planned_unlicensed" as const,
-  providerDispatches: 0 as const,
-  outcome: null,
-  maximumAttempts: 1 as const,
-  retries: 0 as const,
-  fallbacks: 0 as const,
-  warningMs: 300_000 as const,
-  hardStopMs: 600_000 as const,
-});
-
-function makeCellOrderingKey(positionId: string, arm: CluegiverS1Arm): string {
-  return sha256Hex(
-    `${CLUEGIVER_S1_ORDERING_SEED}\u0000${positionId}\u0000${arm}`,
-  );
-}
-
-function assessorJobId(
-  parentJobId: string,
-  role: "decoder" | "interceptor",
-  replication: 1 | 2 | 3,
-): string {
-  return `${parentJobId}:${role}:${replication}`;
+function jobPersistencePlan(jobId: string): JobPersistencePlan {
+  return cloneAndDeepFreeze({
+    idempotencyKey: jobId,
+    keySource: "jobId" as const,
+    uniquenessScope: "entire_preregistered_dag" as const,
+    decisionIdMayKeyPersistence: false as const,
+    logicalActionKeyMayKeyPersistence: false as const,
+  });
 }
 
 function buildCell(input: {
@@ -1689,9 +1800,9 @@ function buildCell(input: {
     cluegiverBuild,
     assessorBuild,
   } = input;
-  const orderingKey = makeCellOrderingKey(position.positionId, arm);
-  const cellId = `s1-cell:${orderingKey.slice(0, 20)}`;
-  const parentJobId = `${cellId}:cluegiver`;
+  const orderingKey = makeCluegiverS1CellOrderingKey(position.positionId, arm);
+  const cellId = makeCluegiverS1CellId(orderingKey);
+  const parentJobId = makeCluegiverS1ParentJobId(cellId);
   const cluegiverObservation = mintCluegiverS1Observation(
     position,
     cluegiverBuild,
@@ -1712,7 +1823,8 @@ function buildCell(input: {
     arm,
     dependencies: [],
     route: CLUEGIVER_S1_ROUTE_PLAN,
-    execution: JOB_EXECUTION_PLAN,
+    execution: CLUEGIVER_S1_JOB_EXECUTION_PLAN,
+    persistence: jobPersistencePlan(parentJobId),
     role: "cluegiver",
     assessorReplication: null,
     promptCompiler: {
@@ -1757,7 +1869,16 @@ function buildCell(input: {
         observation,
         assessorBuild,
       );
-      const jobId = assessorJobId(parentJobId, role, typedReplication);
+      const jobId = makeCluegiverS1AssessorJobId(
+        parentJobId,
+        role,
+        typedReplication,
+      );
+      const providerPayload = cluegiverS1AssessorProviderPayload(compiled);
+      const jobRole =
+        role === "decoder"
+          ? ("teammate_decoder" as const)
+          : ("opponent_interceptor" as const);
       children.push({
         ordinal: 0,
         cellOrdinal,
@@ -1767,8 +1888,9 @@ function buildCell(input: {
         arm,
         dependencies: [parentJobId],
         route: CLUEGIVER_S1_ROUTE_PLAN,
-        execution: JOB_EXECUTION_PLAN,
-        role: role === "decoder" ? "teammate_decoder" : "opponent_interceptor",
+        execution: CLUEGIVER_S1_JOB_EXECUTION_PLAN,
+        persistence: jobPersistencePlan(jobId),
+        role: jobRole,
         assessorReplication: typedReplication,
         parentJobId,
         promptCompiler: {
@@ -1798,12 +1920,23 @@ function buildCell(input: {
             },
           },
         },
+        templateBinding: {
+          cellId,
+          arm,
+          role: jobRole,
+          assessorReplication: typedReplication,
+          observationTemplateContentHash: observation.contentHash,
+        },
         compiledPromptTemplate: {
           id: `compiled:${observation.decisionId}`,
           contentHash: compiled.contentHash,
-          systemPromptSha256: sha256Hex(compiled.systemPrompt),
-          taskPromptSha256: sha256Hex(compiled.taskPrompt),
-          actionContractSha256: sha256Hex(compiled.actionContract),
+          observationTemplateContentHash: observation.contentHash,
+          placeholderIndependentContentHash:
+            cluegiverS1AssessorPlaceholderIndependentContentHash(compiled),
+          providerPayloadContentHash: contentHash(providerPayload),
+          systemPromptSha256: sha256Hex(providerPayload.systemPrompt),
+          taskPromptSha256: sha256Hex(providerPayload.taskPrompt),
+          actionContractSha256: sha256Hex(providerPayload.actionContract),
         },
       });
     }
@@ -1863,7 +1996,7 @@ export async function buildCluegiverS1Preregistration(
     CLUEGIVER_S1_ARMS.map((arm) => ({
       position,
       arm,
-      orderingKey: makeCellOrderingKey(position.positionId, arm),
+      orderingKey: makeCluegiverS1CellOrderingKey(position.positionId, arm),
     })),
   );
   unordered.sort((left, right) =>
@@ -1887,12 +2020,33 @@ export async function buildCluegiverS1Preregistration(
   ) {
     throw new Error("S1 fixed DAG cardinality drifted");
   }
+  const jobIds = jobs.map((job) => job.jobId);
+  if (
+    new Set(jobIds).size !== jobIds.length ||
+    jobs.some(
+      (job) =>
+        job.persistence.idempotencyKey !== job.jobId ||
+        job.persistence.keySource !== "jobId" ||
+        job.persistence.decisionIdMayKeyPersistence ||
+        job.persistence.logicalActionKeyMayKeyPersistence,
+    )
+  ) {
+    throw new Error(
+      "S1 executor persistence requires one unique jobId idempotency key per job",
+    );
+  }
   const source: Omit<CluegiverS1Preregistration, "preregistrationContentHash"> =
     {
       preregistrationVersion:
         CLUEGIVER_S1_PREREGISTRATION_VERSION as typeof CLUEGIVER_S1_PREREGISTRATION_VERSION,
       status: "provider_free_shared_contracts_satisfied" as const,
       baseCommit: CLUEGIVER_S1_BASE_COMMIT as typeof CLUEGIVER_S1_BASE_COMMIT,
+      amendmentProvenance: {
+        reviewedPreregistrationParentCommit:
+          CLUEGIVER_S1_REVIEWED_PREREGISTRATION_PARENT_COMMIT,
+        relationship: "reviewed_preregistration_scaffold_parent" as const,
+        amendmentCommit: "not_recorded_to_avoid_self_reference" as const,
+      },
       integrationGate: {
         status: "satisfied_at_reviewed_integration_head" as const,
         reviewedIntegrationHead:
@@ -1947,6 +2101,12 @@ export async function buildCluegiverS1Preregistration(
           scheduledJobs: 0 as const,
           futureContrast: "only_future_C1_minus_C2_may_isolate_item_4" as const,
         },
+        promptLength: {
+          includedInTreatmentPackage: true as const,
+          heldConstant: false as const,
+          c1MinusC0UserPromptUtf8Bytes:
+            CLUEGIVER_S1_C1_PROMPT_LENGTH_DELTA_UTF8_BYTES,
+        },
       },
       implementationBindings: bindings,
       botBuilds: {
@@ -1955,16 +2115,10 @@ export async function buildCluegiverS1Preregistration(
       },
       route: CLUEGIVER_S1_ROUTE_PLAN,
       execution: {
-        mode: "dry_run" as const,
-        providerDispatch: "forbidden" as const,
-        databaseAccess: "forbidden" as const,
-        networkAccess: "forbidden" as const,
-        providerCallsThisRun: 0 as const,
-        plannedProviderCallsAfterReview: 56 as const,
-        maximumAttemptsPerJob: 1 as const,
-        retries: 0 as const,
-        fallbacks: 0 as const,
-        providerCallLicense: "unlicensed" as const,
+        ...CLUEGIVER_S1_EXECUTION_CONTROL_PLAN,
+        executorContract: mintCluegiverS1ExecutorContract(
+          sources.executionPreparationImplementation,
+        ),
       },
       dag: {
         independentUnit: "position" as const,
@@ -1977,23 +2131,16 @@ export async function buildCluegiverS1Preregistration(
         cells,
         jobs,
       },
-      outcomeSpec: CLUEGIVER_S1_OUTCOME_SPEC,
+      outcomeSpec: buildCluegiverS1OutcomeSpec(fixture),
       claims: CLUEGIVER_S1_CLAIMS,
-      invariants: {
-        oneCluegiverParentPerCell: true as const,
-        allSixAssessorsShareParentClueTriple: true as const,
-        parentRationaleVisibleDownstream: false as const,
-        childObservationTemplatesVerify: true as const,
-        sharedAssessorPolicyCompilerAndValidator: true as const,
-        sharedRegistryAwareDecisionContexts: true as const,
-        providerInvocations: 0 as const,
-        c2Jobs: 0 as const,
-      },
+      invariants: CLUEGIVER_S1_DISPATCH_INVARIANTS,
     };
-  return cloneAndDeepFreeze({
+  const preregistration = cloneAndDeepFreeze({
     ...source,
     preregistrationContentHash: contentHash(source),
   });
+  assertCluegiverS1PreregistrationDispatchContracts(preregistration);
+  return preregistration;
 }
 
 export function validatePlannedJobGroundTruthActions(
@@ -2025,7 +2172,19 @@ export function validatePlannedJobGroundTruthActions(
 
 async function main(): Promise<void> {
   const fixture = await loadCluegiverS1Fixture();
-  const preregistration = await buildCluegiverS1Preregistration(fixture);
+  const sources = await loadCluegiverS1SourceIdentities();
+  const preregistration = await buildCluegiverS1Preregistration(
+    fixture,
+    sources,
+  );
+  if (process.argv.includes("--emit-receipt")) {
+    process.stdout.write(
+      renderCluegiverS1DryRunReceipt(
+        buildCluegiverS1DryRunReceipt(preregistration, sources),
+      ),
+    );
+    return;
+  }
   console.log(
     canonicalJson({
       preregistrationVersion: preregistration.preregistrationVersion,
@@ -2035,6 +2194,10 @@ async function main(): Promise<void> {
       cells: preregistration.dag.cellCount,
       jobs: preregistration.dag.jobs.length,
       providerCallsThisRun: preregistration.execution.providerCallsThisRun,
+      maxTokens: preregistration.execution.maxTokensPerJob,
+      concurrency: preregistration.execution.concurrency,
+      providerVisiblePromptProjectionHash:
+        preregistration.invariants.providerVisiblePromptProjectionHash,
       preregistrationContentHash: preregistration.preregistrationContentHash,
       jobsContentHash: contentHash(preregistration.dag.jobs),
     }),
