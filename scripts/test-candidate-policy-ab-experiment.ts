@@ -46,12 +46,17 @@ import {
   validateCodeGuess,
 } from "@shared/substrate";
 import {
+  AGGREGATE_ERROR_TEXT_MAX_CHARS,
+  CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV,
+  CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_VALUE,
   CANDIDATE_POLICY_AB_SCHEDULES,
+  CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT,
   CALLS_PER_MATCH_ROUND,
   EXACT_COMPLETION_TOKEN_LIMIT,
   EXACT_MODEL,
   PRIMARY_ROUND_WINDOW,
   aggregateBehavioralSeedBlocks,
+  assertBehaviorSpendAuthorized,
   assertDisposableLocalDatabaseUrl,
   assertPrimaryRoundWindowMatchesSchedule,
   candidatePolicyAbJobs,
@@ -71,6 +76,7 @@ import {
   prepareCandidatePolicyAbDatabase,
 } from "./prepare-candidate-policy-ab-database";
 import { storedPrivateProviderReceipt } from "../server/privateProviderReceipt";
+import { buildHeadlessClueCallPrompt } from "../server/headlessPromptConstruction";
 
 const execFileAsync = promisify(execFile);
 const REPOSITORY_ROOT = resolve(
@@ -82,6 +88,8 @@ const compiled = compileStrategyArtifact(
 ).compiled;
 const originalFetch = globalThis.fetch;
 const originalOpenRouterKey = process.env.OPENROUTER_API_KEY;
+const originalBehaviorSpendAuthorization =
+  process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV];
 let assertions = 0;
 
 function ok(value: unknown, message: string): asserts value {
@@ -415,9 +423,10 @@ function buildCapture(
           providerMetadata: {
             usage: { costUsd: 0.000003 },
           },
-          createdAt: new Date(
-            Date.UTC(2026, 7, 1, 12, 0, callId),
-          ),
+          // Legacy PostgreSQL timestamp-without-time-zone fixture: construct
+          // as local wall time so the expected wall-clock fields are portable
+          // across host timezones.
+          createdAt: new Date(2026, 7, 1, 12, 0, callId),
         });
         providerAttempts.push({
           id: callId,
@@ -478,7 +487,8 @@ function buildCapture(
     match: {
       id: matchId,
       gameId: `game-${matchId}`,
-      completedAt: new Date("2026-08-01T12:10:00.000Z"),
+      createdAt: new Date(2026, 7, 1, 11, 50, 0),
+      completedAt: new Date(2026, 7, 1, 12, 10, 0),
       winner: "amber",
       playerConfigs,
       amberKeywords: ["a", "b", "c", "d"],
@@ -500,6 +510,7 @@ function buildCapture(
 
 function mockDependencies(options: {
   failOrdinals?: Set<number>;
+  failureMessagesByOrdinal?: Map<number, string>;
   postSourceHash?: string;
   postSourceError?: Error;
   mutateCapture?: (capture: CapturedMatchData) => void;
@@ -556,8 +567,16 @@ function mockDependencies(options: {
         setTimeout(resolvePromise, 5),
       );
       active -= 1;
-      if (options.failOrdinals?.has(jobOrdinal(config))) {
-        const error = new Error("offline injected match failure");
+      const ordinal = jobOrdinal(config);
+      const configuredFailure =
+        options.failureMessagesByOrdinal?.get(ordinal);
+      if (
+        options.failOrdinals?.has(ordinal) ||
+        configuredFailure !== undefined
+      ) {
+        const error = new Error(
+          configuredFailure ?? "offline injected match failure",
+        );
         Object.assign(error, { matchId });
         throw error;
       }
@@ -597,7 +616,7 @@ async function testFixedEnumerationsAndInputs(): Promise<void> {
     CANDIDATE_POLICY_AB_SCHEDULES["mechanism-canary"]
       .plannedProviderCalls,
     24,
-    "mechanism canary is the fixed 24-call pair",
+    "mechanism canary has a fixed 24-call schedule maximum",
   );
   equal(
     CANDIDATE_POLICY_AB_SCHEDULES["mechanism-canary"].protocolUse,
@@ -627,7 +646,7 @@ async function testFixedEnumerationsAndInputs(): Promise<void> {
   equal(
     CANDIDATE_POLICY_AB_SCHEDULES.pilot.plannedProviderCalls,
     96,
-    "pilot is the fixed 96-call two-block schedule",
+    "pilot has a fixed 96-call two-block schedule maximum",
   );
   equal(
     CANDIDATE_POLICY_AB_SCHEDULES.pilot.treatmentPackage,
@@ -642,7 +661,7 @@ async function testFixedEnumerationsAndInputs(): Promise<void> {
   equal(
     CANDIDATE_POLICY_AB_SCHEDULES.full.plannedProviderCalls,
     576,
-    "full schedule is the fixed 576-call design",
+    "full schedule has a fixed 576-call maximum",
   );
   const jobs = candidatePolicyAbJobs(CANDIDATE_POLICY_AB_SCHEDULES.full);
   equal(jobs.length, 24, "full schedule has 24 mirrored matches");
@@ -725,13 +744,28 @@ async function testDisposableDatabaseGuard(): Promise<void> {
   );
   const order: string[] = [];
   const prepared = await prepareCandidatePolicyAbDatabase(validUrl, {
-    assertBlankDatabase: async () => {
+    assertBlankDatabase: async (databaseUrl) => {
+      equal(
+        databaseUrl,
+        validUrl,
+        "blank preflight receives the explicit preparation URL",
+      );
       order.push("blank-preflight");
     },
-    runSchemaSync: async () => {
+    runSchemaSync: async (databaseUrl) => {
+      equal(
+        databaseUrl,
+        validUrl,
+        "schema sync receives the explicit preparation URL",
+      );
       order.push("db:push");
     },
-    inspectPreparedDatabase: async () => {
+    inspectPreparedDatabase: async (databaseUrl) => {
+      equal(
+        databaseUrl,
+        validUrl,
+        "post-push inspection receives the same explicit preparation URL instead of ambient DATABASE_URL",
+      );
       order.push("post-inspect");
       return {
         ...databaseLineage(),
@@ -769,6 +803,125 @@ async function testDisposableDatabaseGuard(): Promise<void> {
     0,
     "unsafe target never reaches db:push",
   );
+}
+
+async function testBehaviorSpendAuthorizationInterlock(): Promise<void> {
+  const prior =
+    process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV];
+  try {
+    delete process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV];
+    assert.doesNotThrow(() =>
+      assertBehaviorSpendAuthorized(
+        CANDIDATE_POLICY_AB_SCHEDULES["mechanism-canary"],
+      ),
+    );
+    assertions += 1;
+    assert.throws(
+      () =>
+        assertBehaviorSpendAuthorized(
+          CANDIDATE_POLICY_AB_SCHEDULES.pilot,
+        ),
+      new RegExp(CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV),
+    );
+    assertions += 1;
+    assert.throws(
+      () =>
+        assertBehaviorSpendAuthorized(
+          CANDIDATE_POLICY_AB_SCHEDULES.full,
+          "yes",
+        ),
+      new RegExp(CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV),
+    );
+    assertions += 1;
+    assert.doesNotThrow(() =>
+      assertBehaviorSpendAuthorized(
+        CANDIDATE_POLICY_AB_SCHEDULES.pilot,
+        CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_VALUE,
+      ),
+    );
+    assertions += 1;
+
+    await withTempRoot(async (root) => {
+      const canaryDependencies = mockDependencies();
+      const canary = await runCandidatePolicyAbExperiment({
+        outputDir: resolve(root, "unauthorized-env-canary"),
+        schedule: "mechanism-canary",
+        dependencies: canaryDependencies,
+      });
+      equal(
+        canary.status,
+        "complete",
+        "mechanism canary remains directly runnable without the behavior-spend authorization",
+      );
+      equal(
+        canaryDependencies.calls.length,
+        2,
+        "authorization interlock does not suppress either canary mirror",
+      );
+
+      const dependencies = mockDependencies();
+      await rejects(
+        () =>
+          runCandidatePolicyAbExperiment({
+            outputDir: resolve(root, "unauthorized-pilot"),
+            schedule: "pilot",
+            dependencies,
+          }),
+        /includes behavioral provider spend/,
+        "pilot runner refuses before an explicit behavior-spend authorization",
+      );
+      equal(
+        dependencies.calls.length,
+        0,
+        "authorization interlock fires before any match can dispatch",
+      );
+      await rejects(
+        () => lstat(resolve(root, "unauthorized-pilot")),
+        /ENOENT/,
+        "authorization interlock fires before creating experiment output",
+      );
+    });
+  } finally {
+    if (prior === undefined) {
+      delete process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV];
+    } else {
+      process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV] =
+        prior;
+    }
+  }
+}
+
+async function testPreregistrationRejectsProductionPromptDriftBeforeDispatch(): Promise<void> {
+  await withTempRoot(async (root) => {
+    const dependencies = mockDependencies();
+    dependencies.buildRoundOneProductionPrompt = (input) => {
+      const production = buildHeadlessClueCallPrompt(input);
+      return {
+        ...production,
+        fullPrompt: `${production.fullPrompt}\nOFFLINE-PROMPT-DRIFT`,
+      };
+    };
+    await rejects(
+      () =>
+        runCandidatePolicyAbExperiment({
+          outputDir: resolve(root, "mutated-production-prompt"),
+          schedule: "mechanism-canary",
+          dependencies,
+        }),
+      /production round-one prompt drifted from independently composed preregistration contract/,
+      "a mutation of the production prompt seam fails the independent preregistration oracle",
+    );
+    equal(
+      dependencies.calls.length,
+      0,
+      "prompt drift is rejected before any provider-backed match can dispatch",
+    );
+    equal(
+      dependencies.preregSeenBeforeCall(),
+      false,
+      "a drifted proof is never persisted as a valid preregistration",
+    );
+  });
 }
 
 async function testOutputDirectoryGuards(): Promise<void> {
@@ -867,17 +1020,44 @@ async function testCompleteMechanismCanary(): Promise<void> {
     equal(
       report.operationalResults.providerCalls,
       24,
-      "mechanism canary always exposes all 24 provider attempts",
+      "this fully completed canary fixture exposes all 24 planned-maximum provider attempts",
+    );
+    equal(
+      report.operationalResults
+        .exactNeverDispatchedCallsForCapturedLaunchedMatches,
+      0,
+      "a clean fully captured canary proves zero scheduled calls were skipped",
+    );
+    equal(
+      report.operationalResults
+        .unobservedProviderCallsDueToUnavailableCapture,
+      0,
+      "a clean fully captured canary has zero unavailable-capture uncertainty",
+    );
+    equal(
+      report.operationalResults.cost.providerReportedActual.calls,
+      24,
+      "all fixture costs are labeled provider-reported actual",
+    );
+    equal(
+      report.operationalResults.cost.roundedEstimate.calls,
+      0,
+      "provider-reported actual receipts never masquerade as rounded estimates",
+    );
+    equal(
+      report.operationalResults.cost.unknownCalls,
+      0,
+      "the clean canary has no unknown cost subjects",
     );
     equal(
       report.operationalResults.routeProof.exactPasses,
       24,
-      "mechanism canary operational rollup proves every exact route",
+      "this fully completed canary fixture proves all 24 observed routes",
     );
     equal(
       report.operationalResults.completionTokens.observed,
       24,
-      "mechanism canary reports every completion-token receipt",
+      "this fully completed canary fixture reports 24 observed completion-token receipts",
     );
     equal(
       report.operationalResults.completionTokens.unknownCalls,
@@ -893,19 +1073,19 @@ async function testCompleteMechanismCanary(): Promise<void> {
     equal(
       report.operationalResults.privatePaidCallReceipts.receiptRows,
       24,
-      "mechanism canary retains one private paid-call receipt per attempt",
+      "this fully completed canary fixture retains one private receipt for each of its 24 observed attempts",
     );
     equal(
       report.operationalResults.privatePaidCallReceipts
         .exactBodiesStored,
       24,
-      "mechanism canary privately retains every exact successful HTTP body",
+      "this fully completed canary fixture privately retains all 24 observed HTTP bodies",
     );
     equal(
       report.operationalResults.privatePaidCallReceipts
         .explicitReasoningAbsent,
       24,
-      "provider-omitted reasoning is explicitly counted, not fabricated",
+      "provider-omitted reasoning is explicitly counted across this fixture's 24 observed calls",
     );
     equal(
       report.operationalResults.privatePaidCallReceipts
@@ -947,7 +1127,11 @@ async function testCompleteMechanismCanary(): Promise<void> {
         sum + (artifact.capture?.providerAttempts.length ?? 0),
       0,
     );
-    equal(totalAttempts, 24, "canary retains all 24 one-attempt call rows");
+    equal(
+      totalAttempts,
+      24,
+      "this fully completed canary fixture retains all 24 planned-maximum attempt rows",
+    );
     for (const artifact of report.matchArtifacts) {
       equal(artifact.integrity.valid, true, "mock match passes all invariants");
       equal(
@@ -973,9 +1157,24 @@ async function testCompleteMechanismCanary(): Promise<void> {
       "preregistration",
     );
     equal(
+      prereg.preregistrationVersion,
+      "candidate-policy-column-ledger-preregistration@0.1.1",
+      "persisted preregistration schema names the production-seam proof revision",
+    );
+    equal(
+      report.reportVersion,
+      "candidate-policy-column-ledger-report@0.1.3",
+      "aggregate report schema names the split accounting, cost-source, and timestamp-truth revision",
+    );
+    deepEqual(
+      prereg.fixedExecution.timestampContract,
+      CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT,
+      "preregistration fixes the legacy-local versus timestamptz representation contract before dispatch",
+    );
+    equal(
       prereg.schedule.plannedProviderCalls,
       24,
-      "persisted prereg fixes scheduled calls",
+      "persisted prereg fixes the scheduled call maximum",
     );
     equal(
       prereg.treatmentContrast.compiledArtifact.id,
@@ -1056,12 +1255,21 @@ async function testCompleteMechanismCanary(): Promise<void> {
     ok(
       prereg.roundOnePromptProofs.every(
         (proof: any) =>
+          proof.construction ===
+            "production_headless_prompt_seam" &&
+          proof.independentOracle ===
+            "direct_advanced_strategy_contract_composition" &&
+          proof.independentOracleMatched === true &&
           proof.baseline.fullPromptSha256 ===
             sha256Hex(proof.baseline.fullPrompt) &&
+          proof.baseline.independentOracleFullPromptSha256 ===
+            proof.baseline.fullPromptSha256 &&
           proof.baseline.charCount ===
             proof.baseline.fullPrompt.length &&
           proof.treatment.fullPromptSha256 ===
             sha256Hex(proof.treatment.fullPrompt) &&
+          proof.treatment.independentOracleFullPromptSha256 ===
+            proof.treatment.fullPromptSha256 &&
           proof.treatment.charCount ===
             proof.treatment.fullPrompt.length &&
           proof.baseline.fullPromptSha256 !==
@@ -1079,6 +1287,10 @@ async function testCompleteMechanismCanary(): Promise<void> {
         `match artifact ${artifact.job.ordinal}`,
       );
       const capture = persistedArtifact.capture as {
+        match: {
+          createdAt: unknown;
+          completedAt: unknown;
+        };
         aiCallLogs: Array<{ createdAt: unknown }>;
         providerAttempts: Array<{
           startedAt: unknown;
@@ -1086,14 +1298,62 @@ async function testCompleteMechanismCanary(): Promise<void> {
         }>;
       };
       equal(
-        typeof capture.aiCallLogs[0]?.createdAt,
-        "string",
-        "Drizzle AI-call Date is hashed and persisted as its ISO string",
+        persistedArtifact.artifactVersion,
+        "candidate-policy-column-ledger-match@0.1.1",
+        "private match artifact schema names the timestamp-truth revision",
+      );
+      deepEqual(
+        persistedArtifact.timestampContract,
+        CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT,
+        "private artifact carries the explicit database timestamp-type contract",
+      );
+      deepEqual(
+        capture.match.createdAt,
+        {
+          localWallTime: "2026-08-01T11:50:00.000",
+          databaseType: "timestamp_without_time_zone",
+          timezone: null,
+          qualification:
+            "legacy_local_timestamp_timezone_unknown",
+        },
+        "legacy match createdAt is a qualified local wall time, not a fabricated UTC instant",
+      );
+      deepEqual(
+        capture.aiCallLogs[0]?.createdAt,
+        {
+          localWallTime: "2026-08-01T12:00:01.000",
+          databaseType: "timestamp_without_time_zone",
+          timezone: null,
+          qualification:
+            "legacy_local_timestamp_timezone_unknown",
+        },
+        "legacy AI-call createdAt is a qualified local wall time with no offset",
+      );
+      ok(
+        !(capture.aiCallLogs[0]!.createdAt as {
+          localWallTime: string;
+        }).localWallTime.endsWith("Z"),
+        "legacy local timestamp representation makes no false UTC claim",
       );
       equal(
-        typeof capture.providerAttempts[0]?.startedAt,
+        capture.providerAttempts[0]?.startedAt,
+        "2026-08-01T12:00:01.000Z",
+        "provider-attempt timestamptz retains its truthful UTC instant",
+      );
+      equal(
+        typeof capture.providerAttempts[0]?.completedAt,
         "string",
-        "Drizzle provider-attempt Date is hashed and persisted as its ISO string",
+        "provider-attempt completion timestamptz remains an ISO instant",
+      );
+      deepEqual(
+        artifact.timestampContract,
+        CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT,
+        "aggregate match projection repeats the same timestamp contract",
+      );
+      deepEqual(
+        artifact.capture?.aiCallLogs[0]?.createdAt,
+        capture.aiCallLogs[0]?.createdAt,
+        "aggregate projection preserves the qualified local timestamp without reintroducing a bogus Z",
       );
     }
     const persistedReport = await assertPersistedSelfHash(
@@ -1259,6 +1519,219 @@ async function testSequentialBlocksAndFailureStop(): Promise<void> {
   });
 }
 
+async function testStrictPartialRecoveryStopsWithoutInventingMissingCalls(): Promise<void> {
+  await withTempRoot(async (root) => {
+    const dependencies = mockDependencies({
+      failureMessagesByOrdinal: new Map([
+        [
+          2,
+          "Strict execution invalidated generate_interception for Amber Seat 1: parse quality partial_recovery",
+        ],
+      ]),
+      mutateCapture: (capture) => {
+        if (capture.match?.id !== 101) return;
+        capture.match.totalRounds = 1;
+        capture.rounds = [];
+        capture.aiCallLogs = capture.aiCallLogs.slice(0, 5);
+        capture.providerAttempts =
+          capture.providerAttempts.slice(0, 5);
+        const rejectedCall = capture.aiCallLogs[4]!;
+        rejectedCall.parseQuality = "partial_recovery";
+        rejectedCall.error =
+          "Strict execution rejected partial_recovery";
+        rejectedCall.actionApplied = false;
+        rejectedCall.validationMetadata = {
+          validator: "shared.validateCodeGuess@substrate",
+          passed: false,
+          problems: ["strict parse quality partial_recovery"],
+        };
+        const paidAttempt = capture.providerAttempts[4]!;
+        paidAttempt.status = "succeeded";
+        paidAttempt.actionApplied = false;
+        paidAttempt.validationMetadata =
+          rejectedCall.validationMetadata;
+      },
+    });
+    const outputDir = resolve(root, "strict-partial-recovery");
+    const report = await runCandidatePolicyAbExperiment({
+      outputDir,
+      schedule: "mechanism-canary",
+      dependencies,
+    });
+
+    equal(
+      report.status,
+      "incomplete",
+      "strict partial-recovery rejection makes the mechanism run incomplete",
+    );
+    equal(
+      report.schedule.plannedProviderCalls,
+      24,
+      "mechanism preregistration exposes 24 only as the schedule maximum",
+    );
+    equal(
+      report.operationalResults.providerCalls,
+      17,
+      "operational accounting reports the 12-call settled mirror plus the five calls actually made before strict rejection",
+    );
+    ok(
+      report.operationalResults.providerCalls <
+        report.operationalResults.plannedProviderCalls,
+      "actual observed provider calls may be below the planned maximum",
+    );
+    equal(
+      report.operationalResults
+        .maximumProviderCallsForLaunchedMatches,
+      24,
+      "two launched mirrors retain a 24-call maximum, not a guaranteed actual count",
+    );
+    equal(
+      report.operationalResults
+        .maximumProviderCallsForCapturedLaunchedMatches,
+      24,
+      "both launched mirrors have complete captures with a 24-call captured maximum",
+    );
+    equal(
+      report.operationalResults
+        .exactNeverDispatchedCallsForCapturedLaunchedMatches,
+      7,
+      "clean durable captures prove exactly seven post-failure actions were never dispatched",
+    );
+    equal(
+      report.operationalResults
+        .unobservedProviderCallsDueToUnavailableCapture,
+      0,
+      "the live-like strict-failure fixture has no unavailable capture and therefore zero unobserved calls from that cause",
+    );
+    equal(
+      report.operationalResults.unobservedProviderCallsUpperBound,
+      0,
+      "the live-like strict-failure fixture has no unobserved-call upper-bound allowance",
+    );
+    equal(
+      report.operationalResults
+        .providerCallOverageAgainstCapturedMaximum,
+      0,
+      "observed calls do not exceed the captured schedule maximum",
+    );
+    equal(
+      report.operationalResults
+        .observedAiCallRecordsWithoutLinkedProviderAttempt,
+      0,
+      "every observed AI call has attempt telemetry; never-dispatched actions are not mislabeled missing attempts",
+    );
+    equal(
+      report.operationalResults.completionTokens.observed,
+      17,
+      "token accounting covers exactly the calls that occurred",
+    );
+    equal(
+      report.operationalResults.completionTokens.unknownCalls,
+      0,
+      "never-dispatched actions do not fabricate unknown token receipts",
+    );
+    equal(
+      report.operationalResults.providerAttemptState.succeeded,
+      17,
+      "the fifth call remains a successful transport attempt despite strict parse rejection",
+    );
+    equal(
+      report.operationalResults.actionDisposition.rejected,
+      1,
+      "the strict parser rejection is distinct from transport success",
+    );
+    ok(
+      report.operationalResults.providerCallAccountingQualification.includes(
+        "Unavailable captures are separated",
+      ),
+      "report qualification explicitly separates never-dispatched calls from unavailable-capture uncertainty",
+    );
+    equal(
+      report.operationalResults.incompleteRunDisposition,
+      "retain_observed_no_retry_no_replacement_no_rerun_recommendation",
+      "incomplete evidence carries no retry, replacement, or rerun instruction",
+    );
+    equal(
+      dependencies.calls.length,
+      2,
+      "the two preregistered mirrors each launch once with no retry or replacement",
+    );
+    equal(
+      dependencies.captureCalls(),
+      2,
+      "each launched match is captured once and never rerun",
+    );
+    equal(
+      report.matchArtifacts.length,
+      2,
+      "the failed partial match and settled mirror both remain durable",
+    );
+    const partialArtifact = report.matchArtifacts.find(
+      (artifact) => artifact.job.ordinal === 2,
+    )!;
+    equal(
+      partialArtifact.capture?.providerAttempts.length,
+      5,
+      "the failed mirror contains exactly five observed transport attempts and no synthetic sixth call",
+    );
+    const fifthCall = partialArtifact.capture?.aiCallLogs[4];
+    equal(
+      fifthCall?.team,
+      "amber",
+      "the fifth observed call is Amber's action",
+    );
+    equal(
+      fifthCall?.actionType,
+      "generate_interception",
+      "the fifth observed call is the Amber interception",
+    );
+    equal(
+      fifthCall?.parseQuality,
+      "partial_recovery",
+      "the successful fifth transport retains the strict parser disposition that terminated the match",
+    );
+    const preregistration = JSON.parse(
+      await readFile(
+        resolve(outputDir, "preregistration.json"),
+        "utf8",
+      ),
+    ) as {
+      fixedExecution: {
+        retries: number;
+        replacementMatches: number;
+      };
+    };
+    equal(
+      preregistration.fixedExecution.retries,
+      0,
+      "preregistration permits no retry",
+    );
+    equal(
+      preregistration.fixedExecution.replacementMatches,
+      0,
+      "preregistration permits no replacement match",
+    );
+    const persistedReportText = await readFile(
+      resolve(outputDir, "report.json"),
+      "utf8",
+    );
+    ok(
+      !persistedReportText.includes(
+        "missingProviderAttemptsAgainstStartedMatches",
+      ) &&
+        !persistedReportText.includes(
+          "unmadeOrUnobservedCallsAgainstLaunchedMaximum",
+        ),
+      "both former false combined-gap fields are absent from persisted output",
+    );
+    await assertPersistedSelfHash(
+      resolve(outputDir, "report.json"),
+      "reportContentHash",
+      "strict partial-recovery report",
+    );
+  });
+}
+
 async function testPostRunLineageFailureStillPersistsReport(): Promise<void> {
   await withTempRoot(async (root) => {
     const dependencies = mockDependencies({
@@ -1386,9 +1859,9 @@ async function testArtifactWriteFailurePreservesSiblingAndReport(): Promise<void
     );
     equal(
       report.operationalResults
-        .missingProviderAttemptsAgainstStartedMatches,
+        .observedAiCallRecordsWithoutLinkedProviderAttempt,
       0,
-      "no launched paid attempt is left unaccounted after recovery",
+      "every observed AI call has linked provider-attempt telemetry after recovery",
     );
     equal(
       report.operationalResults.jobs
@@ -1427,21 +1900,21 @@ async function testArtifactWriteFailurePreservesSiblingAndReport(): Promise<void
     equal(
       recovery.evidence?.providerCalls,
       24,
-      "recovered mirror accounts for all 24 of its paid attempts",
+      "this fully completed four-round mirror recovery accounts for all 24 observed paid attempts",
     );
     equal(
       recovery.evidence?.routeProof.exactPasses,
       24,
-      "recovered mirror retains its exact route proofs",
+      "this fully completed recovered mirror retains 24 observed exact route proofs",
     );
     equal(
       recovery.evidence?.privatePaidCallReceipts.exactBodiesStored,
       24,
-      "recovered mirror reports its stored exact bodies by count, not content",
+      "this fully completed recovered mirror reports 24 observed bodies by count, not content",
     );
     ok(
-      (recovery.evidence?.cost.knownCostCalls ?? 0) > 0,
-      "recovered mirror keeps its paid-cost accounting",
+      (recovery.evidence?.cost.providerReportedActual.calls ?? 0) > 0,
+      "recovered mirror keeps its provider-reported actual paid-cost accounting",
     );
     equal(
       dependencies.captureCalls(),
@@ -1537,9 +2010,38 @@ async function testUnrecoverableUnpersistedMatchStaysExplicit(): Promise<void> {
     );
     equal(
       report.operationalResults
-        .missingProviderAttemptsAgainstStartedMatches,
+        .maximumProviderCallsForCapturedLaunchedMatches,
       24,
-      "unrecovered paid attempts stay visible as missing, never as absent",
+      "only the persisted sibling contributes a captured-match maximum",
+    );
+    equal(
+      report.operationalResults
+        .exactNeverDispatchedCallsForCapturedLaunchedMatches,
+      0,
+      "the available sibling capture proves no calls were skipped within that captured match",
+    );
+    equal(
+      report.operationalResults
+        .unobservedProviderCallsDueToUnavailableCapture,
+      null,
+      "the unavailable capture keeps its exact unobserved call count unknown",
+    );
+    equal(
+      report.operationalResults.unobservedProviderCallsUpperBound,
+      24,
+      "the unavailable capture contributes only its 24-call schedule upper bound",
+    );
+    equal(
+      report.operationalResults
+        .providerCallOverageAgainstCapturedMaximum,
+      0,
+      "the available capture has no observed-call overage",
+    );
+    equal(
+      report.operationalResults
+        .observedAiCallRecordsWithoutLinkedProviderAttempt,
+      0,
+      "unavailable capture fabricates no missing-attempt telemetry rows",
     );
     equal(
       report.status,
@@ -1614,7 +2116,7 @@ async function testAggregateReportOmitsExactProviderBodies(): Promise<void> {
       report.operationalResults.privatePaidCallReceipts
         .hiddenReasoningPresentAndStored,
       24,
-      "every sentinel body carries provider reasoning",
+      "all 24 observed bodies in this completed fixture carry provider reasoning",
     );
 
     const reportText = await readFile(
@@ -1756,22 +2258,22 @@ async function testAggregateReportOmitsExactProviderBodies(): Promise<void> {
     equal(
       aggregateAttempts,
       24,
-      "all 24 paid attempts remain countable in the aggregate",
+      "all 24 observed attempts in this fully completed fixture remain countable in the aggregate",
     );
     equal(
       report.operationalResults.providerCalls,
       24,
-      "paid-call denominator is unchanged by redaction",
+      "this completed fixture's 24 observed-call denominator is unchanged by redaction",
     );
     equal(
       report.operationalResults.routeProof.exactPasses,
       24,
-      "route proofs are unchanged by redaction",
+      "this completed fixture's 24 observed route proofs are unchanged by redaction",
     );
     equal(
       report.operationalResults.completionTokens.observed,
       24,
-      "usage and headroom accounting is unchanged by redaction",
+      "this completed fixture's 24 observed usage receipts are unchanged by redaction",
     );
 
     const persistedReport = await assertPersistedSelfHash(
@@ -1798,6 +2300,136 @@ async function testAggregateReportOmitsExactProviderBodies(): Promise<void> {
   });
 }
 
+async function testAggregateReportSanitizesRunnerErrorText(): Promise<void> {
+  await withTempRoot(async (root) => {
+    const bodySentinel =
+      "OFFLINE-PROVIDER-ERROR-BODY-MUST-STAY-PRIVATE";
+    const arbitraryProviderBodySentinel =
+      "ARBITRARY-VENDOR-ERROR-BODY-MUST-STAY-PRIVATE";
+    const providerError =
+      `Error: Strict execution invalidated generate_clues: ` +
+      `OpenRouter API error: 429 {"error":"${bodySentinel}"}`;
+    const arbitraryProviderError =
+      `Error: Strict execution invalidated generate_guess: ` +
+      `AcmeInference API failure 503 {"error":"${arbitraryProviderBodySentinel}"}`;
+    const longLocalError = `offline runner failure ${"x".repeat(
+      AGGREGATE_ERROR_TEXT_MAX_CHARS * 3,
+    )}`;
+    const dependencies = mockDependencies({
+      mutateCapture: (capture) => {
+        if (capture.match?.id !== 100) return;
+        capture.aiCallLogs[0]!.error = providerError;
+        capture.aiCallLogs[1]!.error = longLocalError;
+        capture.aiCallLogs[2]!.error = arbitraryProviderError;
+        capture.providerAttempts[0]!.error = providerError;
+        capture.providerAttempts[1]!.error =
+          arbitraryProviderError;
+        capture.match!.qualitySummary = {
+          taintEvents: [
+            {
+              provider: "openrouter",
+              error: providerError,
+            },
+          ],
+        };
+        const exactBody = JSON.stringify({
+          error: bodySentinel,
+          provider: "DeepInfra",
+        });
+        capture.providerAttempts[0]!.privateResponseReceipt =
+          storedPrivateProviderReceipt({
+            responseBodyText: exactBody,
+            parsedResponse: JSON.parse(exactBody),
+            bodyFormat: "parsed_json",
+          });
+      },
+    });
+    const outputDir = resolve(root, "aggregate-error-boundary");
+    const report = await runCandidatePolicyAbExperiment({
+      outputDir,
+      schedule: "mechanism-canary",
+      dependencies,
+    });
+    equal(
+      report.status,
+      "incomplete",
+      "runner-error fixture remains an invalid match rather than becoming behavioral evidence",
+    );
+    const reportText = await readFile(
+      resolve(outputDir, "report.json"),
+      "utf8",
+    );
+    ok(
+      !reportText.includes(bodySentinel) &&
+        !reportText.includes(arbitraryProviderBodySentinel),
+      "aggregate report removes provider-sourced error bodies without depending on a literal OpenRouter name",
+    );
+
+    const aggregate = report.matchArtifacts.find(
+      (entry) => entry.job.ordinal === 1,
+    )!;
+    const aiError = aggregate.capture?.aiCallLogs[0]?.error;
+    const attemptError =
+      aggregate.capture?.providerAttempts[0]?.error;
+    const qualityError = (
+      (
+        aggregate.capture?.match?.qualitySummary as {
+          taintEvents?: Array<{ error?: unknown }>;
+        }
+      )?.taintEvents?.[0]
+    )?.error;
+    for (const [label, error] of [
+      ["AI-call", aiError],
+      ["provider-attempt", attemptError],
+      ["match-quality", qualityError],
+    ] as const) {
+      ok(
+        typeof error === "string" &&
+          error.includes("Provider HTTP 429") &&
+          error.includes("provider response detail removed") &&
+          error.length <= AGGREGATE_ERROR_TEXT_MAX_CHARS,
+        `${label} error is a bounded operational summary`,
+      );
+    }
+    const arbitraryProviderAggregateError =
+      aggregate.capture?.aiCallLogs[2]?.error;
+    ok(
+      typeof arbitraryProviderAggregateError === "string" &&
+        arbitraryProviderAggregateError.includes(
+          "Provider HTTP 503",
+        ) &&
+        !arbitraryProviderAggregateError.includes(
+          arbitraryProviderBodySentinel,
+        ),
+      "an arbitrary provider name receives the same body-removal boundary",
+    );
+    const cappedLocalError =
+      aggregate.capture?.aiCallLogs[1]?.error;
+    ok(
+      typeof cappedLocalError === "string" &&
+        cappedLocalError.length ===
+          AGGREGATE_ERROR_TEXT_MAX_CHARS &&
+        cappedLocalError.endsWith("..."),
+      "non-provider runner errors are also mechanically capped",
+    );
+
+    const privateArtifactText = await readFile(
+      resolve(outputDir, aggregate.privateArtifact.relativePath),
+      "utf8",
+    );
+    ok(
+      privateArtifactText.includes(bodySentinel) &&
+        privateArtifactText.includes(arbitraryProviderBodySentinel),
+      "the authoritative 0600 per-match artifact preserves exact provider errors and private receipts",
+    );
+    await assertPersistedSelfHash(
+      resolve(outputDir, "report.json"),
+      "reportContentHash",
+      "runner-error-sanitized report",
+    );
+  });
+}
+
 async function testOperationalRollupRetainsPartialReceiptsAndHeadroom(): Promise<void> {
   await withTempRoot(async (root) => {
     const dependencies = mockDependencies({
@@ -1808,6 +2440,7 @@ async function testOperationalRollupRetainsPartialReceiptsAndHeadroom(): Promise
         capture.aiCallLogs[1]!.completionTokens = null;
         capture.aiCallLogs[1]!.estimatedCostUsd = null;
         capture.aiCallLogs[1]!.providerMetadata = {};
+        capture.aiCallLogs[2]!.providerMetadata = {};
         capture.providerAttempts[0]!.aiCallLogId =
           "offline-unlinked-attempt";
       },
@@ -1825,7 +2458,7 @@ async function testOperationalRollupRetainsPartialReceiptsAndHeadroom(): Promise
     equal(
       report.operationalResults.providerCalls,
       24,
-      "unlinked provider attempt is still counted as a physical call",
+      "all 24 observed physical calls in this completed fixture remain counted despite one broken link",
     );
     equal(
       report.operationalResults.linkedProviderAttemptReceipts,
@@ -1836,6 +2469,12 @@ async function testOperationalRollupRetainsPartialReceiptsAndHeadroom(): Promise
       report.operationalResults.unlinkedProviderAttempts,
       1,
       "unlinked attempt is explicitly counted",
+    );
+    equal(
+      report.operationalResults
+        .observedAiCallRecordsWithoutLinkedProviderAttempt,
+      1,
+      "the corresponding observed AI call is explicitly counted as lacking linked attempt telemetry",
     );
     equal(
       report.operationalResults.completionTokens.observed,
@@ -1861,14 +2500,87 @@ async function testOperationalRollupRetainsPartialReceiptsAndHeadroom(): Promise
       "near-ceiling call produces exact maximum utilization",
     );
     equal(
-      report.operationalResults.cost.unknownCostCalls,
+      report.operationalResults.cost.providerReportedActual.calls,
+      22,
+      "provider-reported actual costs are counted separately from estimates",
+    );
+    equal(
+      report.operationalResults.cost.roundedEstimate.calls,
+      1,
+      "one application estimate remains explicitly labeled as rounded",
+    );
+    equal(
+      report.operationalResults.cost.roundedEstimate
+        .precisionDecimalPlaces,
+      6,
+      "the estimate's six-decimal rounding is explicit",
+    );
+    equal(
+      report.operationalResults.cost.unknownCalls,
       1,
       "missing paid-cost receipt is explicit",
     );
     equal(
       report.operationalResults.routeProof.exactPasses,
       24,
-      "linkage defect does not erase independently valid route proofs",
+      "linkage defect does not erase this fixture's 24 independently valid observed route proofs",
+    );
+  });
+}
+
+async function testOperationalRollupExposesProviderCallOverage(): Promise<void> {
+  await withTempRoot(async (root) => {
+    const dependencies = mockDependencies({
+      mutateCapture: (capture) => {
+        if (capture.match?.id !== 100) return;
+        const sourceAttempt =
+          capture.providerAttempts[
+            capture.providerAttempts.length - 1
+          ]!;
+        capture.providerAttempts.push({
+          ...sourceAttempt,
+          id: "offline-extra-provider-attempt",
+          aiCallLogId: "offline-no-corresponding-ai-call",
+        });
+      },
+    });
+    const report = await runCandidatePolicyAbExperiment({
+      outputDir: resolve(root, "provider-call-overage"),
+      schedule: "mechanism-canary",
+      dependencies,
+    });
+    equal(
+      report.status,
+      "incomplete",
+      "an extra durable provider-attempt row invalidates the canary",
+    );
+    equal(
+      report.operationalResults.providerCalls,
+      25,
+      "the extra observed provider call remains counted",
+    );
+    equal(
+      report.operationalResults
+        .maximumProviderCallsForCapturedLaunchedMatches,
+      24,
+      "the captured-match maximum remains the preregistered schedule maximum",
+    );
+    equal(
+      report.operationalResults
+        .providerCallOverageAgainstCapturedMaximum,
+      1,
+      "the overage is explicit rather than clamped to zero",
+    );
+    equal(
+      report.operationalResults
+        .exactNeverDispatchedCallsForCapturedLaunchedMatches,
+      null,
+      "an overage cannot manufacture a negative or zero never-dispatched count",
+    );
+    equal(
+      report.operationalResults.unlinkedProviderAttempts,
+      1,
+      "the extra attempt's missing AI-call attribution remains independently visible",
     );
   });
 }
@@ -2170,7 +2882,7 @@ async function testPrivateReceiptLineageFailureSuppressesCanary(): Promise<void>
     equal(
       report.operationalResults.providerCalls,
       24,
-      "receipt corruption never erases the observed paid-call denominator",
+      "receipt corruption never erases this completed fixture's 24 observed paid calls",
     );
     equal(
       report.operationalResults.privatePaidCallReceipts
@@ -2499,6 +3211,68 @@ async function testCaptureIntegrityCatchesTreatmentDrift(): Promise<void> {
       issue.includes("successful DeepInfra detailed attempt"),
     ),
     "ambiguous semantic route status remains fail-closed",
+  );
+}
+
+async function testRunnerBuiltPromptPassesCaptureIntegrity(): Promise<void> {
+  const schedule = CANDIDATE_POLICY_AB_SCHEDULES["mechanism-canary"];
+  const job = candidatePolicyAbJobs(schedule)[0]!;
+  const capture = buildCapture(86, job.config);
+  const result = {
+    matchId: 86,
+    gameId: "game-86",
+    winner: "amber" as const,
+    totalRounds: schedule.roundsPerMatch,
+    teams: {},
+    players: [],
+  };
+  const treatmentClue = capture.aiCallLogs.find(
+    (call) =>
+      call.team === job.treatmentTeam &&
+      call.actionType === "generate_clues" &&
+      call.roundNumber === 2,
+  )!;
+  const teamConfig = job.config.players.find(
+    (player) => player.team === job.treatmentTeam,
+  )!.aiConfig!;
+  const runnerBuilt = buildHeadlessClueCallPrompt({
+    config: teamConfig,
+    team: job.treatmentTeam,
+    keywords: ["harbor", "ember", "meadow", "cipher"],
+    targetCode: [1, 2, 3],
+    history: [
+      {
+        clues: ["signal", "ridge", "bloom"],
+        targetCode: [2, 3, 4],
+      },
+    ],
+    ablations: job.config.ablations?.flags,
+    promptOverrides: job.config.promptOverrides,
+  });
+  treatmentClue.prompt = runnerBuilt.fullPrompt;
+  deepEqual(
+    validateCapturedMatch(job, schedule, result, capture),
+    [],
+    "capture integrity accepts a treatment clue prompt built by the exact production headless-runner seam",
+  );
+  ok(
+    runnerBuilt.fullPrompt.includes(
+      CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT.instruction,
+    ) &&
+      runnerBuilt.fullPrompt.includes("YOUR PUBLIC COLUMN LEDGER"),
+    "the production runner seam composes both treatment authority and the round-two ledger",
+  );
+
+  treatmentClue.prompt = runnerBuilt.fullPrompt.replace(
+    CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT.instruction,
+    "",
+  );
+  ok(
+    validateCapturedMatch(job, schedule, result, capture).some(
+      (issue) =>
+        issue.includes("candidate-policy carrier differs from seating"),
+    ),
+    "capture integrity rejects a mutation of the real runner-built treatment prompt",
   );
 }
 
@@ -3101,14 +3875,21 @@ async function main(): Promise<void> {
   try {
     await testFixedEnumerationsAndInputs();
     await testDisposableDatabaseGuard();
+    await testBehaviorSpendAuthorizationInterlock();
+    await testPreregistrationRejectsProductionPromptDriftBeforeDispatch();
     await testOutputDirectoryGuards();
+    process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV] =
+      CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_VALUE;
     await testCompleteMechanismCanary();
     await testSequentialBlocksAndFailureStop();
+    await testStrictPartialRecoveryStopsWithoutInventingMissingCalls();
     await testPostRunLineageFailureStillPersistsReport();
     await testArtifactWriteFailurePreservesSiblingAndReport();
     await testUnrecoverableUnpersistedMatchStaysExplicit();
     await testAggregateReportOmitsExactProviderBodies();
+    await testAggregateReportSanitizesRunnerErrorText();
     await testOperationalRollupRetainsPartialReceiptsAndHeadroom();
+    await testOperationalRollupExposesProviderCallOverage();
     await testPrimaryWindowIsPinnedToTheSchedule();
     await testReciprocalInterceptionIsAnAlias();
     await testEnforcedCluePromptMatchesKeywordValidator();
@@ -3116,6 +3897,7 @@ async function main(): Promise<void> {
     await testRoundOneCannotAffectPrimaryOutcomes();
     await testBehavioralHeadlinePreservesMirroredBlockContrasts();
     await testCaptureIntegrityCatchesTreatmentDrift();
+    await testRunnerBuiltPromptPassesCaptureIntegrity();
     await spawnImportCheck();
     await testPersistValidateApplyOrder();
     await testStrictAndNonStrictValidationCompatibility();
@@ -3133,6 +3915,14 @@ async function main(): Promise<void> {
       delete process.env.OPENROUTER_API_KEY;
     } else {
       process.env.OPENROUTER_API_KEY = originalOpenRouterKey;
+    }
+    if (originalBehaviorSpendAuthorization === undefined) {
+      delete process.env[
+        CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV
+      ];
+    } else {
+      process.env[CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV] =
+        originalBehaviorSpendAuthorization;
     }
   }
 }

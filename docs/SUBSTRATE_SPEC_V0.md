@@ -132,9 +132,10 @@ matches from its denominators by default (only `includeTainted` keeps them).**
 So in exploratory runs an illegal action removes the whole match from the
 default legacy rates while every row stays durable — the legacy aggregate
 silently describes a filtered subset. The strict A/B harness never reads that
-path: it retains every match, counts every paid attempt, and suppresses the
-behavioral comparison instead of dropping matches. The preregistration records
-this disposition explicitly under `nonStrictTaintedMatchDisposition`.
+path: it retains every match, counts every observed durable paid attempt, and
+suppresses the behavioral comparison instead of dropping matches. The
+preregistration records this disposition explicitly under
+`nonStrictTaintedMatchDisposition`.
 
 The A/B preregistration records the complete enforced clue contract and the
 known 28% within-triple duplicate probability of three draws with replacement
@@ -145,6 +146,16 @@ stem rules apply only to keywords with **at least four normalized characters**,
 and shorter keywords are checked for exact equality only. The enforced prompt
 text states that same gate verbatim, so the model is never told a rule stricter
 than the one the validator applies.
+
+Round-one prompt proofs are constructed through
+`buildHeadlessClueCallPrompt`, the same production seam used immediately before
+the headless runner dispatches a clue request. Before any match can start, each
+baseline and treatment byte string is compared with a separately composed
+oracle that calls the pinned advanced-strategy contract directly. The
+preregistration stores both construction identities, the exact prompt bytes,
+hashes, lengths, and a successful independent-oracle marker. A disagreement is
+a pre-dispatch hard failure; a proof cannot certify a mutation in its own
+production construction path.
 
 The mirrored A/B schedule swaps the treatment between Amber and Blue; it does
 not rotate every actor role. In current 2v2 execution the cluegiver alternates
@@ -172,6 +183,27 @@ their treatment package. A future minimal-mechanism pilot must instead
 pre-register `minimal_ledger_plus_rejection_only`; it cannot inherit the current
 pilot's identity or results. Neither package transfers to The Table until the
 exact prompt bytes and arm assignment are proven identical there.
+
+The mechanism schedule's `plannedProviderCalls: 24` is a **maximum**, reached
+only if both two-round mirrors reach every scheduled action. A strict parse,
+validation, transport, or telemetry failure can terminate one match before its
+later actions are dispatched, while the already-started mirror is allowed to
+settle. Reports therefore keep `plannedProviderCalls` separate from observed
+durable `providerCalls`. For matches with available captures,
+`maximumProviderCallsForCapturedLaunchedMatches` defines the relevant maximum
+and `exactNeverDispatchedCallsForCapturedLaunchedMatches` is populated only
+when AI-call/provider-attempt linkage is clean and there is no overage. Thus the
+live-like strict-failure shape is 17 observed of a 24-call captured maximum,
+with exactly seven calls never dispatched. Unavailable captures are not folded
+into that number:
+`unobservedProviderCallsDueToUnavailableCapture` is `0` when none are
+unavailable and otherwise `null`, accompanied by
+`unobservedProviderCallsUpperBound`. Any observed count above the captured
+maximum is exposed as `providerCallOverageAgainstCapturedMaximum`; it is never
+clamped away. Observed AI rows without linked provider attempts and unlinked
+provider attempts are separately named linkage defects. The incomplete run is
+retained as observed, with no retry, replacement, or recommendation to rerun
+it.
 
 The legacy Herpetarium headless runner is also not the Table competitive
 protocol: it allows round-1 interception, resolves own guesses before
@@ -205,17 +237,44 @@ row along with the receipt's SHA-256, UTF-8 length, reasoning presence or
 explicit absence, reasoning-field names, reasoning-token count, and the full
 route/usage/headroom/disposition metadata — but never the body or reasoning
 text. Counts, lineage failures, and raw-body byte totals are still disclosed,
-now against a two-copy storage floor.
+now against a two-copy storage floor. Cost evidence is source-labeled:
+`providerReportedActual` contains only a provider usage receipt, while
+`roundedEstimate` contains the application's six-decimal model-registry
+estimate. `combinedKnownSumUsd` is retained for convenience but explicitly
+warns that it mixes those two evidence classes; unknown calls never disappear
+from the denominator.
+
+The legacy `matches.created_at`, `matches.completed_at`,
+`ai_call_logs.created_at`, and `team_chatter.created_at` columns are PostgreSQL
+`timestamp without time zone`. A JavaScript `Date#toJSON()` would append `Z`
+and falsely turn those wall-clock values into claimed UTC instants. Match and
+aggregate artifacts therefore replace each non-null value with a structured
+`localWallTime` string containing no offset, the source database type, a null
+timezone, and the explicit qualification
+`legacy_local_timestamp_timezone_unknown`. The timestamp contract is fixed in
+preregistration and repeated in each private and aggregate match entry.
+`provider_attempts.started_at` and `completed_at` are true `timestamptz`
+columns; those alone retain ISO-8601 UTC `Z` serialization.
+
+Provider error details follow the same private boundary. Aggregate runner error
+text recognizes provider HTTP/API/route/transport signals independently of a
+literal provider name, removes response detail, and caps every remaining
+summary. Exact error text remains only in the private match artifact and
+disposable database evidence.
 
 A launched match whose private artifact fails to persist is still a paid match.
 The harness re-reads that match once from the disposable database and folds its
 provider-attempt, cost, token, and route evidence into the operational rollup
 under `recoveredOperationalSummary`, again without any exact body, so no paid
-attempt goes uncounted. This is a read, never a retry: the match is not re-run
-or replaced, its artifact stays absent, the sanitized persistence failure stays
-in the report, the run stays incomplete, and behavior stays suppressed. If the
-re-read itself fails the summary is recorded as `unavailable` with a sanitized
-reason and the calls stay visible as missing rather than disappearing.
+attempt present in recoverable evidence goes uncounted. This is a read, never a
+retry: the match is not re-run or replaced, its artifact stays absent, the
+sanitized persistence failure stays in the report, the run stays incomplete,
+and behavior stays suppressed. If the re-read itself fails the summary is
+recorded as `unavailable` with a sanitized reason. The launched-match maximum
+and captured-match maximum then remain separate: never-dispatched calls can
+still be exact for the available sibling, while the unavailable match
+contributes only a `null` exact count and a schedule-derived unobserved-call
+upper bound.
 
 ## 4c. The next cross-round experiment, pre-registered (decided 2026-08-02)
 

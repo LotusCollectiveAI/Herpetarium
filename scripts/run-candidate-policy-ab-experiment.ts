@@ -53,15 +53,19 @@ import {
 import { getPromptStrategy } from "../server/promptStrategies";
 import { verifyPrivateProviderReceipt } from "../server/privateProviderReceipt";
 import { getRandomKeywords } from "../server/wordPacks";
+import {
+  buildHeadlessClueCallPrompt,
+  type HeadlessClueCallPromptInput,
+} from "../server/headlessPromptConstruction";
 
 export const CANDIDATE_POLICY_AB_EXPERIMENT_VERSION =
   "candidate-policy-column-ledger-ab@0.1.0";
 export const CANDIDATE_POLICY_AB_PREREGISTRATION_VERSION =
-  "candidate-policy-column-ledger-preregistration@0.1.0";
+  "candidate-policy-column-ledger-preregistration@0.1.1";
 export const CANDIDATE_POLICY_AB_MATCH_ARTIFACT_VERSION =
-  "candidate-policy-column-ledger-match@0.1.0";
+  "candidate-policy-column-ledger-match@0.1.1";
 export const CANDIDATE_POLICY_AB_REPORT_VERSION =
-  "candidate-policy-column-ledger-report@0.1.0";
+  "candidate-policy-column-ledger-report@0.1.3";
 
 export const EXACT_MODEL = "deepseek/deepseek-v4-flash-0731";
 export const EXACT_UPSTREAM_SLUG = "deepinfra";
@@ -71,10 +75,34 @@ export const PHYSICAL_ATTEMPTS_PER_CALL = 1;
 export const CALLS_PER_MATCH_ROUND = 6;
 export const EXACT_COMPLETION_TOKEN_LIMIT = 65_536;
 export const DISPOSABLE_DATABASE_PREFIX = "herp_decrypto_ab_";
+export const CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV =
+  "HERPETARIUM_AUTHORIZE_CANDIDATE_POLICY_AB_BEHAVIOR_SPEND";
+export const CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_VALUE =
+  "I_ACKNOWLEDGE_BEHAVIOR_INCLUDED_PROVIDER_SPEND";
+export const AGGREGATE_ERROR_TEXT_MAX_CHARS = 512;
 export const FIXED_ABLATIONS = [
   "no_scratch_notes",
   "no_opponent_transcript",
 ] as const;
+export const CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT = {
+  legacyLocalTimestampFields: [
+    "capture.match.createdAt",
+    "capture.match.completedAt",
+    "capture.aiCallLogs[].createdAt",
+    "capture.teamChatter[].createdAt",
+  ],
+  legacyDatabaseType: "timestamp_without_time_zone",
+  legacyValueRepresentation:
+    "structured_local_wall_time_without_offset",
+  legacyQualification:
+    "legacy_local_timestamp_timezone_unknown",
+  providerAttemptTimestampFields: [
+    "capture.providerAttempts[].startedAt",
+    "capture.providerAttempts[].completedAt",
+  ],
+  providerAttemptDatabaseType: "timestamp_with_time_zone",
+  providerAttemptJsonRepresentation: "iso_8601_utc",
+} as const;
 
 const execFileAsync = promisify(execFile);
 const REPOSITORY_ROOT = resolve(
@@ -133,6 +161,7 @@ export interface CandidatePolicyAbSchedule {
   protocolUse: CandidatePolicyAbProtocolUse;
   plannedSeedBlocks: number;
   plannedMatches: number;
+  /** Maximum only: terminal match failure can prevent later dispatches. */
   plannedProviderCalls: number;
   purpose: string;
   inferenceQualification: string;
@@ -181,6 +210,28 @@ export function assertPrimaryRoundWindowMatchesSchedule(
   ) {
     throw new Error(
       `schedule ${scheduleValue.id} runs ${scheduleValue.roundsPerMatch} rounds per match but the fixed primary window is rounds ${PRIMARY_ROUND_WINDOW.firstRound}-${PRIMARY_ROUND_WINDOW.lastRound}`,
+    );
+  }
+}
+
+/**
+ * A mechanism canary may always run, but a behavior-bearing schedule is a
+ * separate paid decision. Keep that decision mechanical and explicit even
+ * when a caller bypasses the CLI wrappers and invokes the harness directly.
+ */
+export function assertBehaviorSpendAuthorized(
+  scheduleValue: CandidatePolicyAbSchedule,
+  authorization = process.env[
+    CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV
+  ],
+): void {
+  if (!scheduleValue.behaviorIncluded) return;
+  if (
+    authorization !==
+    CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_VALUE
+  ) {
+    throw new Error(
+      `schedule ${scheduleValue.id} includes behavioral provider spend; set ${CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_ENV}=${CANDIDATE_POLICY_AB_BEHAVIOR_SPEND_AUTH_VALUE} to authorize this run explicitly`,
     );
   }
 }
@@ -258,6 +309,7 @@ const SOURCE_PATHS = [
   "server/headlessConfigSchema.ts",
   "server/headlessLineage.ts",
   "server/headlessPromptAuthority.ts",
+  "server/headlessPromptConstruction.ts",
   "server/headlessRunner.ts",
   "server/headlessValidationPolicy.ts",
   "server/kLevelStrategy.ts",
@@ -416,10 +468,15 @@ export interface MatchJob {
 interface PreregisteredPromptProof {
   seed: string;
   team: "amber" | "blue";
+  construction: "production_headless_prompt_seam";
+  independentOracle:
+    "direct_advanced_strategy_contract_composition";
+  independentOracleMatched: true;
   systemPromptSha256: string;
   baseline: {
     fullPrompt: string;
     fullPromptSha256: string;
+    independentOracleFullPromptSha256: string;
     charCount: number;
     containsCandidatePolicy: false;
     containsColumnLedger: false;
@@ -427,6 +484,7 @@ interface PreregisteredPromptProof {
   treatment: {
     fullPrompt: string;
     fullPromptSha256: string;
+    independentOracleFullPromptSha256: string;
     charCount: number;
     containsCandidatePolicy: true;
     containsColumnLedger: false;
@@ -449,6 +507,7 @@ export interface CandidatePolicyAbPreregistration {
     failedMatchesRetained: true;
     stopAfterFailedPair: true;
     postMatchReflection: false;
+    timestampContract: typeof CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT;
     seatAssignment: {
       cluegiver: "alternates_seat_1_seat_2_by_round";
       ownGuesser: "non_cluegiver_teammate";
@@ -651,6 +710,7 @@ export interface CandidatePolicyAbMatchArtifact {
   matchId: number | null;
   executionResult: Record<string, unknown> | null;
   error: SanitizedExperimentError | null;
+  timestampContract: typeof CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT;
   capture: CapturedMatchData | null;
   integrity: {
     valid: boolean;
@@ -707,6 +767,7 @@ export interface CandidatePolicyAbAggregateMatchEntry {
   matchId: number | null;
   executionResult: Record<string, unknown> | null;
   error: SanitizedExperimentError | null;
+  timestampContract: typeof CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT;
   capture: AggregateCapturedMatchData | null;
   integrity: {
     valid: boolean;
@@ -862,14 +923,25 @@ interface PrivateReceiptCounts {
 interface OperationalCallEvidence {
   providerCalls: number;
   aiCallRecords: number;
+  observedAiCallRecordsWithoutLinkedProviderAttempt: number;
   linkedProviderAttemptReceipts: number;
   unlinkedProviderAttempts: number;
   latencyMs: NumericDistribution;
   completionTokens: CompletionTokenDistribution;
   cost: {
-    knownCostCalls: number;
-    unknownCostCalls: number;
-    sumUsd: number;
+    providerReportedActual: {
+      calls: number;
+      sumUsd: number;
+    };
+    roundedEstimate: {
+      calls: number;
+      sumUsd: number;
+      precisionDecimalPlaces: 6;
+    };
+    unknownCalls: number;
+    combinedKnownSumUsd: number;
+    qualification:
+      "combinedKnownSumUsd mixes provider-reported actual cost with application estimates rounded to six decimal places; use the source-specific subtotals for interpretation";
   };
   providerAttemptState: {
     succeeded: number;
@@ -896,6 +968,7 @@ interface OperationalRollup extends Omit<
 > {
   scope:
     "all_started_matches_including_failed_and_integrity_invalid";
+  /** Whole-schedule maximum, not a guaranteed or imputed actual count. */
   plannedProviderCalls: number;
   jobs: {
     planned: number;
@@ -904,8 +977,17 @@ interface OperationalRollup extends Omit<
     unpersistedMatchesRecoveredFromDatabase: number;
     unpersistedMatchesNotRecoverable: number;
   };
-  expectedProviderCallsForStartedMatches: number;
-  missingProviderAttemptsAgainstStartedMatches: number;
+  maximumProviderCallsForLaunchedMatches: number;
+  maximumProviderCallsForCapturedLaunchedMatches: number;
+  exactNeverDispatchedCallsForCapturedLaunchedMatches:
+    | number
+    | null;
+  unobservedProviderCallsDueToUnavailableCapture: 0 | null;
+  unobservedProviderCallsUpperBound: number;
+  providerCallOverageAgainstCapturedMaximum: number;
+  providerCallAccountingQualification: string;
+  incompleteRunDisposition:
+    "retain_observed_no_retry_no_replacement_no_rerun_recommendation";
   completionTokens: CompletionTokenDistribution & {
     byAction: Record<string, CompletionTokenDistribution>;
     byArm: Record<
@@ -1031,6 +1113,13 @@ export interface CandidatePolicyAbDependencies {
   closeDatabase?: () => Promise<void>;
   collectSourceLineage?: () => Promise<CandidatePolicyAbSourceLineage>;
   collectPostRunSourceLineage?: () => Promise<CandidatePolicyAbSourceLineage>;
+  /**
+   * Test-only seam for proving that preregistration rejects a production
+   * prompt-construction drift before the first provider-backed match starts.
+   */
+  buildRoundOneProductionPrompt?: (
+    input: HeadlessClueCallPromptInput,
+  ) => ReturnType<typeof buildHeadlessClueCallPrompt>;
   now?: () => Date;
   afterPreregistrationWritten?: (
     path: string,
@@ -1239,6 +1328,125 @@ function redactErrorMessage(message: string): string {
     .slice(0, 2_000);
 }
 
+/**
+ * Error strings in durable runner rows can contain a provider's response
+ * detail (notably the body of a non-2xx provider response). The private
+ * database row and 0600 per-match artifact remain authoritative; the aggregate
+ * gets a bounded operational summary, never that provider-sourced detail.
+ */
+export function sanitizeAggregateRunnerErrorText(
+  message: string,
+): string {
+  const normalized = redactErrorMessage(message)
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  const providerDetailPatterns = [
+    /\b(?:OpenRouter|DeepInfra|DeepSeek|Anthropic|OpenAI|Gemini|Google AI|Mistral|Together AI|Fireworks AI|Groq|Cerebras|xAI|Moonshot)\b/i,
+    /\b(?:API|inference|transport|upstream|endpoint)\s+(?:error|failure)\b/i,
+    /\b(?:after\s+)?HTTP(?:\s+status)?\s+[1-5][0-9]{2}\b/i,
+    /\bprovider(?:[- ]attempt)?\s+(?:response|error|call|transport|telemetry)\b/i,
+    /\b(?:response|request)\s+(?:body|payload)\b/i,
+    /\b(?:route[- ]proof|served[- ]model|served[- ]provider)\b/i,
+  ];
+  const providerDetailIndexes = providerDetailPatterns
+    .map((pattern) => normalized.search(pattern))
+    .filter((index) => index >= 0);
+  const providerDetailIndex =
+    providerDetailIndexes.length > 0
+      ? Math.min(...providerDetailIndexes)
+      : -1;
+  let summary = normalized;
+  if (providerDetailIndex !== -1) {
+    const prefix = normalized
+      .slice(0, providerDetailIndex)
+      .replace(/(?:Error:\s*)+$/i, "")
+      .replace(/[:\s]+$/g, "")
+      .trim();
+    const providerPortion = normalized.slice(providerDetailIndex);
+    const httpStatus =
+      normalized.match(
+        /\b(?:API|inference|transport|upstream|endpoint)\s+(?:error|failure)\s*:?(?:\s+status)?\s*([1-5][0-9]{2})\b/i,
+      )?.[1] ??
+      normalized.match(
+        /\b(?:after\s+)?HTTP(?:\s+status)?\s+([1-5][0-9]{2})\b/i,
+      )?.[1];
+    const providerSummary =
+      httpStatus !== undefined
+        ? `Provider HTTP ${httpStatus}; provider response detail removed from aggregate`
+        : /\btimed?\s*out\b/i.test(providerPortion)
+          ? "Provider request timed out"
+          : /\broute[- ]proof\b/i.test(providerPortion)
+            ? "Provider route-proof validation failed"
+            : /\bserved[- ]model\b/i.test(providerPortion)
+              ? "Provider served-model validation failed"
+              : /\bserved[- ]provider\b/i.test(providerPortion)
+                ? "Provider served-provider validation failed"
+                : /\bprovider-attempt telemetry\b/i.test(
+                      providerPortion,
+                    )
+                  ? "Provider-attempt telemetry failed"
+                  : "Provider call failed; provider detail removed from aggregate";
+    summary = prefix
+      ? `${prefix}: ${providerSummary}`
+      : providerSummary;
+  }
+  if (summary.length <= AGGREGATE_ERROR_TEXT_MAX_CHARS) {
+    return summary;
+  }
+  return `${summary.slice(
+    0,
+    AGGREGATE_ERROR_TEXT_MAX_CHARS - 3,
+  )}...`;
+}
+
+const AGGREGATE_ERROR_FIELD_NAMES = new Set([
+  "error",
+  "errorMessage",
+  "providerError",
+]);
+
+function aggregateRunnerErrorFields(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(aggregateRunnerErrorFields);
+  }
+  const record = objectValue(value);
+  if (!record) return value;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, entry]) => {
+      if (AGGREGATE_ERROR_FIELD_NAMES.has(key)) {
+        if (entry === null || entry === undefined) {
+          return [key, null];
+        }
+        return [
+          key,
+          typeof entry === "string"
+            ? sanitizeAggregateRunnerErrorText(entry)
+            : "[non-text error detail removed from aggregate]",
+        ];
+      }
+      return [key, aggregateRunnerErrorFields(entry)];
+    }),
+  );
+}
+
+function aggregateExperimentError(
+  error: SanitizedExperimentError | null,
+): SanitizedExperimentError | null {
+  if (!error) return null;
+  return {
+    ...error,
+    message: sanitizeAggregateRunnerErrorText(error.message),
+    code:
+      error.code === null
+        ? null
+        : sanitizeAggregateRunnerErrorText(error.code),
+    providerMetadata: aggregateRunnerErrorFields(
+      error.providerMetadata,
+    ) as Record<string, unknown> | null,
+  };
+}
+
 function safeProviderMetadata(
   error: unknown,
 ): Record<string, unknown> | null {
@@ -1297,6 +1505,138 @@ function persistedJsonRepresentation<T>(value: T): T {
     throw new Error("artifact has no JSON representation");
   }
   return JSON.parse(serialized) as T;
+}
+
+interface LegacyLocalTimestampProjection {
+  localWallTime: string;
+  databaseType: "timestamp_without_time_zone";
+  timezone: null;
+  qualification: "legacy_local_timestamp_timezone_unknown";
+}
+
+function padTimestampComponent(
+  value: number,
+  width = 2,
+): string {
+  return String(value).padStart(width, "0");
+}
+
+function localWallTimeFromDate(value: Date): string {
+  if (Number.isNaN(value.getTime())) {
+    throw new Error("legacy local timestamp is an invalid Date");
+  }
+  return [
+    padTimestampComponent(value.getFullYear(), 4),
+    "-",
+    padTimestampComponent(value.getMonth() + 1),
+    "-",
+    padTimestampComponent(value.getDate()),
+    "T",
+    padTimestampComponent(value.getHours()),
+    ":",
+    padTimestampComponent(value.getMinutes()),
+    ":",
+    padTimestampComponent(value.getSeconds()),
+    ".",
+    padTimestampComponent(value.getMilliseconds(), 3),
+  ].join("");
+}
+
+function legacyLocalTimestampProjection(
+  value: unknown,
+  fieldPath: string,
+): LegacyLocalTimestampProjection | null {
+  if (value === null || value === undefined) return null;
+  const existing = objectValue(value);
+  if (
+    existing?.qualification ===
+      "legacy_local_timestamp_timezone_unknown" &&
+    existing.databaseType === "timestamp_without_time_zone" &&
+    existing.timezone === null &&
+    typeof existing.localWallTime === "string"
+  ) {
+    return value as LegacyLocalTimestampProjection;
+  }
+  let localWallTime: string;
+  if (value instanceof Date) {
+    // node-postgres parses a PostgreSQL timestamp-without-time-zone as a Date
+    // in the process-local timezone. Reading local components reconstructs the
+    // stored wall-clock fields without inventing an offset or UTC instant.
+    localWallTime = localWallTimeFromDate(value);
+  } else if (typeof value === "string") {
+    const localMatch = value.match(
+      /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?)$/,
+    );
+    if (!localMatch) {
+      throw new Error(
+        `${fieldPath} cannot be represented truthfully as a legacy local timestamp`,
+      );
+    }
+    localWallTime = `${localMatch[1]}T${localMatch[2]}`;
+  } else {
+    throw new Error(
+      `${fieldPath} is not a supported legacy local timestamp value`,
+    );
+  }
+  return {
+    localWallTime,
+    databaseType: "timestamp_without_time_zone",
+    timezone: null,
+    qualification: "legacy_local_timestamp_timezone_unknown",
+  };
+}
+
+function projectLegacyTimestampFields(
+  record: Record<string, unknown> | null,
+  fieldNames: readonly string[],
+  recordPath: string,
+): Record<string, unknown> | null {
+  if (!record) return null;
+  const projected = { ...record };
+  for (const fieldName of fieldNames) {
+    if (
+      Object.prototype.hasOwnProperty.call(projected, fieldName) &&
+      projected[fieldName] !== null &&
+      projected[fieldName] !== undefined
+    ) {
+      projected[fieldName] = legacyLocalTimestampProjection(
+        projected[fieldName],
+        `${recordPath}.${fieldName}`,
+      );
+    }
+  }
+  return projected;
+}
+
+function captureWithTruthfulTimestampSemantics(
+  capture: CapturedMatchData,
+): CapturedMatchData {
+  return {
+    match: projectLegacyTimestampFields(
+      capture.match,
+      ["createdAt", "completedAt"],
+      "capture.match",
+    ),
+    rounds: capture.rounds,
+    aiCallLogs: capture.aiCallLogs.map(
+      (call, index) =>
+        projectLegacyTimestampFields(
+          call,
+          ["createdAt"],
+          `capture.aiCallLogs[${index}]`,
+        )!,
+    ),
+    // These columns are PostgreSQL timestamptz and remain Date/ISO-UTC values.
+    providerAttempts: capture.providerAttempts,
+    teamChatter: capture.teamChatter.map(
+      (message, index) =>
+        projectLegacyTimestampFields(
+          message,
+          ["createdAt"],
+          `capture.teamChatter[${index}]`,
+        )!,
+    ),
+  };
 }
 
 function withContentHash<
@@ -1608,8 +1948,9 @@ function quotedIdentifier(identifier: string): string {
   return `"${identifier}"`;
 }
 
-export async function inspectDisposableLocalDatabase(): Promise<CandidatePolicyAbDatabaseLineage> {
-  const databaseUrl = process.env.DATABASE_URL;
+export async function inspectDisposableLocalDatabase(
+  databaseUrl: string | undefined = process.env.DATABASE_URL,
+): Promise<CandidatePolicyAbDatabaseLineage> {
   const expected = assertDisposableLocalDatabaseUrl(databaseUrl);
   const pool = new Pool({
     connectionString: databaseUrl,
@@ -1967,10 +2308,42 @@ export function assertFixedJobs(
 function roundOnePromptProof(
   manifest: SeedInputManifest,
   team: "amber" | "blue",
+  productionPromptBuilder: (
+    input: HeadlessClueCallPromptInput,
+  ) => ReturnType<typeof buildHeadlessClueCallPrompt> =
+    buildHeadlessClueCallPrompt,
 ): PreregisteredPromptProof {
+  const commonProductionInput = {
+    config: exactModelConfig,
+    team,
+    keywords: manifest.keywords[team],
+    targetCode: manifest.codes[0]![team],
+    history: [],
+    ablations: [...FIXED_ABLATIONS],
+  } satisfies Omit<HeadlessClueCallPromptInput, "promptOverrides">;
+  const baselineFull = productionPromptBuilder({
+    ...commonProductionInput,
+    promptOverrides: {
+      [team]: { compiledPrompts },
+    },
+  }).fullPrompt;
+  const treatmentFull = productionPromptBuilder({
+    ...commonProductionInput,
+    promptOverrides: {
+      [team]: {
+        compiledPrompts,
+        candidatePolicy:
+          CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
+      },
+    },
+  }).fullPrompt;
+
+  // This oracle deliberately does not call the production construction seam.
+  // It composes the pinned advanced-strategy contract directly, so a drift in
+  // either the runner seam or its input wiring cannot certify itself.
   const strategy = getPromptStrategy("advanced");
   const cluePrompt = compiledPrompts.prompts.cluegiver;
-  const params = {
+  const independentParams = {
     keywords: manifest.keywords[team],
     targetCode: manifest.codes[0]![team],
     history: [],
@@ -1978,13 +2351,35 @@ function roundOnePromptProof(
     systemPromptOverride: cluePrompt.systemPrompt,
     taskDirectives: cluePrompt.taskDirectives ?? undefined,
   };
-  const baselineTask = strategy.clueTemplate(params);
-  const treatmentTask = strategy.clueTemplate({
-    ...params,
+  const independentBaselineTask = strategy.clueTemplate(
+    independentParams,
+  );
+  const independentTreatmentTask = strategy.clueTemplate({
+    ...independentParams,
     candidatePolicy: CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
   });
-  const baselineFull = `${cluePrompt.systemPrompt}\n\n${baselineTask}`;
-  const treatmentFull = `${cluePrompt.systemPrompt}\n\n${treatmentTask}`;
+  const independentBaselineFull =
+    `${cluePrompt.systemPrompt}\n\n${independentBaselineTask}`;
+  const independentTreatmentFull =
+    `${cluePrompt.systemPrompt}\n\n${independentTreatmentTask}`;
+  const baselineFullSha256 = sha256Hex(baselineFull);
+  const treatmentFullSha256 = sha256Hex(treatmentFull);
+  const independentBaselineFullSha256 = sha256Hex(
+    independentBaselineFull,
+  );
+  const independentTreatmentFullSha256 = sha256Hex(
+    independentTreatmentFull,
+  );
+  if (
+    baselineFull !== independentBaselineFull ||
+    treatmentFull !== independentTreatmentFull ||
+    baselineFullSha256 !== independentBaselineFullSha256 ||
+    treatmentFullSha256 !== independentTreatmentFullSha256
+  ) {
+    throw new Error(
+      `production round-one prompt drifted from independently composed preregistration contract for seed ${manifest.seed} team ${team}`,
+    );
+  }
   if (
     baselineFull.includes(
       CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT.instruction,
@@ -2000,17 +2395,25 @@ function roundOnePromptProof(
   return {
     seed: manifest.seed,
     team,
+    construction: "production_headless_prompt_seam",
+    independentOracle:
+      "direct_advanced_strategy_contract_composition",
+    independentOracleMatched: true,
     systemPromptSha256: sha256Hex(cluePrompt.systemPrompt),
     baseline: {
       fullPrompt: baselineFull,
-      fullPromptSha256: sha256Hex(baselineFull),
+      fullPromptSha256: baselineFullSha256,
+      independentOracleFullPromptSha256:
+        independentBaselineFullSha256,
       charCount: baselineFull.length,
       containsCandidatePolicy: false as const,
       containsColumnLedger: false as const,
     },
     treatment: {
       fullPrompt: treatmentFull,
-      fullPromptSha256: sha256Hex(treatmentFull),
+      fullPromptSha256: treatmentFullSha256,
+      independentOracleFullPromptSha256:
+        independentTreatmentFullSha256,
       charCount: treatmentFull.length,
       containsCandidatePolicy: true as const,
       containsColumnLedger: false as const,
@@ -2020,10 +2423,17 @@ function roundOnePromptProof(
 
 function roundOnePromptProofs(
   seedInputs: SeedInputManifest[],
+  productionPromptBuilder?: (
+    input: HeadlessClueCallPromptInput,
+  ) => ReturnType<typeof buildHeadlessClueCallPrompt>,
 ): PreregisteredPromptProof[] {
   return seedInputs.flatMap((manifest) =>
     (["amber", "blue"] as const).map((team) =>
-      roundOnePromptProof(manifest, team),
+      roundOnePromptProof(
+        manifest,
+        team,
+        productionPromptBuilder,
+      ),
     ),
   );
 }
@@ -2045,6 +2455,9 @@ function preregistration(
   sourceLineage: CandidatePolicyAbSourceLineage,
   databaseLineage: CandidatePolicyAbDatabaseLineage,
   now?: () => Date,
+  productionPromptBuilder?: (
+    input: HeadlessClueCallPromptInput,
+  ) => ReturnType<typeof buildHeadlessClueCallPrompt>,
 ): CandidatePolicyAbPreregistration {
   const seedInputs = scheduleValue.seeds.map((seedValue) =>
     deterministicSeedInputs(seedValue, scheduleValue.roundsPerMatch),
@@ -2073,6 +2486,7 @@ function preregistration(
       failedMatchesRetained: true as const,
       stopAfterFailedPair: true as const,
       postMatchReflection: false as const,
+      timestampContract: CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT,
       seatAssignment: {
         cluegiver: "alternates_seat_1_seat_2_by_round" as const,
         ownGuesser: "non_cluegiver_teammate" as const,
@@ -2123,7 +2537,7 @@ function preregistration(
           legacyMetricsFilter:
             "server/routes.ts tournament aggregation excludes qualityStatus === 'tainted' unless includeTainted is requested",
           consequence:
-            "In non-strict runs a validator failure removes the whole match from the default legacy rate denominators while leaving every row durable, so legacy aggregates silently describe a filtered subset. This strict experiment never reads that path: it retains every match, counts every paid attempt, and suppresses behavioral comparison instead of dropping matches.",
+            "In non-strict runs a validator failure removes the whole match from the default legacy rate denominators while leaving every row durable, so legacy aggregates silently describe a filtered subset. This strict experiment never reads that path: it retains every match, counts every observed durable paid attempt, and suppresses behavioral comparison instead of dropping matches.",
           appliesToThisExperiment: false as const,
         },
         randomCluesAblation: {
@@ -2250,7 +2664,10 @@ function preregistration(
         "table-competitive-v1 runner plus golden transition_role_visibility_and_rules_parity" as const,
     },
     seedInputs,
-    roundOnePromptProofs: roundOnePromptProofs(seedInputs),
+    roundOnePromptProofs: roundOnePromptProofs(
+      seedInputs,
+      productionPromptBuilder,
+    ),
     jobs,
     estimands: {
       primaryRounds: PRIMARY_ROUND_WINDOW.label,
@@ -2291,7 +2708,7 @@ function preregistration(
         "operator-private paid-call response body hash and UTF-8 length without gameplay exposure",
       ],
       missingDataRule:
-        "Every failed or partial match remains in the database and output. It is never retried or replaced. Any failed pair, incomplete schedule, route defect, telemetry defect, or source change suppresses behavioral comparison. If a match launched but its private artifact could not be persisted, its operational provider-attempt, cost, token, and route evidence is re-read once from the disposable database so no paid attempt goes uncounted; the match stays unpersisted, stays out of behavior, and keeps the run incomplete.",
+        "Every failed or partial match remains in the database and output. It is never retried or replaced. Any failed pair, incomplete schedule, route defect, telemetry defect, or source change suppresses behavioral comparison. If a match launched but its private artifact could not be persisted, its operational provider-attempt, cost, token, and route evidence is re-read once from the disposable database so every recoverable observed paid attempt remains counted; the match stays unpersisted, stays out of behavior, and keeps the run incomplete. Clean available captures can prove an exact never-dispatched count. An unavailable capture instead yields a null exact unobserved-call count plus a schedule-derived upper bound; it is never combined with the never-dispatched count.",
       aggregationRule:
         "Pair by deterministic seed block and mirrored treatment side. Treat rounds as repeated observations nested within a seed block; do not count team-rounds as independent games.",
       inferenceQualification: scheduleValue.inferenceQualification,
@@ -2844,6 +3261,25 @@ async function executeAndPersistJob(input: {
   }
   const status =
     finalError === null && issues.length === 0 ? "success" : "failure";
+  let persistedCapture: CapturedMatchData | null = null;
+  try {
+    persistedCapture =
+      capture === null
+        ? null
+        : captureWithTruthfulTimestampSemantics(capture);
+  } catch (timestampError) {
+    const surfaced =
+      timestampError instanceof Error
+        ? timestampError
+        : new Error(String(timestampError));
+    if (
+      matchId !== null &&
+      (surfaced as { matchId?: unknown }).matchId === undefined
+    ) {
+      Object.assign(surfaced, { matchId });
+    }
+    throw surfaced;
+  }
   const withoutHash = {
     artifactVersion: CANDIDATE_POLICY_AB_MATCH_ARTIFACT_VERSION,
     experimentVersion: CANDIDATE_POLICY_AB_EXPERIMENT_VERSION,
@@ -2856,7 +3292,8 @@ async function executeAndPersistJob(input: {
     executionResult:
       executionResult as unknown as Record<string, unknown> | null,
     error: finalError,
-    capture,
+    timestampContract: CANDIDATE_POLICY_AB_TIMESTAMP_CONTRACT,
+    capture: persistedCapture,
     integrity: {
       valid: issues.length === 0,
       issues,
@@ -2941,15 +3378,26 @@ function rate(numerator: number, denominator: number): number | null {
   return denominator === 0 ? null : numerator / denominator;
 }
 
-function costFromCall(call: Record<string, unknown>): number | null {
+function costFromCall(
+  call: Record<string, unknown>,
+):
+  | {
+      source: "provider_reported_actual" | "rounded_estimate";
+      usd: number;
+    }
+  | null {
   const metadata = objectValue(call.providerMetadata);
   const usage = objectValue(metadata?.usage);
   const reported = asNumber(usage?.costUsd) ?? asNumber(usage?.cost);
-  if (reported !== null && reported >= 0) return reported;
+  if (reported !== null && reported >= 0) {
+    return { source: "provider_reported_actual", usd: reported };
+  }
   const estimated = asString(call.estimatedCostUsd);
   if (estimated === null) return null;
   const parsed = Number.parseFloat(estimated);
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
+  return Number.isFinite(parsed) && parsed >= 0
+    ? { source: "rounded_estimate", usd: parsed }
+    : null;
 }
 
 function emptyBehavioralWindow(
@@ -3384,8 +3832,11 @@ interface OperationalAccumulator {
   routeExactPasses: number;
   providerCalls: number;
   aiCallRecords: number;
-  costSumUsd: number;
-  knownCostCalls: number;
+  observedAiCallRecordsWithoutLinkedProviderAttempt: number;
+  providerReportedActualCostSumUsd: number;
+  providerReportedActualCostCalls: number;
+  roundedEstimateCostSumUsd: number;
+  roundedEstimateCostCalls: number;
   unknownCostCalls: number;
   unlinkedProviderAttempts: number;
   linkedProviderAttemptReceipts: number;
@@ -3428,8 +3879,11 @@ function newOperationalAccumulator(): OperationalAccumulator {
     routeExactPasses: 0,
     providerCalls: 0,
     aiCallRecords: 0,
-    costSumUsd: 0,
-    knownCostCalls: 0,
+    observedAiCallRecordsWithoutLinkedProviderAttempt: 0,
+    providerReportedActualCostSumUsd: 0,
+    providerReportedActualCostCalls: 0,
+    roundedEstimateCostSumUsd: 0,
+    roundedEstimateCostCalls: 0,
     unknownCostCalls: 0,
     unlinkedProviderAttempts: 0,
     linkedProviderAttemptReceipts: 0,
@@ -3462,8 +3916,15 @@ function accumulateOperationalSource(
   if (!capture) return;
   {
     const callIds = new Set(capture.aiCallLogs.map((call) => call.id));
+    const linkedCallIds = new Set(
+      capture.providerAttempts.map((attempt) => attempt.aiCallLogId),
+    );
     accumulator.aiCallRecords += capture.aiCallLogs.length;
     for (const call of capture.aiCallLogs) {
+      if (!linkedCallIds.has(call.id)) {
+        accumulator.observedAiCallRecordsWithoutLinkedProviderAttempt +=
+          1;
+      }
       const latency = asNumber(call.latencyMs);
       if (latency !== null && latency >= 0) {
         accumulator.latencies.push(latency);
@@ -3493,9 +3954,12 @@ function accumulateOperationalSource(
       const cost = costFromCall(call);
       if (cost === null) {
         accumulator.unknownCostCalls += 1;
+      } else if (cost.source === "provider_reported_actual") {
+        accumulator.providerReportedActualCostCalls += 1;
+        accumulator.providerReportedActualCostSumUsd += cost.usd;
       } else {
-        accumulator.knownCostCalls += 1;
-        accumulator.costSumUsd += cost;
+        accumulator.roundedEstimateCostCalls += 1;
+        accumulator.roundedEstimateCostSumUsd += cost.usd;
       }
 
       if (actionType === "generate_clues") {
@@ -3588,13 +4052,19 @@ function accumulateOperationalSource(
 function summarizeOperationalAccumulator(
   accumulator: OperationalAccumulator,
 ): OperationalCallEvidence {
-  const operationalCallSubjects = Math.max(
-    accumulator.aiCallRecords,
-    accumulator.providerCalls,
-  );
+  const operationalCallSubjects =
+    accumulator.aiCallRecords > accumulator.providerCalls
+      ? accumulator.aiCallRecords
+      : accumulator.providerCalls;
+  const providerAttemptsWithoutAiCallRecords =
+    accumulator.providerCalls > accumulator.aiCallRecords
+      ? accumulator.providerCalls - accumulator.aiCallRecords
+      : 0;
   return {
     providerCalls: accumulator.providerCalls,
     aiCallRecords: accumulator.aiCallRecords,
+    observedAiCallRecordsWithoutLinkedProviderAttempt:
+      accumulator.observedAiCallRecordsWithoutLinkedProviderAttempt,
     linkedProviderAttemptReceipts:
       accumulator.linkedProviderAttemptReceipts,
     unlinkedProviderAttempts: accumulator.unlinkedProviderAttempts,
@@ -3607,14 +4077,23 @@ function summarizeOperationalAccumulator(
       operationalCallSubjects,
     ),
     cost: {
-      knownCostCalls: accumulator.knownCostCalls,
-      unknownCostCalls:
+      providerReportedActual: {
+        calls: accumulator.providerReportedActualCostCalls,
+        sumUsd: accumulator.providerReportedActualCostSumUsd,
+      },
+      roundedEstimate: {
+        calls: accumulator.roundedEstimateCostCalls,
+        sumUsd: accumulator.roundedEstimateCostSumUsd,
+        precisionDecimalPlaces: 6,
+      },
+      unknownCalls:
         accumulator.unknownCostCalls +
-        Math.max(
-          0,
-          accumulator.providerCalls - accumulator.aiCallRecords,
-        ),
-      sumUsd: accumulator.costSumUsd,
+        providerAttemptsWithoutAiCallRecords,
+      combinedKnownSumUsd:
+        accumulator.providerReportedActualCostSumUsd +
+        accumulator.roundedEstimateCostSumUsd,
+      qualification:
+        "combinedKnownSumUsd mixes provider-reported actual cost with application estimates rounded to six decimal places; use the source-specific subtotals for interpretation",
     },
     providerAttemptState: accumulator.providerAttemptState,
     actionDisposition: accumulator.actionDisposition,
@@ -3672,6 +4151,39 @@ function operationalRollup(
     (failure) =>
       failure.recoveredOperationalSummary.status === "recovered",
   ).length;
+  const maximumProviderCallsForLaunchedMatches =
+    startedMatches *
+    scheduleValue.roundsPerMatch *
+    CALLS_PER_MATCH_ROUND;
+  const capturedLaunchedMatches =
+    artifacts.filter((artifact) => artifact.capture !== null).length +
+    recoveredSources.filter((source) => source.capture !== null).length;
+  if (capturedLaunchedMatches > startedMatches) {
+    throw new Error(
+      "operational accounting captured more launched matches than were started",
+    );
+  }
+  const unavailableLaunchedMatches =
+    startedMatches - capturedLaunchedMatches;
+  const maximumProviderCallsForCapturedLaunchedMatches =
+    capturedLaunchedMatches *
+    scheduleValue.roundsPerMatch *
+    CALLS_PER_MATCH_ROUND;
+  const providerCallOverageAgainstCapturedMaximum =
+    evidence.providerCalls >
+    maximumProviderCallsForCapturedLaunchedMatches
+      ? evidence.providerCalls -
+        maximumProviderCallsForCapturedLaunchedMatches
+      : 0;
+  const capturedEvidenceHasCleanAttemptLinkage =
+    evidence.observedAiCallRecordsWithoutLinkedProviderAttempt === 0 &&
+    evidence.unlinkedProviderAttempts === 0;
+  const exactNeverDispatchedCallsForCapturedLaunchedMatches =
+    providerCallOverageAgainstCapturedMaximum === 0 &&
+    capturedEvidenceHasCleanAttemptLinkage
+      ? maximumProviderCallsForCapturedLaunchedMatches -
+        evidence.providerCalls
+      : null;
   return {
     ...evidence,
     scope:
@@ -3685,17 +4197,20 @@ function operationalRollup(
       unpersistedMatchesNotRecoverable:
         artifactPersistenceFailures.length - recoveredMatches,
     },
-    expectedProviderCallsForStartedMatches:
-      startedMatches *
+    maximumProviderCallsForLaunchedMatches,
+    maximumProviderCallsForCapturedLaunchedMatches,
+    exactNeverDispatchedCallsForCapturedLaunchedMatches,
+    unobservedProviderCallsDueToUnavailableCapture:
+      unavailableLaunchedMatches === 0 ? 0 : null,
+    unobservedProviderCallsUpperBound:
+      unavailableLaunchedMatches *
       scheduleValue.roundsPerMatch *
       CALLS_PER_MATCH_ROUND,
-    missingProviderAttemptsAgainstStartedMatches: Math.max(
-      0,
-      startedMatches *
-        scheduleValue.roundsPerMatch *
-        CALLS_PER_MATCH_ROUND -
-        evidence.providerCalls,
-    ),
+    providerCallOverageAgainstCapturedMaximum,
+    providerCallAccountingQualification:
+      "plannedProviderCalls and both maximumProviderCalls fields are maxima, not imputed actuals. providerCalls counts durable observed provider-attempt rows. exactNeverDispatchedCallsForCapturedLaunchedMatches is populated only when every captured AI-call/provider-attempt linkage is clean and observed calls do not exceed the captured-match maximum. Unavailable captures are separated: their exact unobserved call count is null and only a schedule-derived upper bound is reported. A nonzero overage is explicit and never clamped away.",
+    incompleteRunDisposition:
+      "retain_observed_no_retry_no_replacement_no_rerun_recommendation",
     completionTokens: {
       ...evidence.completionTokens,
       byAction: Object.fromEntries(
@@ -3810,18 +4325,32 @@ function aggregateCapture(
 ): AggregateCapturedMatchData | null {
   if (!capture) return null;
   return {
-    match: capture.match,
-    rounds: capture.rounds,
-    aiCallLogs: capture.aiCallLogs,
+    match: aggregateRunnerErrorFields(
+      capture.match,
+    ) as Record<string, unknown> | null,
+    rounds: capture.rounds.map(
+      (round) =>
+        aggregateRunnerErrorFields(round) as Record<string, unknown>,
+    ),
+    aiCallLogs: capture.aiCallLogs.map(
+      (call) =>
+        aggregateRunnerErrorFields(call) as Record<string, unknown>,
+    ),
     // Every attempt row survives so the paid-call denominator is unchanged;
     // only the receipt's exact bytes are projected away.
-    providerAttempts: capture.providerAttempts.map((attempt) => ({
-      ...attempt,
-      privateResponseReceipt: aggregateReceiptProjection(
-        attempt.privateResponseReceipt,
-      ),
-    })),
-    teamChatter: capture.teamChatter,
+    providerAttempts: capture.providerAttempts.map(
+      (attempt) =>
+        aggregateRunnerErrorFields({
+          ...attempt,
+          privateResponseReceipt: aggregateReceiptProjection(
+            attempt.privateResponseReceipt,
+          ),
+        }) as Record<string, unknown>,
+    ),
+    teamChatter: capture.teamChatter.map(
+      (message) =>
+        aggregateRunnerErrorFields(message) as Record<string, unknown>,
+    ),
   };
 }
 
@@ -3846,15 +4375,38 @@ function aggregateMatchEntry(
     armByTeam: artifact.armByTeam,
     status: artifact.status,
     matchId: artifact.matchId,
-    executionResult: artifact.executionResult,
-    error: artifact.error,
+    executionResult: aggregateRunnerErrorFields(
+      artifact.executionResult,
+    ) as Record<string, unknown> | null,
+    error: aggregateExperimentError(artifact.error),
+    timestampContract: artifact.timestampContract,
     capture: aggregateCapture(artifact.capture),
-    integrity: artifact.integrity,
+    integrity: {
+      valid: artifact.integrity.valid,
+      issues: artifact.integrity.issues.map(
+        sanitizeAggregateRunnerErrorText,
+      ),
+    },
     privateArtifact: {
       relativePath: artifact.job.artifactFile,
       mode: "0600",
       artifactContentHash: artifact.artifactContentHash,
       holdsExactProviderResponseBodies: receiptsHoldingBodies,
+    },
+  };
+}
+
+function aggregateArtifactPersistenceFailure(
+  failure: ArtifactPersistenceFailure,
+): ArtifactPersistenceFailure {
+  return {
+    ...failure,
+    error: aggregateExperimentError(failure.error)!,
+    recoveredOperationalSummary: {
+      ...failure.recoveredOperationalSummary,
+      unavailableReason: aggregateExperimentError(
+        failure.recoveredOperationalSummary.unavailableReason,
+      ),
     },
   };
 }
@@ -3922,7 +4474,9 @@ function report(
       validArtifacts.length +
       artifactPersistenceFailures.length,
     stoppedAfterBlock,
-    artifactPersistenceFailures,
+    artifactPersistenceFailures: artifactPersistenceFailures.map(
+      aggregateArtifactPersistenceFailure,
+    ),
     matchArtifactFiles: artifacts.map(
       (artifact) => artifact.job.artifactFile,
     ),
@@ -3972,7 +4526,8 @@ function report(
  * artifact failed to persist. This is a read, not a retry: no provider call is
  * made, the match is not re-run or replaced, its artifact stays absent, and the
  * run stays incomplete with behavior suppressed. The only thing recovered is
- * the operational accounting, so a paid attempt is never silently uncounted.
+ * the operational accounting, so any recovered paid attempt is not silently
+ * omitted; an unavailable recovery remains explicit instead of becoming zero.
  */
 async function recoverUnpersistedMatchEvidence(input: {
   job: MatchJob;
@@ -4047,6 +4602,7 @@ export async function runCandidatePolicyAbExperiment(
   if (!scheduleValue) {
     throw new Error(`unknown fixed schedule: ${String(options.schedule)}`);
   }
+  assertBehaviorSpendAuthorized(scheduleValue);
   const dependencies = options.dependencies ?? {};
   const collectSource =
     dependencies.collectSourceLineage ??
@@ -4074,6 +4630,7 @@ export async function runCandidatePolicyAbExperiment(
     sourceLineage,
     databaseLineage,
     dependencies.now,
+    dependencies.buildRoundOneProductionPrompt,
   );
   const preregistrationPath = resolve(
     outputDir,

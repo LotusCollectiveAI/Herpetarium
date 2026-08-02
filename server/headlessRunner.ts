@@ -42,7 +42,6 @@ import {
   generateInterception,
   generateDeliberationMessage,
   generateReflection,
-  buildCluePromptForConfig,
   buildGuessPromptForConfig,
   buildInterceptionPromptForConfig,
   estimateCost,
@@ -60,7 +59,7 @@ import type { DeliberationOwnTemplateParams, DeliberationInterceptTemplateParams
 import { storage } from "./storage";
 import { log } from "./log";
 import type { ModelHealthTracker } from "./modelHealth";
-import { resolveRoleCandidatePolicy } from "./headlessPromptAuthority";
+import { buildHeadlessClueCallPrompt } from "./headlessPromptConstruction";
 import {
   beginStrictOpenRouterAttempt,
   type StrictProviderAttemptHandle,
@@ -500,28 +499,17 @@ async function processClues(
     const GENERIC_FALLBACK_POOL = ["signal", "trace", "mark", "pulse", "drift", "bloom", "frost", "ridge", "shore", "vault"];
     const fallbackClues = Array.from({ length: 3 }, () => GENERIC_FALLBACK_POOL[Math.floor(Math.random() * GENERIC_FALLBACK_POOL.length)]);
     const teamNotesClue = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
-    const clueParams = {
+    const cluePrompt = buildHeadlessClueCallPrompt({
+      config,
+      team,
       keywords,
       targetCode: code,
       history,
       scratchNotes: teamNotesClue,
       ablations,
-      systemPromptOverride: resolveRoleSystemPrompt(
-        promptOverrides,
-        team,
-        "cluegiver",
-      ),
-      taskDirectives: resolveRoleTaskDirectives(
-        promptOverrides,
-        team,
-        "cluegiver",
-      ),
-      candidatePolicy: resolveRoleCandidatePolicy(
-        promptOverrides,
-        team,
-        "cluegiver",
-      ),
-    };
+      promptOverrides,
+    });
+    const clueParams = cluePrompt.params;
 
     const actionType = "generate_clues";
     const providerAttempt = await beginProviderAttempt(
@@ -545,7 +533,7 @@ async function processClues(
       fallbackClues,
       config.model,
       providerAttempt,
-      buildCluePromptForConfig(config, clueParams),
+      cluePrompt.fullPrompt,
     );
 
     if (timedOut) {

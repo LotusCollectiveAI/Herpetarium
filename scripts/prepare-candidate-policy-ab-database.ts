@@ -32,7 +32,9 @@ export interface CandidatePolicyAbDatabasePreparationPlan {
 export interface CandidatePolicyAbDatabasePreparationDependencies {
   assertBlankDatabase?: (databaseUrl: string) => Promise<void>;
   runSchemaSync?: (databaseUrl: string) => Promise<void>;
-  inspectPreparedDatabase?: () => Promise<CandidatePolicyAbDatabaseLineage>;
+  inspectPreparedDatabase?: (
+    databaseUrl: string,
+  ) => Promise<CandidatePolicyAbDatabaseLineage>;
 }
 
 export function candidatePolicyAbDatabasePreparationPlan(
@@ -134,7 +136,7 @@ export async function prepareCandidatePolicyAbDatabase(
 
   await assertBlank(databaseUrl!);
   await sync(databaseUrl!);
-  const lineage = await inspect();
+  const lineage = await inspect(databaseUrl!);
   if (
     lineage.databaseName !== plan.databaseName ||
     lineage.socketDirectory !== plan.socketDirectory ||
