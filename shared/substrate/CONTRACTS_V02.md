@@ -98,6 +98,56 @@ Pinned conformance observation hash:
 
 `2820c1acbb29f23ac1564dead906ebca0af6d78f7c7ebc62980efec9d1160988`
 
+## Inert joint-assignment guess policy
+
+`joint-assignment-decoder@0.1.0` is a shared, unevaluated prompt-policy
+prerequisite for decoder and interceptor guesses. The historical decoder name
+is retained as the requested immutable identity; interceptor compilation does
+not expand the decoder-only BotBuild or Trace v0.2 contracts.
+
+The two roles intentionally project history differently:
+
+- a decoder's primary evidence is the three current own clues compared with
+  four numbered own keywords; its own clue-to-number ledger is secondary;
+- an interceptor cannot see opponent keywords, so the complete public
+  opponent clue-to-number ledger defines the four anonymous comparison
+  columns and belongs in the primary target representation;
+- rule-visible, lane-labelled dialogue is secondary for both roles, and
+  teammate proposals are hypotheses rather than authority.
+
+The transcript treatment is explicitly
+`rule-visible-lane-labeled-transcript-secondary@0.1.0`. Prompt parity requires
+the exact verified Observation v0.2, including transcript event ID, speaker
+actor ID, lane, text, order, and visibility. A Herpetarium envelope that does
+not replay those fields must not claim prompt parity.
+
+The policy exhaustively compares legal injective 3-of-4 codes and forbids
+greedy duplicate repair. Its reference solver uses bounded fixed-point integer
+evidence units and preserves primary co-optimal alternatives.
+
+`CodeGuess.rationale` remains private operator evidence. The compiler permits
+only a bounded, publication-safe ambiguity string naming one contested
+position and one alternative digit; it does not publish chat or deliberation.
+Any later publication requires a separate content-addressed social-action
+policy with an explicit audience and visibility lane.
+
+Pinned conformance identities and carriers:
+
+- policy:
+  `c428d5339e3ec24cb3e82866f257ea35f8a1b853205282539857a123fc917c24`;
+- compiler:
+  `327afb8a447095b5879716a7a396697cc1af5c04defa57e83811d5f3801e294d`;
+- decoder/private-transcript carrier:
+  `f82d06f187deecb12a9cab26f586c902b3d71761a8e543b1c2e36b2644f753d5`;
+- interceptor/private-transcript carrier:
+  `f2ac7da84bafebca31729340a422c169a1ebd77172f2a2fffafe09b4b47e4f71`;
+- decoder/open-transcript carrier:
+  `9b28893aece73799a4b5492e6408454ba8dadebfd421319ec09069a3610c449b`.
+
+These hashes prove deterministic shared text and projection only. They are not
+an EvaluationRecord, seating license, runtime-adoption claim, or evidence of
+gameplay strength.
+
 ## Trace v0.2 and actual persistence
 
 `TraceEnvelopeV2` records one bot decode attempt. Its evidence maps to fields
