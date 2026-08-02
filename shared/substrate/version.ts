@@ -12,13 +12,15 @@
  */
 export const SUBSTRATE_NAME = "decrypto-substrate";
 /**
- * 2026-08-02 contract-only additive note: `BotBuildManifest@0.1`, the
- * content-addressed `table-competitive-v1` protocol, and Observation/Trace
- * v0.2 each carry their own schema identity. They deliberately do NOT bump
- * this global value yet: `SUBSTRATE_VERSION` is embedded in compiled strategy
- * carriers, so changing it before runtime adoption would silently change the
- * legacy compiled-carrier golden. A later integration release may bump it
- * only with an explicit carrier migration and re-evaluation boundary.
+ * 2026-08-02 contract-only additive note: `BotBuildManifest@0.1`,
+ * `CluegiverBotBuildManifest@cluegiver-0.1`, the content-addressed
+ * `table-competitive-v1` protocol, Observation/Trace v0.2, and the sibling
+ * cluegiver observation v0.1 each carry their own schema identity. They
+ * deliberately do NOT bump this global value yet: `SUBSTRATE_VERSION` is
+ * embedded in compiled strategy carriers, so changing it before runtime
+ * adoption would silently change the legacy compiled-carrier golden. A later
+ * integration release may bump it only with an explicit carrier migration and
+ * re-evaluation boundary.
  *
  * 0.2.0 added `crossRoundInversion.ts` — the history-aware set-level audit the
  * 0.1 roadmap named as the only way to reach the accumulated-history leak

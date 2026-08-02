@@ -194,6 +194,39 @@ export type {
   WireConfigSource,
 } from "./botBuild";
 export {
+  CLUEGIVER_BOT_BUILD_MANIFEST_VERSION,
+  cluegiverBotBuildContentHash,
+  findCluegiverBotBuildRegistryConflicts,
+  mintCluegiverBotBuildManifest,
+  validateBotBuildReferenceForDecisionRole,
+  validateCluegiverBotBuildManifestSource,
+  validateGuessDecisionContext,
+  verifyCluegiverBotBuildManifest,
+} from "./cluegiverBotBuild";
+export type {
+  BotBuildManifestForDecision,
+  BotDecisionRole,
+  CluegiverBotBuildManifest,
+  CluegiverBotBuildManifestSource,
+} from "./cluegiverBotBuild";
+export {
+  CLUEGIVER_OBSERVATION_VERSION,
+  cluegiverObservationContentHash,
+  mintCluegiverObservation,
+  validateCluegiverDecisionContext,
+  validateCluegiverObservation,
+  verifyCluegiverObservation,
+} from "./cluegiverObservation";
+export type {
+  CluegiverObservationActor,
+  CluegiverObservationLine,
+  CluegiverSeatRole,
+  DecryptoCluegiverObservation,
+  DecryptoCluegiverObservationSource,
+  ResolvedCluegiverRoundView,
+  ResolvedCluegiverSideView,
+} from "./cluegiverObservation";
+export {
   COMPETITIVE_PROTOCOL_SCHEMA_VERSION,
   TABLE_COMPETITIVE_PROTOCOL_ID,
   TABLE_COMPETITIVE_V1,

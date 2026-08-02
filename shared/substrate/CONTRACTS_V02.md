@@ -1,11 +1,17 @@
-# Shared runtime contracts v0.2 (decoder slice)
+# Shared runtime contracts v0.2 plus additive cluegiver v0.1
 
-Status: contract and deterministic conformance surface, 2026-08-02.
+Status: contract, deterministic conformance surface, and quarantined
+Table-to-Herpetarium transfer boundary, 2026-08-02.
 
-Neither runtime constructs, enforces, exports, or ingests these v0.2 objects
-yet. The Table engine, visibility projection, `ai_calls`, turn tasks, and game
-events remain authoritative. This file and the TypeScript beside it are a test
-oracle for the next integration slice, not deployment evidence.
+The Table now captures the role-legal decision inputs and runtime provenance
+needed to mint completed-game decoder/interceptor exports. Herpetarium can
+re-derive, validate, and store those exports in an immutable quarantine; it
+does not promote them into training or evaluation data. The Table engine,
+visibility projection, `ai_calls`, turn tasks, and game events remain
+authoritative. Neither runtime has adopted the joint-assignment guess policy
+or the additive cluegiver contracts as live gameplay behavior. These
+contracts therefore prove structure, identity, and transfer integrity—not
+deployment, seating, or strategic strength.
 
 The slice is deliberately one decision wide:
 
@@ -16,8 +22,8 @@ Deferred rather than implied:
 - BotBuild licenses, seating manifests, trusted issuers, and revocation;
 - human, system, and operator observations or traces;
 - post-outcome observations and trace supersession;
-- encryptor, interceptor, deliberation, social, and reflection traces;
-- clue-generation legality identities and bot publication policy.
+- cluegiver, interceptor, deliberation, social, and reflection traces;
+- cluegiver runtime adoption, evaluation, seating, and bot speech publication.
 
 Observation retains an interceptor view only to fail closed on the current
 engine's round and clue preconditions. Trace v0.2 remains decode-only.
@@ -43,6 +49,64 @@ identity, not an evaluation or seating claim.
 Pinned conformance BotBuild hash:
 
 `e81a7caa7c6a07e75ec3bb8dc83f6e19ef8b6c0bb76e07b7272cd4a59c8fa083`
+
+## Additive CluegiverBotBuild and cluegiver observation
+
+Cluegiving cannot reuse the decoder-only `BotBuildManifest@0.1` or
+`DecryptoObservationV2` without weakening their frozen role scopes. The
+additive `CluegiverBotBuildManifest` and `DecryptoCluegiverObservation` are
+sibling contracts; all existing decoder hashes and `SUBSTRATE_VERSION` remain
+unchanged.
+
+The cluegiver build binds every prompt-affecting implementation boundary:
+
+- exact StrategyArtifact, strategy compiler, and role-specific context
+  compiler;
+- exact candidate-selection policy, authoritative action contract, prompt
+  assembler, and compiled carrier;
+- exact response parser, clue validator, provider adapter, orchestration,
+  retry, and fallback policies;
+- exact requested provider/model/upstream/reasoning/wire configuration;
+- exact Table protocol identities and immutable provenance.
+
+Its id is namespaced as `cluegiver:<name>@<version>`, so a decoder and
+cluegiver build cannot mint the same registry id. An observation still carries
+only an opaque id/hash reference. Therefore
+`validateCluegiverDecisionContext` and
+`validateGuessDecisionContext` are mandatory before provider dispatch or
+research ingestion. Both compose the generic
+`validateBotBuildReferenceForDecisionRole` registry gate, resolve the opaque
+reference to a verified manifest, and reject decoder/cluegiver scope
+substitution in either direction. Missing registry entries return explicit
+fail-closed validation problems rather than throwing or passing.
+
+The cluegiver observation exposes exactly the legal live view:
+
+- the active cluegiver's actor, seat, seat role, team, four distinct own
+  keywords, and current distinct 3-of-4 code;
+- the complete contiguous public history for both teams, represented as
+  clues, codes, own decodes, and opponent intercept guesses without duplicated
+  correctness or outcome labels;
+- token totals re-derived from that complete history;
+- Table, own-Team, and, only when the game setting is open,
+  opponent-Team transcript lanes, with speaker teams checked against the lane;
+- the exact role-scoped BotBuild and Table protocol identities.
+
+The actor's seat role must match the frozen
+`agent_a → agent_b → agent_c` round rotation. Opponent keywords, current
+opponent secrets, post-action outcomes, correctness labels, secret-bearing
+fields, unknown fields, and mismatched transcript lanes fail closed.
+
+These contracts are structural prerequisites only. They do not claim that a
+strategy is strong, evaluated, licensed for seating, adopted by either
+runtime, or safe to publish as Table/Team speech.
+
+Pinned conformance hashes:
+
+- CluegiverBotBuild:
+  `e269fb3d171917a7a444f0a18d389521ac0d68e587aa28bb14623bada76a39a2`;
+- cluegiver observation:
+  `72fec7244106895b19b9e58d25917546941638653ab5e3d110942de9efd2589c`.
 
 ## `table-competitive-v1`
 
