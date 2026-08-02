@@ -14,8 +14,6 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
-  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
-  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
   cloneAndDeepFreeze,
   contentHash,
   exactKeys,
@@ -30,9 +28,9 @@ import {
 import {
   PAIRED_DECODER_POLICY_COMPILER_HASH,
   PAIRED_DECODER_POLICY_COMPILER_ID,
-  PAIRED_DECODER_POLICY_SECTION_HEADINGS,
   TABLE_GREEDY_DECODER_POLICY_ARTIFACT,
   compilePairedDecoderPolicyPrompt,
+  pairedDecoderProviderPayload,
   verifyCompiledPairedDecoderPolicyPrompt,
   type PairedDecoderPolicyCarrier,
 } from "./lib/decrypto-static-decoder-policies";
@@ -147,8 +145,7 @@ export interface SanitizedStaticPositionFixtureSource {
   readonly positions: readonly SanitizedDecoderPosition[];
 }
 
-export interface SanitizedStaticPositionFixture
-  extends SanitizedStaticPositionFixtureSource {
+export interface SanitizedStaticPositionFixture extends SanitizedStaticPositionFixtureSource {
   readonly contentHash: string;
 }
 
@@ -195,9 +192,7 @@ function tripleProblems(value: unknown, label: string): string[] {
   }
   const problems: string[] = [];
   if (
-    value.some(
-      (digit) => !Number.isInteger(digit) || digit < 1 || digit > 4,
-    )
+    value.some((digit) => !Number.isInteger(digit) || digit < 1 || digit > 4)
   ) {
     problems.push(`${label} digits must be integers in 1..4`);
   }
@@ -207,18 +202,13 @@ function tripleProblems(value: unknown, label: string): string[] {
   return problems;
 }
 
-function wordsProblems(
-  value: unknown,
-  length: 3 | 4,
-  label: string,
-): string[] {
+function wordsProblems(value: unknown, length: 3 | 4, label: string): string[] {
   if (!Array.isArray(value) || value.length !== length) {
     return [`${label} must contain exactly ${length} game words`];
   }
   if (
     !value.every(
-      (word) =>
-        typeof word === "string" && SAFE_GAME_WORD_PATTERN.test(word),
+      (word) => typeof word === "string" && SAFE_GAME_WORD_PATTERN.test(word),
     )
   ) {
     return [
@@ -258,11 +248,7 @@ function decodedOutcomeProblems(
   label: string,
 ): string[] {
   return [
-    ...exactKeys(
-      value,
-      ["code", "ownDecode", "decodedCorrectly"],
-      label,
-    ),
+    ...exactKeys(value, ["code", "ownDecode", "decodedCorrectly"], label),
     ...decodeConsistencyProblems(value, label),
   ];
 }
@@ -292,9 +278,7 @@ function resolvedRoundProblems(value: unknown, label: string): string[] {
 function evidenceLimitationsProblems(value: unknown): string[] {
   const limitations = recordValue(value);
   const decodeCeiling = recordValue(limitations?.historicalDecodeCeiling);
-  const conclusionPermissions = recordValue(
-    limitations?.conclusionPermissions,
-  );
+  const conclusionPermissions = recordValue(limitations?.conclusionPermissions);
   const problems = [
     ...exactKeys(
       limitations,
@@ -352,9 +336,7 @@ function evidenceLimitationsProblems(value: unknown): string[] {
     conclusionPermissions?.parity !== "forbidden" ||
     conclusionPermissions.strategy !== "forbidden"
   ) {
-    problems.push(
-      "fixture must forbid parity and strategy conclusions",
-    );
+    problems.push("fixture must forbid parity and strategy conclusions");
   }
   return problems;
 }
@@ -386,9 +368,7 @@ function positionProblems(value: unknown, label: string): string[] {
     position?.sourceCluegiverArm !== "treatment" &&
     position?.sourceCluegiverArm !== "control"
   ) {
-    problems.push(
-      `${label}.sourceCluegiverArm must be treatment or control`,
-    );
+    problems.push(`${label}.sourceCluegiverArm must be treatment or control`);
   }
   if (!Array.isArray(position?.resolvedHistory)) {
     problems.push(`${label}.resolvedHistory must be an array`);
@@ -400,10 +380,7 @@ function positionProblems(value: unknown, label: string): string[] {
     }
     position.resolvedHistory.forEach((round, index) => {
       problems.push(
-        ...resolvedRoundProblems(
-          round,
-          `${label}.resolvedHistory[${index}]`,
-        ),
+        ...resolvedRoundProblems(round, `${label}.resolvedHistory[${index}]`),
       );
     });
   }
@@ -442,8 +419,7 @@ export function sanitizedFixturePrivacyProblems(
     const forbiddenKey =
       /(?:^|_)(?:name|player|actor|seat|id|game_id|decision_id|attempt_id|chat|transcript|raw|response|reasoning|receipt|prompt|provider|model|human|private)(?:$|_)/.test(
         normalizedKey,
-      ) &&
-      !(explicitlyAllowedHumanAssertion && key === "noHumanSource");
+      ) && !(explicitlyAllowedHumanAssertion && key === "noHumanSource");
     return [
       ...(forbiddenKey
         ? [`${keyPath} is forbidden in the sanitized fixture`]
@@ -555,11 +531,9 @@ export function validateSanitizedStaticPositionFixture(
     );
   }
   if (
-    source?.sourceArtifactAvailability !==
-      "uncommitted_provenance_only" ||
+    source?.sourceArtifactAvailability !== "uncommitted_provenance_only" ||
     source?.sourceArtifactDependency !== "none" ||
-    source?.reconstructionAuthority !==
-      "content_hashed_sanitized_fixture"
+    source?.reconstructionAuthority !== "content_hashed_sanitized_fixture"
   ) {
     problems.push(
       "fixture must truthfully record the uncommitted source as provenance-only with no runtime dependency",
@@ -578,7 +552,9 @@ export function validateSanitizedStaticPositionFixture(
   } else {
     const { contentHash: recorded, ...fixtureSource } = fixture;
     if (contentHash(fixtureSource) !== recorded) {
-      problems.push("fixture.contentHash does not bind the exact fixture source");
+      problems.push(
+        "fixture.contentHash does not bind the exact fixture source",
+      );
     }
   }
   if (
@@ -589,9 +565,8 @@ export function validateSanitizedStaticPositionFixture(
       `fixture.positions must contain exactly ${STATIC_POSITION_COUNT} positions`,
     );
   } else {
-    const perPositionProblems = fixture.positions.flatMap(
-      (position, index) =>
-        positionProblems(position, `fixture.positions[${index}]`),
+    const perPositionProblems = fixture.positions.flatMap((position, index) =>
+      positionProblems(position, `fixture.positions[${index}]`),
     );
     problems.push(...perPositionProblems);
     if (perPositionProblems.length === 0) {
@@ -621,10 +596,10 @@ export function validateSanitizedStaticPositionFixture(
       ).length;
       if (
         historicalDecodeCorrect !==
-        STATIC_POSITION_EVIDENCE_LIMITATIONS.historicalDecodeCeiling
-          .correct ||
+          STATIC_POSITION_EVIDENCE_LIMITATIONS.historicalDecodeCeiling
+            .correct ||
         typedPositions.length !==
-        STATIC_POSITION_EVIDENCE_LIMITATIONS.historicalDecodeCeiling.total
+          STATIC_POSITION_EVIDENCE_LIMITATIONS.historicalDecodeCeiling.total
       ) {
         problems.push(
           "fixture outcomes must preserve the historical 4/4 decode ceiling",
@@ -683,18 +658,9 @@ export function observationVisiblePositionProjection(
   position: SanitizedDecoderPosition,
 ) {
   return {
-    ownKeywords: [...position.ownKeywords] as [
-      string,
-      string,
-      string,
-      string,
-    ],
+    ownKeywords: [...position.ownKeywords] as [string, string, string, string],
     ownClues: [...position.ownClues] as [string, string, string],
-    opponentClues: [...position.opponentClues] as [
-      string,
-      string,
-      string,
-    ],
+    opponentClues: [...position.opponentClues] as [string, string, string],
     resolvedHistory: position.resolvedHistory.map((round) => ({
       own: {
         clues: [...round.own.clues] as [string, string, string],
@@ -753,18 +719,9 @@ export function mintNeutralDecoderObservation(
     },
     role: "decoder",
     team,
-    ownKeywords: [...position.ownKeywords] as [
-      string,
-      string,
-      string,
-      string,
-    ],
+    ownKeywords: [...position.ownKeywords] as [string, string, string, string],
     ownClues: [...position.ownClues] as [string, string, string],
-    opponentClues: [...position.opponentClues] as [
-      string,
-      string,
-      string,
-    ],
+    opponentClues: [...position.opponentClues] as [string, string, string],
     resolvedRounds,
     tokens: {
       own: { intercepts: 0, miscommunications },
@@ -858,68 +815,6 @@ export interface StaticPositionPreregistration {
   readonly preregistrationContentHash: string;
 }
 
-function assertNeutralProviderVisiblePolicyCarrier(
-  compiled: {
-    readonly systemPrompt: string;
-    readonly taskPrompt: string;
-    readonly actionContract: string;
-  },
-): void {
-  const headingOccurrences =
-    compiled.taskPrompt.split(
-      PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
-    ).length - 1;
-  if (headingOccurrences !== 1) {
-    throw new Error(
-      "provider-visible task must contain exactly one neutral policy heading",
-    );
-  }
-  const providerVisibleHeadings = compiled.taskPrompt
-    .split("\n")
-    .filter((line) => line.startsWith("## "));
-  const identityBearingHeading = providerVisibleHeadings.find(
-    (heading) =>
-      heading.includes("@") || /\b[0-9a-f]{32,}\b/i.test(heading),
-  );
-  if (identityBearingHeading) {
-    throw new Error(
-      `provider-visible heading exposes artifact identity "${identityBearingHeading}"`,
-    );
-  }
-  const providerVisibleBytes = [
-    compiled.systemPrompt,
-    compiled.taskPrompt,
-    compiled.actionContract,
-  ].join("\n");
-  const forbiddenAssignmentCues = [
-    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.id,
-    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.contentHash,
-    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source.runtimeCommit,
-    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source
-      .substrateIntegrationCommit,
-    JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.id,
-    JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.contentHash,
-    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
-    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
-    "table_greedy",
-    "joint_assignment",
-    "treatment",
-    "control",
-    "arm-a",
-    "arm-b",
-    "arm a",
-    "arm b",
-  ];
-  const exposedCue = forbiddenAssignmentCues.find((cue) =>
-    providerVisibleBytes.toLowerCase().includes(cue.toLowerCase()),
-  );
-  if (exposedCue) {
-    throw new Error(
-      `provider-visible prompt exposes assignment cue "${exposedCue}"`,
-    );
-  }
-}
-
 export function buildStaticPositionPreregistration(
   fixture: SanitizedStaticPositionFixture,
 ): StaticPositionPreregistration {
@@ -969,7 +864,7 @@ export function buildStaticPositionPreregistration(
           `position ${positionIndex + 1} arm ${arm.key} prompt failed verification`,
         );
       }
-      assertNeutralProviderVisiblePolicyCarrier(compiled);
+      const providerPayload = pairedDecoderProviderPayload(compiled);
       return {
         ordinal: positionIndex * STATIC_POSITION_ARM_COUNT + armIndex + 1,
         positionOrdinal: positionIndex + 1,
@@ -978,12 +873,15 @@ export function buildStaticPositionPreregistration(
         observationHash: observation.contentHash,
         policyId: arm.policy.id,
         policyHash: arm.policy.contentHash,
-        systemPromptSha256: sha256Hex(compiled.systemPrompt),
-        taskPromptSha256: sha256Hex(compiled.taskPrompt),
-        actionContractSha256: sha256Hex(compiled.actionContract),
+        systemPromptSha256: sha256Hex(providerPayload.systemPrompt),
+        taskPromptSha256: sha256Hex(providerPayload.taskPrompt),
+        actionContractSha256: sha256Hex(providerPayload.actionContract),
         compiledPromptHash: compiled.contentHash,
         policyTextNeutralizedPromptSha256: sha256Hex(
-          policyTextNeutralizedTaskPrompt(compiled.taskPrompt, arm.policy),
+          policyTextNeutralizedTaskPrompt(
+            providerPayload.taskPrompt,
+            arm.policy,
+          ),
         ),
         historicalGroundTruthActionHash: contentHash(
           historicalGroundTruthAction,
@@ -1029,8 +927,7 @@ export function buildStaticPositionPreregistration(
       contentHash: fixture.contentHash,
       uncommittedSourceArtifactSha256:
         fixture.source.uncommittedSourceArtifactSha256,
-      sourceArtifactAvailability:
-        fixture.source.sourceArtifactAvailability,
+      sourceArtifactAvailability: fixture.source.sourceArtifactAvailability,
       sourceArtifactDependency: fixture.source.sourceArtifactDependency,
       reconstructionAuthority: fixture.source.reconstructionAuthority,
       allBot: fixture.source.allBot,
@@ -1103,7 +1000,7 @@ const isDirectExecution =
 if (isDirectExecution) {
   void main().catch((error) => {
     process.stderr.write(
-      `${error instanceof Error ? error.stack ?? error.message : String(error)}\n`,
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
     );
     process.exitCode = 1;
   });

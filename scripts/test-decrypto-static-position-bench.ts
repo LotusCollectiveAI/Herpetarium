@@ -21,6 +21,15 @@ function deepEqual(actual: unknown, expected: unknown, message: string): void {
   assertions += 1;
 }
 
+function throws(
+  action: () => unknown,
+  expected: RegExp,
+  message: string,
+): void {
+  assert.throws(action, expected, message);
+  assertions += 1;
+}
+
 const originalDatabaseUrl = process.env.DATABASE_URL;
 const originalFetch = globalThis.fetch;
 let providerInvocations = 0;
@@ -44,9 +53,8 @@ try {
     solveGlobalInjectiveAssignment,
     validateJointAssignmentAction,
   } = substrate;
-  const experimentPolicies = await import(
-    "./lib/decrypto-static-decoder-policies"
-  );
+  const experimentPolicies =
+    await import("./lib/decrypto-static-decoder-policies");
   const {
     PAIRED_DECODER_POLICY_ACTION_CONTRACT,
     PAIRED_DECODER_POLICY_COMPILER_HASH,
@@ -55,7 +63,9 @@ try {
     TABLE_GREEDY_DECODER_POLICY_ARTIFACT,
     TABLE_GREEDY_DECODER_POLICY_HASH,
     TABLE_GREEDY_DECODER_STRATEGY_EXCERPT,
+    assertNeutralPairedDecoderProviderPayload,
     compilePairedDecoderPolicyPrompt,
+    pairedDecoderProviderPayload,
     verifyCompiledPairedDecoderPolicyPrompt,
   } = experimentPolicies;
   const bench = await import("./run-decrypto-static-position-bench");
@@ -128,8 +138,7 @@ try {
     "greedy carrier names the live-runtime base commit",
   );
   equal(
-    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source
-      .substrateIntegrationCommit,
+    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source.substrateIntegrationCommit,
     "b41e514d097ee20494710a82a07f1e7954da52df",
     "greedy carrier distinguishes the later substrate integration commit",
   );
@@ -173,7 +182,11 @@ try {
     }),
     "fixture content hash binds every allowlisted byte",
   );
-  equal(fixture.source.allBot, true, "fixture explicitly asserts all-bot source");
+  equal(
+    fixture.source.allBot,
+    true,
+    "fixture explicitly asserts all-bot source",
+  );
   equal(
     fixture.source.noHumanSource,
     true,
@@ -194,8 +207,9 @@ try {
     fixture.positions[0]!,
     0,
   );
-  const firstVisibleProjection =
-    bench.observationVisiblePositionProjection(fixture.positions[0]!);
+  const firstVisibleProjection = bench.observationVisiblePositionProjection(
+    fixture.positions[0]!,
+  );
   equal(
     firstObservation.decisionId,
     `bench-decision:${contentHash(firstVisibleProjection).slice(0, 24)}`,
@@ -213,7 +227,7 @@ try {
   );
   const withDifferentGroundTruth = structuredClone(
     fixture.positions[0]!,
-  ) as typeof fixture.positions[0];
+  ) as (typeof fixture.positions)[0];
   (
     withDifferentGroundTruth as unknown as {
       outcome: {
@@ -275,16 +289,14 @@ try {
     "both arms receive byte-identical action contracts",
   );
   equal(
-    greedyPrompt.taskPrompt.split(
-      PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
-    ).length - 1,
+    greedyPrompt.taskPrompt.split(PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy)
+      .length - 1,
     1,
     "greedy prompt has exactly one neutral carrier heading",
   );
   equal(
-    jointPrompt.taskPrompt.split(
-      PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy,
-    ).length - 1,
+    jointPrompt.taskPrompt.split(PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy)
+      .length - 1,
     1,
     "joint prompt has exactly one neutral carrier heading",
   );
@@ -307,17 +319,14 @@ try {
     ok(
       providerVisibleHeadings.every(
         (heading) =>
-          !heading.includes("@") &&
-          !/\b[0-9a-f]{32,}\b/i.test(heading),
+          !heading.includes("@") && !/\b[0-9a-f]{32,}\b/i.test(heading),
       ),
       "provider-visible headings expose no artifact ids or hashes",
     );
   }
   ok(
-    greedyPrompt.actionContract ===
-      PAIRED_DECODER_POLICY_ACTION_CONTRACT &&
-      jointPrompt.actionContract ===
-        PAIRED_DECODER_POLICY_ACTION_CONTRACT,
+    greedyPrompt.actionContract === PAIRED_DECODER_POLICY_ACTION_CONTRACT &&
+      jointPrompt.actionContract === PAIRED_DECODER_POLICY_ACTION_CONTRACT,
     "both arms use the local experiment contract validated by the canonical action validator",
   );
   const providerVisiblePrompts = [
@@ -328,12 +337,28 @@ try {
     jointPrompt.taskPrompt,
     jointPrompt.actionContract,
   ].join("\n");
+  const greedyProviderPayload = pairedDecoderProviderPayload(greedyPrompt);
+  const jointProviderPayload = pairedDecoderProviderPayload(jointPrompt);
+  deepEqual(
+    Object.keys(greedyProviderPayload).sort(),
+    ["actionContract", "systemPrompt", "taskPrompt"],
+    "provider accessor excludes every control-plane identity field",
+  );
+  assertNeutralPairedDecoderProviderPayload(jointProviderPayload);
+  throws(
+    () =>
+      assertNeutralPairedDecoderProviderPayload({
+        ...greedyProviderPayload,
+        taskPrompt: `${greedyProviderPayload.taskPrompt}\ncontrol`,
+      }),
+    /provider-visible prompt exposes assignment cue "control"/,
+    "neutrality gate is exported, load-bearing, and covers arm-language drift",
+  );
   for (const forbiddenAssignmentCue of [
     TABLE_GREEDY_DECODER_POLICY_ARTIFACT.id,
     TABLE_GREEDY_DECODER_POLICY_ARTIFACT.contentHash,
     TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source.runtimeCommit,
-    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source
-      .substrateIntegrationCommit,
+    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source.substrateIntegrationCommit,
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.id,
     JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.contentHash,
     JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
@@ -413,8 +438,8 @@ try {
   };
   withMalformedPosition.positions[0] = null;
   ok(
-    bench.validateSanitizedStaticPositionFixture(withMalformedPosition)
-      .length > 0,
+    bench.validateSanitizedStaticPositionFixture(withMalformedPosition).length >
+      0,
     "malformed positions fail closed without reaching derived-limit checks",
   );
 
@@ -496,8 +521,7 @@ try {
   const withPrivateProse = structuredClone(fixture) as unknown as {
     positions: Array<{ ownClues: string[] }>;
   };
-  withPrivateProse.positions[0]!.ownClues[0] =
-    "ANSWER: private response prose";
+  withPrivateProse.positions[0]!.ownClues[0] = "ANSWER: private response prose";
   ok(
     bench
       .validateSanitizedStaticPositionFixture(withPrivateProse)
@@ -638,10 +662,8 @@ try {
   );
   deepEqual(
     {
-      sha256:
-        firstPreregistration.fixture.uncommittedSourceArtifactSha256,
-      availability:
-        firstPreregistration.fixture.sourceArtifactAvailability,
+      sha256: firstPreregistration.fixture.uncommittedSourceArtifactSha256,
+      availability: firstPreregistration.fixture.sourceArtifactAvailability,
       dependency: firstPreregistration.fixture.sourceArtifactDependency,
       reconstructionAuthority:
         firstPreregistration.fixture.reconstructionAuthority,
@@ -714,10 +736,7 @@ try {
     "runner has no private temporary source-artifact dependency",
   );
   const experimentPolicySource = await readFile(
-    new URL(
-      "./lib/decrypto-static-decoder-policies.ts",
-      import.meta.url,
-    ),
+    new URL("./lib/decrypto-static-decoder-policies.ts", import.meta.url),
     "utf8",
   );
   ok(
@@ -730,10 +749,7 @@ try {
     "experiment compiler neither invokes production compilation nor duplicates its private helpers",
   );
   const canonicalJointSource = await readFile(
-    new URL(
-      "../shared/substrate/jointAssignmentDecoder.ts",
-      import.meta.url,
-    ),
+    new URL("../shared/substrate/jointAssignmentDecoder.ts", import.meta.url),
     "utf8",
   );
   const canonicalIndexSource = await readFile(

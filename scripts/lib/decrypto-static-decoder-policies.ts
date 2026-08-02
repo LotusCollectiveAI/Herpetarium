@@ -34,8 +34,7 @@ import {
  * deliberately omitted: the static comparison supplies one neutral role
  * envelope and one experiment-only action contract to both arms.
  */
-export const TABLE_GREEDY_DECODER_POLICY_ID =
-  "table-greedy-decoder@6a70fd2";
+export const TABLE_GREEDY_DECODER_POLICY_ID = "table-greedy-decoder@6a70fd2";
 
 export const TABLE_GREEDY_DECODER_STRATEGY_EXCERPT = [
   "Strategy:",
@@ -75,8 +74,7 @@ const TABLE_GREEDY_DECODER_POLICY_SOURCE = {
   },
   source: {
     repository: "the-table" as const,
-    runtimeCommit:
-      "6a70fd2202e71681ae581c00ce8a6c407aa9a509" as const,
+    runtimeCommit: "6a70fd2202e71681ae581c00ce8a6c407aa9a509" as const,
     substrateIntegrationCommit:
       "b41e514d097ee20494710a82a07f1e7954da52df" as const,
     path: "artifacts/api-server/src/ai/prompts.ts" as const,
@@ -167,9 +165,7 @@ export function verifyPairedDecoderPolicyCarrier(
     verifyJointAssignmentDecoderPolicy(
       value as JointAssignmentDecoderPolicyArtifact,
     ) ||
-    verifyTableGreedyDecoderPolicy(
-      value as TableGreedyDecoderPolicyArtifact,
-    )
+    verifyTableGreedyDecoderPolicy(value as TableGreedyDecoderPolicyArtifact)
   );
 }
 
@@ -192,8 +188,7 @@ export const PAIRED_DECODER_POLICY_SYSTEM_PROMPT = [
 export const PAIRED_DECODER_POLICY_SECTION_HEADINGS = cloneAndDeepFreeze({
   currentDecision: "## Current decision",
   primaryTargets: "## Primary role-legal targets",
-  nonTargetClues:
-    "## Non-target current clues (rule-visible context only)",
+  nonTargetClues: "## Non-target current clues (rule-visible context only)",
   resolvedHistory: "## Resolved own clue-to-number history",
   dialogue: "## Secondary rule-visible dialogue",
   policy: "## Operative decoder policy",
@@ -202,7 +197,7 @@ export const PAIRED_DECODER_POLICY_SECTION_HEADINGS = cloneAndDeepFreeze({
 
 export const PAIRED_DECODER_POLICY_ACTION_CONTRACT = [
   "Return only one JSON object with exactly the keys kind, role, and guess:",
-  "{\"kind\":\"guess\",\"role\":\"decode\",\"guess\":[d1,d2,d3]}. Each digit",
+  '{"kind":"guess","role":"decode","guess":[d1,d2,d3]}. Each digit',
   "must be a distinct integer from 1 through 4; guess[i] is the own-keyword",
   "number for clue i. Emit no rationale and no prose outside the JSON object.",
 ].join(" ");
@@ -272,9 +267,7 @@ export function pairedDecoderPolicyBlock(
   ].join("\n\n");
 }
 
-function renderResolvedOwnHistory(
-  observation: DecryptoObservationV2,
-) {
+function renderResolvedOwnHistory(observation: DecryptoObservationV2) {
   return observation.resolvedRounds.map((round) => ({
     roundNumber: round.roundNumber,
     mappings: round.own.code.map((number, index) => ({
@@ -302,12 +295,10 @@ function renderPairedDecoderTaskPrompt(
     PAIRED_DECODER_POLICY_SECTION_HEADINGS.primaryTargets,
     canonicalJson({
       targetClues: observation.ownClues,
-      comparisonTargets: ([1, 2, 3, 4] as const).map(
-        (number, index) => ({
-          number,
-          keyword: observation.ownKeywords![index]!,
-        }),
-      ),
+      comparisonTargets: ([1, 2, 3, 4] as const).map((number, index) => ({
+        number,
+        keyword: observation.ownKeywords![index]!,
+      })),
     }),
     PAIRED_DECODER_POLICY_SECTION_HEADINGS.nonTargetClues,
     canonicalJson(observation.opponentClues),
@@ -341,9 +332,99 @@ export interface CompiledPairedDecoderPolicyPromptSource {
   readonly actionContract: string;
 }
 
-export interface CompiledPairedDecoderPolicyPrompt
-  extends CompiledPairedDecoderPolicyPromptSource {
+export interface CompiledPairedDecoderPolicyPrompt extends CompiledPairedDecoderPolicyPromptSource {
   readonly contentHash: string;
+}
+
+/**
+ * The only bytes a future licensed dispatcher may send to a provider.
+ * Control-plane identities stay on the compiled record and cannot enter this
+ * exact-key payload accidentally.
+ */
+export interface PairedDecoderProviderPayload {
+  readonly systemPrompt: string;
+  readonly taskPrompt: string;
+  readonly actionContract: string;
+}
+
+export function assertNeutralPairedDecoderProviderPayload(
+  payload: PairedDecoderProviderPayload,
+): void {
+  const keyProblems = exactKeys(
+    payload,
+    ["systemPrompt", "taskPrompt", "actionContract"],
+    "paired decoder provider payload",
+  );
+  if (keyProblems.length > 0) {
+    throw new Error(keyProblems.join("; "));
+  }
+  const headingOccurrences =
+    payload.taskPrompt.split(PAIRED_DECODER_POLICY_SECTION_HEADINGS.policy)
+      .length - 1;
+  if (headingOccurrences !== 1) {
+    throw new Error(
+      "provider-visible task must contain exactly one neutral policy heading",
+    );
+  }
+  const identityBearingHeading = payload.taskPrompt
+    .split("\n")
+    .filter((line) => line.startsWith("## "))
+    .find(
+      (heading) => heading.includes("@") || /\b[0-9a-f]{32,}\b/i.test(heading),
+    );
+  if (identityBearingHeading) {
+    throw new Error(
+      `provider-visible heading exposes artifact identity "${identityBearingHeading}"`,
+    );
+  }
+  const providerVisibleBytes = [
+    payload.systemPrompt,
+    payload.taskPrompt,
+    payload.actionContract,
+  ]
+    .join("\n")
+    .toLowerCase();
+  const forbiddenAssignmentCues = [
+    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.id,
+    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.contentHash,
+    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source.runtimeCommit,
+    TABLE_GREEDY_DECODER_POLICY_ARTIFACT.source.substrateIntegrationCommit,
+    JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.id,
+    JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT.contentHash,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
+    JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
+    "table_greedy",
+    "joint_assignment",
+    "treatment",
+    "control",
+    "arm-a",
+    "arm-b",
+    "arm a",
+    "arm b",
+  ];
+  const exposedCue = forbiddenAssignmentCues.find((cue) =>
+    providerVisibleBytes.includes(cue.toLowerCase()),
+  );
+  if (exposedCue) {
+    throw new Error(
+      `provider-visible prompt exposes assignment cue "${exposedCue}"`,
+    );
+  }
+}
+
+export function pairedDecoderProviderPayload(
+  compiled: Pick<
+    CompiledPairedDecoderPolicyPromptSource,
+    "systemPrompt" | "taskPrompt" | "actionContract"
+  >,
+): Readonly<PairedDecoderProviderPayload> {
+  const payload = cloneAndDeepFreeze({
+    systemPrompt: compiled.systemPrompt,
+    taskPrompt: compiled.taskPrompt,
+    actionContract: compiled.actionContract,
+  });
+  assertNeutralPairedDecoderProviderPayload(payload);
+  return payload;
 }
 
 export function compilePairedDecoderPolicyPrompt(
@@ -390,10 +471,12 @@ export function compilePairedDecoderPolicyPrompt(
     taskPrompt: renderPairedDecoderTaskPrompt(observation, policy),
     actionContract: PAIRED_DECODER_POLICY_ACTION_CONTRACT,
   };
-  return cloneAndDeepFreeze({
+  const compiled = cloneAndDeepFreeze({
     ...source,
     contentHash: contentHash(source),
   });
+  pairedDecoderProviderPayload(compiled);
+  return compiled;
 }
 
 export function verifyCompiledPairedDecoderPolicyPrompt(
