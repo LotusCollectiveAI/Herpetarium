@@ -72,6 +72,35 @@ export interface AICallOptions {
   maxTokens?: number;
   disableReasoning?: boolean;
   healthTracker?: ModelHealthTracker;
+  /**
+   * Research-grade execution: make a single physical provider attempt and
+   * let the caller invalidate the match on any provider or parse failure.
+   */
+  strictExecution?: boolean;
+  /** Internal, persisted in provider metadata. */
+  physicalAttempt?: number;
+  /** Passed through to providers that support active request cancellation. */
+  signal?: AbortSignal;
+  /**
+   * Injected durable lifecycle recorder. The strict headless OpenRouter path
+   * creates its write-ahead row before invoking this module.
+   */
+  providerAttemptTelemetry?: ProviderAttemptTelemetry;
+}
+
+export type ProviderAttemptTerminalStatus =
+  | "succeeded"
+  | "failed"
+  | "timed_out";
+
+export interface ProviderAttemptTelemetry {
+  attemptId: number;
+  markRequest(metadata: Record<string, unknown>): Promise<void>;
+  markTerminal(input: {
+    status: ProviderAttemptTerminalStatus;
+    metadata: Record<string, unknown>;
+    error?: string | null;
+  }): Promise<void>;
 }
 
 async function callAIWithBackoff(
@@ -98,9 +127,13 @@ async function callAIWithBackoff(
     }
   }
 
-  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+  const maxRetries = options.strictExecution ? 0 : MAX_RETRIES;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      const result = await callAIRaw(config, systemPrompt, userPrompt, options);
+      const result = await callAIRaw(config, systemPrompt, userPrompt, {
+        ...options,
+        physicalAttempt: attempt + 1,
+      });
       if (healthTracker) {
         healthTracker.recordSuccess(modelKey);
       }
@@ -110,7 +143,7 @@ async function callAIWithBackoff(
       return result;
     } catch (err) {
       const { isRateLimit, retryAfterMs } = isRateLimitError(err);
-      if (isRateLimit && attempt < MAX_RETRIES) {
+      if (isRateLimit && attempt < maxRetries) {
         state.totalRateLimits++;
         state.totalRetries++;
         state.lastRateLimitAt = Date.now();
@@ -119,7 +152,7 @@ async function callAIWithBackoff(
         const backoff = retryAfterMs || Math.min(BASE_BACKOFF_MS * Math.pow(2, attempt) + jitter, MAX_BACKOFF_MS);
         state.backoffMs = backoff;
 
-        console.warn(`[ai-backoff] ${config.provider}/${config.model} rate limited (attempt ${attempt + 1}/${MAX_RETRIES}), waiting ${Math.round(backoff)}ms`);
+        console.warn(`[ai-backoff] ${config.provider}/${config.model} rate limited (attempt ${attempt + 1}/${maxRetries}), waiting ${Math.round(backoff)}ms`);
         await new Promise(resolve => setTimeout(resolve, backoff));
         continue;
       }
@@ -142,6 +175,9 @@ function getOpenAI(): OpenAI {
       apiKey: process.env.AI_INTEGRATIONS_OPENAI_API_KEY || process.env.OPENAI_API_KEY,
       baseURL: process.env.AI_INTEGRATIONS_OPENAI_BASE_URL || process.env.OPENAI_BASE_URL,
       timeout: 4 * 60 * 60 * 1000, // 4 hours — let models think as long as they need
+      // Retry policy is centralized in callAIWithBackoff so strict execution
+      // can guarantee one physical provider attempt.
+      maxRetries: 0,
     });
   }
   return openaiClient;
@@ -153,6 +189,7 @@ function getAnthropic(): Anthropic {
       apiKey: process.env.AI_INTEGRATIONS_ANTHROPIC_API_KEY || process.env.ANTHROPIC_API_KEY,
       baseURL: process.env.AI_INTEGRATIONS_ANTHROPIC_BASE_URL,
       timeout: 4 * 60 * 60 * 1000, // 4 hours — let models think as long as they need
+      maxRetries: 0,
     });
   }
   return anthropicClient;
@@ -192,6 +229,7 @@ export interface AICallResult<T> {
   completionTokens?: number;
   totalTokens?: number;
   estimatedCostUsd?: string;
+  providerMetadata?: Record<string, unknown>;
 }
 
 export function estimateCost(config: Pick<AIPlayerConfig, "provider" | "model">, promptTokens?: number, completionTokens?: number): string | undefined;
@@ -216,12 +254,37 @@ export function estimateCost(
   return total.toFixed(6);
 }
 
-interface RawAIResponse {
+export interface RawAIResponse {
   text: string;
   reasoningTrace?: string;
   promptTokens?: number;
   completionTokens?: number;
   totalTokens?: number;
+  providerMetadata?: Record<string, unknown>;
+}
+
+/**
+ * Return the provider response that was received before an exact-route
+ * validation error was raised.
+ *
+ * A route/model/upstream/finish mismatch makes a strict research call invalid,
+ * but it does not make the already-received assistant text disappear. Keeping
+ * this receipt on the error lets the experiment runner persist the exact
+ * visible response and usage without treating it as a valid draw.
+ */
+export function providerResponseReceiptFromError(
+  error: unknown,
+): RawAIResponse | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const receipt = (error as { providerResponseReceipt?: unknown })
+    .providerResponseReceipt;
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) {
+    return undefined;
+  }
+  const candidate = receipt as Partial<RawAIResponse>;
+  return typeof candidate.text === "string"
+    ? (candidate as RawAIResponse)
+    : undefined;
 }
 
 async function callOpenAI(
@@ -349,6 +412,9 @@ async function callAnthropic(
         totalTokens: (response.usage?.input_tokens || 0) + (response.usage?.output_tokens || 0) || undefined,
       };
     } catch (err) {
+      if (options.strictExecution) {
+        throw err;
+      }
       console.error("[AI] Extended thinking failed, falling back to standard:", err instanceof Error ? err.message : err);
     }
   }
@@ -461,6 +527,108 @@ async function callGemini(
   };
 }
 
+const DEEPSEEK_V4_FLASH_0731 = "deepseek/deepseek-v4-flash-0731";
+const DEEPSEEK_V4_FLASH_0731_UPSTREAM_SLUG = "deepinfra";
+const DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY = "DeepInfra";
+
+function openRouterReasoningEffort(config: AIPlayerConfig): string {
+  if (
+    config.model === DEEPSEEK_V4_FLASH_0731 &&
+    config.reasoningEffort === "xhigh"
+  ) {
+    return "max";
+  }
+  return config.reasoningEffort || "high";
+}
+
+function openRouterRouting(model: string): Record<string, unknown> {
+  if (model === DEEPSEEK_V4_FLASH_0731) {
+    return {
+      only: [DEEPSEEK_V4_FLASH_0731_UPSTREAM_SLUG],
+      allow_fallbacks: false,
+      require_parameters: true,
+      data_collection: "deny",
+    };
+  }
+  return {
+    allow_fallbacks: false,
+    require_parameters: true,
+    data_collection: "deny",
+  };
+}
+
+function openRouterMaxTokens(
+  config: AIPlayerConfig,
+  requested?: number,
+): number {
+  const fallback =
+    getReasoningMode(config) === "openrouter_reasoning" ? 100000 : 8192;
+  const resolved = requested ?? fallback;
+  // The pinned DeepInfra endpoint currently advertises a 65,536-token
+  // completion window even though the model's total context is much larger.
+  return config.model === DEEPSEEK_V4_FLASH_0731
+    ? Math.min(resolved, 65_536)
+    : resolved;
+}
+
+function withProviderMetadata(
+  error: Error,
+  providerMetadata: Record<string, unknown>,
+): Error {
+  Object.assign(error, { providerMetadata });
+  return error;
+}
+
+function withProviderResponseReceipt(
+  error: Error,
+  response: RawAIResponse,
+): Error {
+  // Keep the potentially large/private assistant text out of generic Error
+  // serialization. Research callers recover it only through the explicit
+  // helper above.
+  Object.defineProperty(error, "providerResponseReceipt", {
+    value: response,
+    enumerable: false,
+    configurable: false,
+    writable: false,
+  });
+  return error;
+}
+
+function providerMetadataFromError(
+  error: unknown,
+): Record<string, unknown> | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const metadata = (error as { providerMetadata?: unknown }).providerMetadata;
+  return metadata && typeof metadata === "object" && !Array.isArray(metadata)
+    ? (metadata as Record<string, unknown>)
+    : undefined;
+}
+
+function providerAttemptErrorSummary(
+  error: Error,
+  metadata: Record<string, unknown>,
+  timedOut: boolean,
+): string {
+  if (timedOut) return "OpenRouter request timed out";
+  if (typeof metadata.httpStatus === "number") {
+    return `OpenRouter HTTP ${metadata.httpStatus}`;
+  }
+  if (error.message.includes("route proof")) {
+    return "OpenRouter route-proof validation failed";
+  }
+  if (error.message.includes("served model")) {
+    return "OpenRouter served-model validation failed";
+  }
+  if (error.message.includes("served provider")) {
+    return "OpenRouter served-provider validation failed";
+  }
+  if (error.message.includes("provider-attempt telemetry")) {
+    return "OpenRouter provider-attempt telemetry failed";
+  }
+  return "OpenRouter provider call failed";
+}
+
 async function callOpenRouter(
   config: AIPlayerConfig,
   systemPrompt: string,
@@ -468,9 +636,6 @@ async function callOpenRouter(
   options: AICallOptions = {},
 ): Promise<RawAIResponse> {
   const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
-    throw new Error("OPENROUTER_API_KEY environment variable is not set");
-  }
 
   const isReasoning = getReasoningMode(config) === "openrouter_reasoning";
   const usesCombinedPrompt = isReasoning && modelHasTag(config, "combined_prompt");
@@ -484,47 +649,316 @@ async function callOpenRouter(
   const body: Record<string, unknown> = {
     model: config.model,
     messages,
-    max_tokens: options.maxTokens ?? (isReasoning ? 100000 : 8192),
+    max_tokens: openRouterMaxTokens(config, options.maxTokens),
+    provider: openRouterRouting(config.model),
   };
 
   if (!isReasoning && getModelEntry(config)?.supportsTemperature !== false && config.temperature !== undefined) {
     body.temperature = config.temperature;
   }
 
-  if (isReasoning && !options.disableReasoning) {
-    body.reasoning = { effort: config.reasoningEffort || "high" };
+  if (isReasoning) {
+    body.reasoning = options.disableReasoning
+      ? {
+          // Omitting this object does not disable reasoning for models whose
+          // OpenRouter metadata marks reasoning as enabled by default.
+          enabled: false,
+          exclude: true,
+        }
+      : {
+          effort: openRouterReasoningEffort(config),
+          // Preserve deliberate reasoning while retaining structured outputs
+          // instead of storing provider chain-of-thought in research logs.
+          exclude: true,
+        };
   }
 
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      "Authorization": `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost:5000",
-      "X-Title": process.env.OPENROUTER_TITLE || "Decrypto Arena",
-    },
-    body: JSON.stringify(body),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    const error: any = new Error(`OpenRouter API error: ${response.status} ${errorText}`);
-    error.status = response.status;
-    throw error;
-  }
-
-  const data = await response.json() as any;
-  const choice = data.choices?.[0]?.message;
-  const content = choice?.content || "";
-  const reasoningContent = choice?.reasoning_content || data.choices?.[0]?.message?.reasoning || "";
-
-  return {
-    text: content,
-    reasoningTrace: reasoningContent || undefined,
-    promptTokens: data.usage?.prompt_tokens,
-    completionTokens: data.usage?.completion_tokens,
-    totalTokens: data.usage?.total_tokens,
+  const requestMetadata: Record<string, unknown> = {
+    apiHost: "openrouter.ai",
+    requestedModel: config.model,
+    requestedUpstream:
+      config.model === DEEPSEEK_V4_FLASH_0731
+        ? DEEPSEEK_V4_FLASH_0731_UPSTREAM_SLUG
+        : null,
+    physicalAttempt: options.physicalAttempt ?? 1,
+    requestedReasoningEffort: config.reasoningEffort || "high",
+    wireReasoningEffort:
+      isReasoning && !options.disableReasoning
+        ? openRouterReasoningEffort(config)
+        : null,
+    reasoningDisabled: isReasoning && options.disableReasoning === true,
+    routing: body.provider,
+    providerAttemptId: options.providerAttemptTelemetry?.attemptId ?? null,
   };
+
+  // Strict headless execution supplies the same controller used by its
+  // deadline wrapper. Standalone/exploratory calls retain a provider-local
+  // timeout instead.
+  const requestSignal =
+    options.signal ?? AbortSignal.timeout(Math.max(1, config.timeoutMs));
+
+  try {
+    // This update is awaited before network I/O. If persistence fails, no
+    // request is sent.
+    await options.providerAttemptTelemetry?.markRequest(requestMetadata);
+
+    if (!apiKey) {
+      throw withProviderMetadata(
+        new Error("OPENROUTER_API_KEY environment variable is not set"),
+        requestMetadata,
+      );
+    }
+
+    let response: Response;
+    try {
+      response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${apiKey}`,
+          "Content-Type": "application/json",
+          "X-OpenRouter-Metadata": "enabled",
+          "HTTP-Referer": process.env.OPENROUTER_REFERER || "http://localhost:5000",
+          "X-Title": process.env.OPENROUTER_TITLE || "Decrypto Arena",
+        },
+        body: JSON.stringify(body),
+        signal: requestSignal,
+      });
+    } catch (error) {
+      throw withProviderMetadata(
+        new Error(
+          `OpenRouter transport error: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+        requestMetadata,
+      );
+    }
+
+    if (!response.ok) {
+      let errorText: string;
+      try {
+        errorText = await response.text();
+      } catch (error) {
+        throw withProviderMetadata(
+          new Error(
+            `OpenRouter error response body read error after HTTP ${response.status}: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          ),
+          {
+            ...requestMetadata,
+            httpStatus: response.status,
+            requestId: response.headers.get("x-request-id"),
+            generationId: response.headers.get("x-generation-id"),
+          },
+        );
+      }
+      const error: any = withProviderMetadata(
+        new Error(`OpenRouter API error: ${response.status} ${errorText}`),
+        {
+          ...requestMetadata,
+          httpStatus: response.status,
+          requestId: response.headers.get("x-request-id"),
+          generationId: response.headers.get("x-generation-id"),
+        },
+      );
+      error.status = response.status;
+      throw error;
+    }
+
+    let data: any;
+    try {
+      data = await response.json();
+    } catch (error) {
+      throw withProviderMetadata(
+        new Error(
+          `OpenRouter response body error after HTTP ${response.status}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ),
+        {
+          ...requestMetadata,
+          httpStatus: response.status,
+          requestId: response.headers.get("x-request-id"),
+          generationId: response.headers.get("x-generation-id"),
+        },
+      );
+    }
+    const choice = data.choices?.[0]?.message;
+    const content = choice?.content || "";
+    const reasoningContent = choice?.reasoning_content || data.choices?.[0]?.message?.reasoning || "";
+    const finishReason = data.choices?.[0]?.finish_reason;
+    const providerMetadata: Record<string, unknown> = {
+      ...requestMetadata,
+      httpStatus: response.status,
+      requestId: response.headers.get("x-request-id"),
+      generationId: data.id || response.headers.get("x-generation-id"),
+      servedModel: data.model,
+      upstreamProvider: data.provider,
+      systemFingerprint: data.system_fingerprint,
+      openrouterMetadata: data.openrouter_metadata,
+      finishReason,
+      nativeFinishReason: data.choices?.[0]?.native_finish_reason,
+      usage: data.usage
+        ? {
+            ...data.usage,
+            promptTokens: data.usage.prompt_tokens,
+            completionTokens: data.usage.completion_tokens,
+            totalTokens: data.usage.total_tokens,
+            reasoningTokens:
+              data.usage.completion_tokens_details?.reasoning_tokens,
+            cachedTokens: data.usage.prompt_tokens_details?.cached_tokens,
+            costUsd: data.usage.cost,
+          }
+        : null,
+    };
+    const providerResponseReceipt: RawAIResponse = {
+      text: content,
+      reasoningTrace: reasoningContent || undefined,
+      promptTokens: data.usage?.prompt_tokens,
+      completionTokens: data.usage?.completion_tokens,
+      totalTokens: data.usage?.total_tokens,
+      providerMetadata,
+    };
+
+    if (config.model === DEEPSEEK_V4_FLASH_0731) {
+      if (data.model !== DEEPSEEK_V4_FLASH_0731) {
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter served model ${String(data.model)} instead of ${DEEPSEEK_V4_FLASH_0731}`,
+            ),
+            providerMetadata,
+          ),
+          providerResponseReceipt,
+        );
+      }
+      if (data.provider !== DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY) {
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter served provider ${String(data.provider)} instead of ${DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY}`,
+            ),
+            providerMetadata,
+          ),
+          providerResponseReceipt,
+        );
+      }
+      const routerMetadata =
+        data.openrouter_metadata &&
+        typeof data.openrouter_metadata === "object" &&
+        !Array.isArray(data.openrouter_metadata)
+          ? data.openrouter_metadata
+          : null;
+      const routerAttempts = Array.isArray(routerMetadata?.attempts)
+        ? routerMetadata.attempts
+        : [];
+      const selectedEndpoints = Array.isArray(
+        routerMetadata?.endpoints?.available,
+      )
+        ? routerMetadata.endpoints.available.filter(
+            (endpoint: unknown) =>
+              endpoint &&
+              typeof endpoint === "object" &&
+              (endpoint as { selected?: unknown }).selected === true,
+          )
+        : [];
+      if (
+        routerMetadata?.attempt !== 1 ||
+        routerAttempts.length > 1 ||
+        selectedEndpoints.length !== 1 ||
+        selectedEndpoints[0]?.provider !==
+          DEEPSEEK_V4_FLASH_0731_UPSTREAM_DISPLAY
+      ) {
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              "OpenRouter route proof did not show exactly one successful DeepInfra attempt",
+            ),
+            providerMetadata,
+          ),
+          providerResponseReceipt,
+        );
+      }
+      if (finishReason !== "stop") {
+        throw withProviderResponseReceipt(
+          withProviderMetadata(
+            new Error(
+              `OpenRouter DeepSeek call ended with ${String(finishReason)} instead of stop`,
+            ),
+            providerMetadata,
+          ),
+          providerResponseReceipt,
+        );
+      }
+    }
+
+    await options.providerAttemptTelemetry?.markTerminal({
+      status: "succeeded",
+      metadata: providerMetadata,
+      error: null,
+    });
+
+    return providerResponseReceipt;
+  } catch (error) {
+    const providerMetadata =
+      providerMetadataFromError(error) ?? requestMetadata;
+    const timedOut =
+      requestSignal.aborted ||
+      (error instanceof DOMException &&
+        (error.name === "AbortError" || error.name === "TimeoutError")) ||
+      (error instanceof Error &&
+        (error.name === "AbortError" || error.name === "TimeoutError"));
+    const surfacedError =
+      error instanceof Error
+        ? withProviderMetadata(error, providerMetadata)
+        : withProviderMetadata(new Error(String(error)), providerMetadata);
+
+    try {
+      await options.providerAttemptTelemetry?.markTerminal({
+        status: timedOut ? "timed_out" : "failed",
+        metadata: {
+          ...providerMetadata,
+          ...(timedOut
+            ? {
+                cancellationObserved: true,
+                abortReasonType:
+                  requestSignal.reason instanceof Error
+                    ? requestSignal.reason.name
+                    : requestSignal.reason == null
+                      ? null
+                      : typeof requestSignal.reason,
+              }
+            : {}),
+        },
+        // The research ai_call_logs row retains the detailed provider error.
+        // This lifecycle table deliberately stores only a bounded summary so
+        // an upstream response body cannot leak prompts, keys, or user data.
+        error: providerAttemptErrorSummary(
+          surfacedError,
+          providerMetadata,
+          timedOut,
+        ),
+      });
+    } catch (telemetryError) {
+      const telemetryFailure = withProviderMetadata(
+        new Error(
+          `OpenRouter provider-attempt telemetry failed: ${
+            telemetryError instanceof Error
+              ? telemetryError.message
+              : String(telemetryError)
+          }`,
+        ),
+        providerMetadata,
+      );
+      const receivedResponse = providerResponseReceiptFromError(error);
+      throw receivedResponse
+        ? withProviderResponseReceipt(telemetryFailure, receivedResponse)
+        : telemetryFailure;
+    }
+
+    throw surfacedError;
+  }
 }
 
 function callAIRaw(
@@ -559,6 +993,21 @@ interface ParseResult<T> {
   quality: ParseQuality;
 }
 
+function assertStrictParseQuality(
+  options: AICallOptions,
+  quality: ParseQuality,
+  action: string,
+  providerMetadata?: Record<string, unknown>,
+): void {
+  if (!options.strictExecution || quality === "clean") return;
+  throw withProviderMetadata(
+    new Error(
+      `Strict execution rejected ${action} parse quality "${quality}"`,
+    ),
+    providerMetadata ?? {},
+  );
+}
+
 function parseCodeResponse(response: string): ParseResult<[number, number, number]> {
   // Strategy 1: Look for "ANSWER:" prefix line
   const answerMatch = response.match(/ANSWER:\s*(.+)/im);
@@ -575,7 +1024,11 @@ function parseCodeResponse(response: string): ParseResult<[number, number, numbe
   if (lastCleanMatch) {
     const code = [parseInt(lastCleanMatch[1]), parseInt(lastCleanMatch[2]), parseInt(lastCleanMatch[3])] as [number, number, number];
     const unique = new Set(code);
-    const quality: ParseQuality = unique.size === 3 ? "clean" : "partial_recovery";
+    // Only the explicitly requested ANSWER line is protocol-clean. A tuple
+    // recovered from surrounding prose remains usable in exploratory mode
+    // but must invalidate strict research execution.
+    const quality: ParseQuality =
+      answerMatch && unique.size === 3 ? "clean" : "partial_recovery";
     return { value: code, quality };
   }
 
@@ -611,7 +1064,10 @@ function parseCluesResponse(response: string): ParseResult<string[]> {
     const words = [lastCleanMatch[1].toLowerCase(), lastCleanMatch[2].toLowerCase(), lastCleanMatch[3].toLowerCase()];
     // Filter out any "word" longer than 25 chars (thinking noise)
     if (words.every(w => w.length >= 1 && w.length <= 25)) {
-      return { value: words, quality: "clean" };
+      return {
+        value: words,
+        quality: answerMatch ? "clean" : "partial_recovery",
+      };
     }
   }
 
@@ -675,7 +1131,15 @@ export async function generateClues(
   if (ablatedParams.ablations?.includes("random_clues")) {
     const randomWords = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "theta", "kappa", "sigma", "omega"];
     const pick = () => randomWords[Math.floor(Math.random() * randomWords.length)];
-    return { result: [pick(), pick(), pick()], prompt: "ABLATION:random_clues", rawResponse: "", model: config.model, latencyMs: 0, parseQuality: "clean" };
+    // These words are fabricated, not model output. Marking them "clean"
+    // made strictFailure evaluate false, so a strictExecution tournament
+    // persisted and played them with usedFallback:false — a synthetic action
+    // inside the mode that exists to guarantee there are none. It also let
+    // them pass the blind-inversion calibration's clean-control filter.
+    // "fallback_used" makes strict fail closed and excludes them from
+    // clean-only analysis, while non-strict ablation arms still record the
+    // result normally.
+    return { result: [pick(), pick(), pick()], prompt: "ABLATION:random_clues", rawResponse: "", model: config.model, latencyMs: 0, parseQuality: "fallback_used" };
   }
 
   const strategy = getPromptStrategy(config.promptStrategy);
@@ -685,19 +1149,46 @@ export async function generateClues(
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
+  let raw: RawAIResponse | undefined;
   try {
-    const raw = await callAI(config, systemPrompt, prompt, options);
+    raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCluesResponse(raw.text);
+    assertStrictParseQuality(
+      options,
+      parsed.quality,
+      "clue",
+      raw.providerMetadata,
+    );
     return {
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
       estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
+      providerMetadata: raw.providerMetadata,
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: ["hint", "clue", "guess"], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
+    return {
+      result: ["hint", "clue", "guess"],
+      prompt: fullPrompt,
+      rawResponse: raw?.text ?? "",
+      model: config.model,
+      latencyMs,
+      error: String(err),
+      parseQuality: "error",
+      reasoningTrace: raw?.reasoningTrace,
+      promptTokens: raw?.promptTokens,
+      completionTokens: raw?.completionTokens,
+      totalTokens: raw?.totalTokens,
+      estimatedCostUsd: estimateCost(
+        config,
+        raw?.promptTokens,
+        raw?.completionTokens,
+      ),
+      providerMetadata:
+        raw?.providerMetadata ?? providerMetadataFromError(err),
+    };
   }
 }
 
@@ -715,19 +1206,46 @@ export async function generateGuess(
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
+  let raw: RawAIResponse | undefined;
   try {
-    const raw = await callAI(config, systemPrompt, prompt, options);
+    raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
+    assertStrictParseQuality(
+      options,
+      parsed.quality,
+      "guess",
+      raw.providerMetadata,
+    );
     return {
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
       estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
+      providerMetadata: raw.providerMetadata,
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
+    return {
+      result: [1, 2, 3],
+      prompt: fullPrompt,
+      rawResponse: raw?.text ?? "",
+      model: config.model,
+      latencyMs,
+      error: String(err),
+      parseQuality: "error",
+      reasoningTrace: raw?.reasoningTrace,
+      promptTokens: raw?.promptTokens,
+      completionTokens: raw?.completionTokens,
+      totalTokens: raw?.totalTokens,
+      estimatedCostUsd: estimateCost(
+        config,
+        raw?.promptTokens,
+        raw?.completionTokens,
+      ),
+      providerMetadata:
+        raw?.providerMetadata ?? providerMetadataFromError(err),
+    };
   }
 }
 
@@ -785,15 +1303,26 @@ Respond with ONLY your updated notes text, nothing else.`;
   return prompt;
 }
 
-export async function generateReflection(config: AIPlayerConfig, params: ReflectionParams): Promise<AICallResult<string>> {
+export async function generateReflection(
+  config: AIPlayerConfig,
+  params: ReflectionParams,
+  options: AICallOptions = {},
+): Promise<AICallResult<string>> {
   const systemPrompt = "You are an AI agent reflecting on a completed Decrypto game. Your job is to update your strategic notes with observations and insights that will help you play better in future games.";
   const prompt = buildReflectionPrompt(params);
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
+  let raw: RawAIResponse | undefined;
   try {
-    const raw = await callAI(config, systemPrompt, prompt);
+    raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     let notes = raw.text.trim();
+    if (options.strictExecution && notes.length === 0) {
+      throw withProviderMetadata(
+        new Error("Strict execution rejected an empty reflection response"),
+        raw.providerMetadata ?? {},
+      );
+    }
     const approxTokens = Math.ceil(notes.length / 4);
     if (approxTokens > params.tokenBudget * 1.5) {
       notes = notes.slice(0, params.tokenBudget * 6);
@@ -803,10 +1332,30 @@ export async function generateReflection(config: AIPlayerConfig, params: Reflect
       reasoningTrace: raw.reasoningTrace, parseQuality: "clean",
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
       estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
+      providerMetadata: raw.providerMetadata,
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: params.currentNotes || "", prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
+    return {
+      result: params.currentNotes || "",
+      prompt: fullPrompt,
+      rawResponse: raw?.text ?? "",
+      model: config.model,
+      latencyMs,
+      error: String(err),
+      parseQuality: "error",
+      reasoningTrace: raw?.reasoningTrace,
+      promptTokens: raw?.promptTokens,
+      completionTokens: raw?.completionTokens,
+      totalTokens: raw?.totalTokens,
+      estimatedCostUsd: estimateCost(
+        config,
+        raw?.promptTokens,
+        raw?.completionTokens,
+      ),
+      providerMetadata:
+        raw?.providerMetadata ?? providerMetadataFromError(err),
+    };
   }
 }
 
@@ -843,9 +1392,16 @@ export async function generateDeliberationMessage(
 ): Promise<AICallResult<string>> {
   const fullPrompt = `${params.systemPrompt}\n\n${params.userPrompt}`;
   const startTime = Date.now();
+  let raw: RawAIResponse | undefined;
   try {
-    const raw = await callAI(config, params.systemPrompt, params.userPrompt, options);
+    raw = await callAI(config, params.systemPrompt, params.userPrompt, options);
     const latencyMs = Date.now() - startTime;
+    if (options.strictExecution && raw.text.trim().length === 0) {
+      throw withProviderMetadata(
+        new Error("Strict execution rejected an empty deliberation response"),
+        raw.providerMetadata ?? {},
+      );
+    }
     return {
       result: raw.text,
       prompt: fullPrompt,
@@ -858,17 +1414,29 @@ export async function generateDeliberationMessage(
       completionTokens: raw.completionTokens,
       totalTokens: raw.totalTokens,
       estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
+      providerMetadata: raw.providerMetadata,
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
     return {
       result: "",
       prompt: fullPrompt,
-      rawResponse: "",
+      rawResponse: raw?.text ?? "",
       model: config.model,
       latencyMs,
       error: String(err),
       parseQuality: "error",
+      reasoningTrace: raw?.reasoningTrace,
+      promptTokens: raw?.promptTokens,
+      completionTokens: raw?.completionTokens,
+      totalTokens: raw?.totalTokens,
+      estimatedCostUsd: estimateCost(
+        config,
+        raw?.promptTokens,
+        raw?.completionTokens,
+      ),
+      providerMetadata:
+        raw?.providerMetadata ?? providerMetadataFromError(err),
     };
   }
 }
@@ -887,18 +1455,45 @@ export async function generateInterception(
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
+  let raw: RawAIResponse | undefined;
   try {
-    const raw = await callAI(config, systemPrompt, prompt, options);
+    raw = await callAI(config, systemPrompt, prompt, options);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
+    assertStrictParseQuality(
+      options,
+      parsed.quality,
+      "interception",
+      raw.providerMetadata,
+    );
     return {
       result: parsed.value, prompt: fullPrompt, rawResponse: raw.text, model: config.model, latencyMs,
       reasoningTrace: raw.reasoningTrace, parseQuality: parsed.quality,
       promptTokens: raw.promptTokens, completionTokens: raw.completionTokens, totalTokens: raw.totalTokens,
       estimatedCostUsd: estimateCost(config, raw.promptTokens, raw.completionTokens),
+      providerMetadata: raw.providerMetadata,
     };
   } catch (err: unknown) {
     const latencyMs = Date.now() - startTime;
-    return { result: [1, 2, 3], prompt: fullPrompt, rawResponse: "", model: config.model, latencyMs, error: String(err), parseQuality: "error" };
+    return {
+      result: [1, 2, 3],
+      prompt: fullPrompt,
+      rawResponse: raw?.text ?? "",
+      model: config.model,
+      latencyMs,
+      error: String(err),
+      parseQuality: "error",
+      reasoningTrace: raw?.reasoningTrace,
+      promptTokens: raw?.promptTokens,
+      completionTokens: raw?.completionTokens,
+      totalTokens: raw?.totalTokens,
+      estimatedCostUsd: estimateCost(
+        config,
+        raw?.promptTokens,
+        raw?.completionTokens,
+      ),
+      providerMetadata:
+        raw?.providerMetadata ?? providerMetadataFromError(err),
+    };
   }
 }

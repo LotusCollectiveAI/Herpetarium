@@ -1,5 +1,10 @@
 import type { AIPlayerConfig, HeadlessMatchConfig } from "@shared/schema";
-import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "@shared/modelRegistry";
+import {
+  getConfigForModel,
+  getDefaultConfigForProvider,
+  getModelEntry,
+  getModelKey,
+} from "@shared/modelRegistry";
 import { callAI } from "./ai";
 
 const VALIDATION_SYSTEM_PROMPT = "You are a model validation check. Reply with OK.";
@@ -12,6 +17,7 @@ export interface ValidatedModel {
   model: string;
   displayName: string;
   responseText?: string;
+  providerMetadata?: Record<string, unknown>;
 }
 
 export interface FailedModelValidation {
@@ -30,12 +36,14 @@ export interface ModelValidationReport {
 }
 
 function resolvePlayerConfig(player: HeadlessMatchConfig["players"][number]): AIPlayerConfig {
-  const defaults = getDefaultConfigForProvider(player.aiProvider);
+  const providerDefaults = getDefaultConfigForProvider(player.aiProvider);
+  const model = player.aiConfig?.model ?? providerDefaults.model;
+  const defaults = getConfigForModel(player.aiProvider, model);
   return {
     ...defaults,
     ...(player.aiConfig ?? {}),
     provider: player.aiProvider,
-    model: player.aiConfig?.model ?? defaults.model,
+    model,
   };
 }
 
@@ -81,6 +89,7 @@ async function validateModel(config: AIPlayerConfig): Promise<ValidatedModel | F
       {
         maxTokens: VALIDATION_MAX_TOKENS,
         disableReasoning: true,
+        strictExecution: true,
       },
     );
 
@@ -101,6 +110,7 @@ async function validateModel(config: AIPlayerConfig): Promise<ValidatedModel | F
       model: config.model,
       displayName,
       responseText: responseText.slice(0, 80),
+      providerMetadata: response.providerMetadata,
     };
   } catch (error) {
     return {

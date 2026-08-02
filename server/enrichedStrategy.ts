@@ -9,7 +9,7 @@
  */
 
 import type { PromptStrategy, ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
-import { formatScratchNotes } from "./promptStrategies";
+import { finalizeCluePrompt, formatScratchNotes } from "./promptStrategies";
 import { getWordCardForLabel } from "./wordPacks";
 import { getPersonaByName } from "./botPersonas";
 import type { BotPersona } from "./botPersonas";
@@ -96,9 +96,12 @@ INSTRUCTIONS:
       prompt += `\n\nThis is round 1. Establish initial associations that are clear to your team but leave room for variation in future rounds.`;
     }
 
-    prompt += formatScratchNotes(params.scratchNotes);
-    prompt += `\n\nPut your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 single words separated by commas. No explanations. Example:\nANSWER: ocean,bright,ancient`;
-    return prompt;
+    return finalizeCluePrompt(
+      prompt,
+      params,
+      `Put your final answer on its own line starting with "ANSWER:". Respond with ONLY 3 single words separated by commas. No explanations. Example:\nANSWER: ocean,bright,ancient`,
+      false,
+    );
   },
 
   guessTemplate: (params: GuessTemplateParams): string => {

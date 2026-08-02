@@ -10,7 +10,7 @@ import type {
   HeadlessMatchConfig,
   MatchRound,
 } from "@shared/schema";
-import { DEFAULT_GAME_RULES, getDefaultConfig } from "@shared/schema";
+import { DEFAULT_GAME_RULES, getConfigForModel } from "@shared/schema";
 import { runBoundedSettledPool } from "./boundedPool";
 import { buildGenomeSystemPrompt, SEED_GENOME_TEMPLATES } from "./coachLoop";
 import { runHeadlessMatch } from "./headlessRunner";
@@ -92,11 +92,10 @@ function buildAnchorMatchConfig(
   focalTeam: "amber" | "blue",
   variant: "incumbent" | "candidate",
 ): HeadlessMatchConfig {
-  const baseAIConfig = {
-    ...getDefaultConfig(input.playerProvider),
-    provider: input.playerProvider,
-    model: input.playerModel,
-  };
+  const baseAIConfig = getConfigForModel(
+    input.playerProvider,
+    input.playerModel,
+  );
 
   const players: HeadlessMatchConfig["players"] = [];
   for (const team of ["amber", "blue"] as const) {
@@ -122,6 +121,7 @@ function buildAnchorMatchConfig(
     anchorLabel: anchorOpponent.label,
     focalTeam,
     gameRules: input.config.gameRules || input.gameRules || DEFAULT_GAME_RULES,
+    strictExecution: true,
   };
 }
 
@@ -264,6 +264,14 @@ export async function runAnchorBatch(input: AnchorBatchInput): Promise<AnchorABR
   });
 
   const settlements = await runBoundedSettledPool(matchTasks, ANCHOR_CONCURRENCY);
+  const failedSettlements = settlements.filter(
+    (settlement) => settlement.status === "rejected",
+  );
+  if (failedSettlements.length > 0) {
+    throw new Error(
+      `Strict anchor batch is incomplete: ${failedSettlements.length}/${matchTasks.length} fixtures failed`,
+    );
+  }
   const results: VariantMatchResult[] = [];
   for (const settlement of settlements) {
     if (settlement.status === "fulfilled") {

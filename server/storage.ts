@@ -7,6 +7,8 @@ import {
   type InsertMatchRound,
   type AiCallLog,
   type InsertAiCallLog,
+  type ProviderAttempt,
+  type InsertProviderAttempt,
   type Tournament,
   type InsertTournament,
   type TournamentMatch,
@@ -43,6 +45,7 @@ import {
   matches,
   matchRounds,
   aiCallLogs,
+  providerAttempts,
   tournaments,
   tournamentMatches,
   experiments,
@@ -84,6 +87,14 @@ export interface IStorage {
   createAiCallLog(log: InsertAiCallLog): Promise<AiCallLog>;
   getAiCallLogs(matchId: number): Promise<AiCallLog[]>;
   getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]>;
+  createProviderAttempt(
+    attempt: InsertProviderAttempt,
+  ): Promise<ProviderAttempt>;
+  updateProviderAttempt(
+    id: number,
+    data: Partial<InsertProviderAttempt>,
+  ): Promise<ProviderAttempt | undefined>;
+  getProviderAttempts(matchId: number): Promise<ProviderAttempt[]>;
 
   createTournament(data: InsertTournament): Promise<Tournament>;
   updateTournament(id: number, data: Partial<InsertTournament>): Promise<Tournament | undefined>;
@@ -259,6 +270,36 @@ export class DatabaseStorage implements IStorage {
     return db.select().from(aiCallLogs).where(where).orderBy(aiCallLogs.createdAt);
   }
 
+  async createProviderAttempt(
+    attempt: InsertProviderAttempt,
+  ): Promise<ProviderAttempt> {
+    const [created] = await db
+      .insert(providerAttempts)
+      .values(attempt as typeof providerAttempts.$inferInsert)
+      .returning();
+    return created;
+  }
+
+  async updateProviderAttempt(
+    id: number,
+    data: Partial<InsertProviderAttempt>,
+  ): Promise<ProviderAttempt | undefined> {
+    const [updated] = await db
+      .update(providerAttempts)
+      .set(data as Partial<typeof providerAttempts.$inferInsert>)
+      .where(eq(providerAttempts.id, id))
+      .returning();
+    return updated;
+  }
+
+  async getProviderAttempts(matchId: number): Promise<ProviderAttempt[]> {
+    return db
+      .select()
+      .from(providerAttempts)
+      .where(eq(providerAttempts.matchId, matchId))
+      .orderBy(providerAttempts.startedAt, providerAttempts.id);
+  }
+
   async getMatchIdsWithTraces(matchIds: number[]): Promise<Set<number>> {
     if (matchIds.length === 0) return new Set();
     const rows = await db.selectDistinct({ matchId: aiCallLogs.matchId })
@@ -272,8 +313,37 @@ export class DatabaseStorage implements IStorage {
 
   async getCumulativeCost(matchIds: number[]): Promise<number> {
     if (matchIds.length === 0) return 0;
-    const logs = await db.select({ cost: aiCallLogs.estimatedCostUsd }).from(aiCallLogs).where(inArray(aiCallLogs.matchId, matchIds));
-    return logs.reduce((sum, l) => sum + (l.cost ? parseFloat(l.cost) : 0), 0);
+    const logs = await db
+      .select({
+        cost: aiCallLogs.estimatedCostUsd,
+        providerMetadata: aiCallLogs.providerMetadata,
+      })
+      .from(aiCallLogs)
+      .where(inArray(aiCallLogs.matchId, matchIds));
+    return logs.reduce((sum, logRow) => {
+      const metadata =
+        logRow.providerMetadata &&
+        typeof logRow.providerMetadata === "object" &&
+        !Array.isArray(logRow.providerMetadata)
+          ? (logRow.providerMetadata as Record<string, unknown>)
+          : undefined;
+      const usage =
+        metadata?.usage &&
+        typeof metadata.usage === "object" &&
+        !Array.isArray(metadata.usage)
+          ? (metadata.usage as Record<string, unknown>)
+          : undefined;
+      const providerReportedCost =
+        typeof usage?.costUsd === "number" && Number.isFinite(usage.costUsd)
+          ? usage.costUsd
+          : null;
+      const estimatedCost = logRow.cost ? Number.parseFloat(logRow.cost) : 0;
+      return (
+        sum +
+        (providerReportedCost ??
+          (Number.isFinite(estimatedCost) ? estimatedCost : 0))
+      );
+    }, 0);
   }
 
   async createTournament(data: InsertTournament): Promise<Tournament> {

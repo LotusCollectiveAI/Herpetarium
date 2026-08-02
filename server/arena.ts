@@ -772,6 +772,7 @@ function buildPerMatchCoachConfig(config: ArenaConfig, opponentGenome: GenomeMod
     sprintConcurrency: 1,
     totalSprints: 1,
     opponentGenome: cloneGenome(opponentGenome),
+    strictExecution: config.coachConfig.strictExecution !== false,
   };
 }
 
@@ -782,6 +783,7 @@ function buildAutopsyCoachConfig(config: ArenaConfig, opponentGenome?: GenomeMod
     sprintConcurrency: 1,
     totalSprints: config.totalSprints,
     opponentGenome: cloneGenome(opponentGenome || config.seedGenomes[0]),
+    strictExecution: config.coachConfig.strictExecution !== false,
   };
 }
 
@@ -826,6 +828,7 @@ export async function runPairedCoachMatches(
         roleSwapGroupId,
         focalTeam: "amber",
         gameRules,
+        strictExecution: coachConfig.strictExecution,
       }],
     },
   );
@@ -862,6 +865,7 @@ export async function runPairedCoachMatches(
         roleSwapGroupId,
         focalTeam: "blue",
         gameRules,
+        strictExecution: coachConfig.strictExecution,
       }],
     },
   );
@@ -1262,6 +1266,17 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
       });
 
       const settlements = await runBoundedSettledPool(pairingTasks, config.globalMatchConcurrency);
+      const failedPairings = settlements.filter(
+        (settlement) => settlement.status === "rejected",
+      );
+      if (
+        failedPairings.length > 0 &&
+        config.coachConfig.strictExecution !== false
+      ) {
+        throw new Error(
+          `Strict arena sprint ${sprintNumber} is incomplete: ${failedPairings.length}/${pairingTasks.length} paired fixtures failed`,
+        );
+      }
       const resultsBySlot = new Map<number, SprintResult[]>();
       const opponentsBySlot = new Map<number, SprintOpponentContext[]>();
 

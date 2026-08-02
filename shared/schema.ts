@@ -2,7 +2,11 @@ import { z } from "zod";
 import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
-export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
+export {
+  MODEL_OPTIONS,
+  getConfigForModel,
+  getDefaultConfigForProvider as getDefaultConfig,
+} from "./modelRegistry";
 
 export type AIProvider = "chatgpt" | "claude" | "gemini" | "openrouter";
 
@@ -476,6 +480,8 @@ export const matches = pgTable("matches", {
   focalTeam: varchar("focal_team", { length: 10 }).$type<"amber" | "blue" | null>(),
   gameRules: jsonb("game_rules").$type<GameRules | null>(),
   matchmakingBucket: varchar("matchmaking_bucket", { length: 24 }),
+  strictExecution: boolean("strict_execution").notNull().default(false),
+  strategyLineage: jsonb("strategy_lineage"),
 });
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
@@ -543,7 +549,11 @@ export type ParseQuality = "clean" | "partial_recovery" | "fallback_used" | "err
 export type MatchQualityStatus = "clean" | "tainted";
 
 export interface MatchQualityEvent {
-  type: "fallback_clue" | "api_error" | "deliberation_failure";
+  type:
+    | "fallback_clue"
+    | "api_error"
+    | "deliberation_failure"
+    | "match_failure";
   roundNumber: number;
   team?: "amber" | "blue";
   actionType: string;
@@ -589,12 +599,55 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   totalTokens: integer("total_tokens"),
   estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
   reasoningTrace: text("reasoning_trace"),
+  providerMetadata: jsonb("provider_metadata"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
 export const insertAiCallLogSchema = createInsertSchema(aiCallLogs).omit({ id: true, createdAt: true });
 export type InsertAiCallLog = z.infer<typeof insertAiCallLogSchema>;
 export type AiCallLog = typeof aiCallLogs.$inferSelect;
+
+export type ProviderAttemptStatus =
+  | "started"
+  | "succeeded"
+  | "failed"
+  | "timed_out";
+
+/**
+ * Durable write-ahead truth for strict provider execution. A row left in
+ * `started` state is intentionally indeterminate: the process died or lost
+ * contact before it could prove a terminal provider outcome.
+ */
+export const providerAttempts = pgTable("provider_attempts", {
+  id: serial("id").primaryKey(),
+  matchId: integer("match_id"),
+  gameId: varchar("game_id", { length: 100 }),
+  roundNumber: integer("round_number"),
+  actionType: varchar("action_type", { length: 30 }).notNull(),
+  provider: varchar("provider", { length: 20 }).notNull(),
+  model: varchar("model", { length: 100 }).notNull(),
+  physicalAttempt: integer("physical_attempt").notNull().default(1),
+  status: varchar("status", { length: 20 })
+    .$type<ProviderAttemptStatus>()
+    .notNull()
+    .default("started"),
+  requestMetadata: jsonb("request_metadata"),
+  terminalMetadata: jsonb("terminal_metadata"),
+  error: text("error"),
+  aiCallLogId: integer("ai_call_log_id"),
+  startedAt: timestamp("started_at", { withTimezone: true })
+    .defaultNow()
+    .notNull(),
+  completedAt: timestamp("completed_at", { withTimezone: true }),
+});
+
+export const insertProviderAttemptSchema = createInsertSchema(
+  providerAttempts,
+).omit({ id: true, startedAt: true });
+export type InsertProviderAttempt = z.infer<
+  typeof insertProviderAttemptSchema
+>;
+export type ProviderAttempt = typeof providerAttempts.$inferSelect;
 
 // Tournament tables
 
@@ -676,6 +729,11 @@ export interface HeadlessMatchConfig {
   roleSwapGroupId?: string;
   focalTeam?: "amber" | "blue";
   gameRules?: GameRules;
+  /**
+   * Canonical research mode. Provider, timeout, and parse failures invalidate
+   * the match instead of becoming synthetic clues or guesses.
+   */
+  strictExecution?: boolean;
   promptOverrides?: HeadlessPromptOverrides;
   matchmakingBucket?: string;
   scratchNotesByTeam?: Partial<Record<"amber" | "blue", string>>;
@@ -992,8 +1050,18 @@ export interface CompiledPromptArtifact {
 
 export interface CompiledGenomePrompts {
   genomeHash: string;
+  /** Canonical substrate compiler lineage, when the shared compiler minted it. */
+  legacyGenomeHash?: string;
   compilerVersion: string;
+  /** Shared substrate version, absent on pre-substrate compiled prompts. */
+  substrateVersion?: string;
   prompts: Record<PromptRole, CompiledPromptArtifact>;
+}
+
+export interface CandidatePolicyArtifact {
+  id: string;
+  instruction: string;
+  contentHash: string;
 }
 
 export type TeamId = "amber" | "blue";
@@ -1001,6 +1069,8 @@ export type TeamId = "amber" | "blue";
 export interface HeadlessTeamPromptOverrides {
   monolithicSystemPrompt?: string;
   compiledPrompts?: CompiledGenomePrompts;
+  /** Exact actor-call treatment carrier, independent of the compiled genome. */
+  candidatePolicy?: CandidatePolicyArtifact;
 }
 
 export interface HeadlessPromptOverrides {
@@ -1301,6 +1371,7 @@ export interface CoachConfig {
   opponentGenome?: GenomeModules;
   teamSize: 2 | 3;
   budgetCapUsd?: number;
+  strictExecution?: boolean;
 }
 
 export interface MatchmakingWeights {

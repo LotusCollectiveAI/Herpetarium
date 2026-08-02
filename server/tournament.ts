@@ -1,5 +1,9 @@
 import { TournamentConfig, HeadlessMatchConfig, AIProvider, AIPlayerConfig, TournamentMatch, normalizeHeadlessMatchConfig } from "@shared/schema";
-import { getDefaultConfigForProvider, getModelKey } from "@shared/modelRegistry";
+import {
+  getConfigForModel,
+  getDefaultConfigForProvider,
+  getModelKey,
+} from "@shared/modelRegistry";
 import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
 import { log } from "./index";
@@ -20,23 +24,17 @@ function buildRoundRobinMatchConfig(
   teamSize: 2 | 3,
 ): HeadlessMatchConfig {
   const amberConfig: AIPlayerConfig = {
+    ...getConfigForModel(amber.provider, amber.model),
+    ...amber.config,
     provider: amber.provider,
     model: amber.model,
-    timeoutMs: 14400000,
-    temperature: 0.7,
-    promptStrategy: "advanced",
-    reasoningEffort: "high",
-    ...amber.config,
   };
 
   const blueConfig: AIPlayerConfig = {
+    ...getConfigForModel(blue.provider, blue.model),
+    ...blue.config,
     provider: blue.provider,
     model: blue.model,
-    timeoutMs: 14400000,
-    temperature: 0.7,
-    promptStrategy: "advanced",
-    reasoningEffort: "high",
-    ...blue.config,
   };
 
   const players: HeadlessMatchConfig["players"] = [];
@@ -277,10 +275,29 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
       const completedMatchIds = currentMatches
         .filter(m => m.status === "completed" && m.matchId)
         .map(m => m.matchId as number);
+      const costMatchIds = Array.from(new Set(currentMatches.flatMap((match) => {
+        const result = match.result as
+          | { attemptMatchIds?: unknown }
+          | null
+          | undefined;
+        const priorAttempts = Array.isArray(result?.attemptMatchIds)
+          ? result.attemptMatchIds.filter(
+              (id): id is number => typeof id === "number" && Number.isInteger(id),
+            )
+          : [];
+        return match.matchId ? [...priorAttempts, match.matchId] : priorAttempts;
+      })));
       const terminalCount = currentMatches.filter(m => TERMINAL_STATUSES.has(m.status)).length;
       const failedCount = currentMatches.filter(m => m.status === "failed").length;
       const skippedCount = currentMatches.filter(m => m.status === "skipped").length;
-      return { currentMatches, completedMatchIds, terminalCount, failedCount, skippedCount };
+      return {
+        currentMatches,
+        completedMatchIds,
+        costMatchIds,
+        terminalCount,
+        failedCount,
+        skippedCount,
+      };
     }
 
     async function syncTournamentProgress() {
@@ -293,8 +310,8 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
 
     async function syncActualCost() {
       const snapshot = await getTournamentSnapshot();
-      const currentCost = snapshot.completedMatchIds.length > 0
-        ? await storage.getCumulativeCost(snapshot.completedMatchIds)
+      const currentCost = snapshot.costMatchIds.length > 0
+        ? await storage.getCumulativeCost(snapshot.costMatchIds)
         : 0;
       await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
       return { ...snapshot, currentCost };
@@ -333,6 +350,15 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
       try {
         const matchConfig = tm.config as HeadlessMatchConfig;
         const result = await runHeadlessMatch(matchConfig, undefined, undefined, healthTracker);
+        const priorResult = tm.result as
+          | { attemptMatchIds?: unknown }
+          | null
+          | undefined;
+        const priorAttempts = Array.isArray(priorResult?.attemptMatchIds)
+          ? priorResult.attemptMatchIds.filter(
+              (id): id is number => typeof id === "number" && Number.isInteger(id),
+            )
+          : [];
 
         await storage.updateTournamentMatch(tm.id, {
           status: "completed",
@@ -341,6 +367,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
             winner: result.winner,
             totalRounds: result.totalRounds,
             matchId: result.matchId,
+            attemptMatchIds: Array.from(new Set([...priorAttempts, result.matchId])),
           } as any,
           completedAt: new Date(),
         });
@@ -349,9 +376,31 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
         log(`[tournament] Tournament ${tournamentId} - Match ${snapshot.terminalCount}/${totalMatchCount} complete`, "tournament");
       } catch (err) {
         log(`[tournament] Match failed in tournament ${tournamentId}: ${err}`, "tournament");
+        const failedMatchId =
+          err &&
+          typeof err === "object" &&
+          typeof (err as { matchId?: unknown }).matchId === "number"
+            ? (err as { matchId: number }).matchId
+            : null;
+        const priorResult = tm.result as
+          | { attemptMatchIds?: unknown }
+          | null
+          | undefined;
+        const priorAttempts = Array.isArray(priorResult?.attemptMatchIds)
+          ? priorResult.attemptMatchIds.filter(
+              (id): id is number => typeof id === "number" && Number.isInteger(id),
+            )
+          : [];
         await storage.updateTournamentMatch(tm.id, {
           status: "failed",
-          result: { error: String(err) } as any,
+          ...(failedMatchId !== null ? { matchId: failedMatchId } : {}),
+          result: {
+            error: String(err),
+            attemptMatchIds:
+              failedMatchId === null
+                ? priorAttempts
+                : Array.from(new Set([...priorAttempts, failedMatchId])),
+          } as any,
           completedAt: new Date(),
         });
         await syncTournamentProgress();
@@ -514,13 +563,20 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     await syncActualCost();
 
     const matchesAfterFirstPass = await storage.getTournamentMatches(tournamentId);
-    const failedAfterFirstPass = matchesAfterFirstPass.filter(m => m.status === "failed");
+    const failedAfterFirstPass = matchesAfterFirstPass.filter(
+      (match) =>
+        match.status === "failed" &&
+        (match.config as HeadlessMatchConfig).strictExecution !== true,
+    );
 
     if (failedAfterFirstPass.length > 0 && activeTournaments.get(tournamentId)) {
       log(`[tournament] Tournament ${tournamentId} — retrying ${failedAfterFirstPass.length} failed match(es)`, "tournament");
 
       for (const fm of failedAfterFirstPass) {
-        await storage.updateTournamentMatch(fm.id, { status: "pending", result: null as any, completedAt: null });
+        await storage.updateTournamentMatch(fm.id, {
+          status: "pending",
+          completedAt: null,
+        });
       }
 
       await syncTournamentProgress();
@@ -530,8 +586,8 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     }
 
     const finalSnapshot = await getTournamentSnapshot();
-    const finalCost = finalSnapshot.completedMatchIds.length > 0
-      ? await storage.getCumulativeCost(finalSnapshot.completedMatchIds)
+    const finalCost = finalSnapshot.costMatchIds.length > 0
+      ? await storage.getCumulativeCost(finalSnapshot.costMatchIds)
       : 0;
     const budgetExceeded = budgetCap !== null && finalCost >= budgetCap;
     const finalStatus = budgetExceeded

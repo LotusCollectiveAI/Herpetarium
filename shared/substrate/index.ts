@@ -1,0 +1,180 @@
+export { SUBSTRATE_NAME, SUBSTRATE_VERSION } from "./version";
+export {
+  canonicalJson,
+  contentHash,
+  legacyGenomeHash,
+  sha256Hex,
+} from "./hash";
+export {
+  CIPHER_ENCRYPT_CANDIDATE_POLICY,
+  CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
+  CIPHER_ENCRYPT_CANDIDATE_POLICY_HASH,
+  CIPHER_ENCRYPT_CANDIDATE_POLICY_ID,
+  composeCandidatePolicyTaskInstruction,
+} from "./candidatePolicy";
+export type { CandidatePolicyArtifact } from "./candidatePolicy";
+export {
+  DIRECTIVE_MODULES,
+  GENOME_MODULE_KEYS,
+  MODULE_TITLES,
+  ROLE_MODULES,
+  ROLE_TITLES,
+  isGenomeModules,
+} from "./genome";
+export type { GenomeModuleKey, GenomeModules, PromptRole } from "./genome";
+export {
+  COMPILER_VERSION,
+  compileGenomePrompts,
+  compiledPromptsHash,
+} from "./compile";
+export type { CompiledGenomePrompts, CompiledPromptArtifact } from "./compile";
+export {
+  artifactContentHash,
+  compileStrategyArtifact,
+  evaluateSeating,
+  findRegistryConflicts,
+  mintEvaluationRecord,
+  mintStrategyArtifact,
+  validateArtifactSource,
+  validateEvaluationRecordSource,
+  verifyEvaluationRecord,
+  verifyStrategyArtifact,
+} from "./artifact";
+export type {
+  ArtifactMethod,
+  ArtifactProvenance,
+  CompiledStrategyArtifact,
+  EvaluationProtocol,
+  EvaluationRecord,
+  EvaluationRecordSource,
+  HeldOutTests,
+  SeatingDecision,
+  SeatingPolicy,
+  StrategyArtifact,
+  StrategyArtifactSource,
+} from "./artifact";
+export {
+  DEEPSEEK_V4_FLASH_CANONICAL,
+  DEEPSEEK_V4_FLASH_PROVENANCE_CANARY,
+  KNOWN_ALIAS_MUTATIONS,
+  aliasEpochFor,
+  validateModelRef,
+} from "./modelRef";
+export type { AliasMutation, ModelRef, ResolvedModel } from "./modelRef";
+export { assertRoleLegal } from "./observation";
+export type {
+  ChatChannel,
+  ChatLine,
+  CodeTriple,
+  DecryptoObservation,
+  ObservationRole,
+  ResolvedRoundView,
+  ResolvedSideView,
+  TeamChatVisibility,
+  TeamTokens,
+} from "./observation";
+export {
+  HERPETARIUM_CLUE_RULES,
+  TABLE_BOT_CLUE_RULES,
+  TABLE_CLUE_RULES,
+  validateClue,
+  validateClueSubmission,
+  validateCodeGuess,
+} from "./actions";
+export type {
+  ClueContext,
+  ClueRuleOptions,
+  ClueSubmission,
+  CodeGuess,
+  DecryptoAction,
+  DeliberationMessage,
+} from "./actions";
+export { TRACE_VERSION, validateTraceEnvelope } from "./trace";
+export type {
+  ResearchExportStamp,
+  TraceApp,
+  TraceEnvelope,
+  TraceOutcome,
+  TraceTaskKind,
+} from "./trace";
+export {
+  BASELINE_GAME_CLUES,
+  BASELINE_GAME_ID,
+  BASELINE_GAME_ROUND,
+  BASELINE_INVERSION_PROBE,
+  BASELINE_KEYWORDS,
+  BLIND_INVERSION_CALIBRATION_2026_08_01,
+  BLIND_INVERSION_LIVE_PROBE_2026_08_01,
+  CROSS_ROUND_COLUMN_ASSIGNMENT_VETO_POLICY,
+  CROSS_ROUND_COLUMN_ASSIGNMENT_VETO_POLICY_RETIREMENT_2026_08_01,
+  CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01,
+  CROSS_ROUND_COLUMN_LEAK_2026_08_01,
+  CROSS_ROUND_COLUMN_VETO_POLICY,
+  CROSS_ROUND_PRODUCTION_SMOKE_EVENT_PROVENANCE_2026_08_01,
+  CROSS_ROUND_REFERENT_EVIDENCE_POLICY_ERRATA_2026_08_02,
+  CROSS_ROUND_REFERENT_EVIDENCE_VETO_POLICY,
+  CROSS_ROUND_V01_BLUE_TRACE_2026_08_01,
+  CROSS_ROUND_V01_LIVE_TRACE_2026_08_01,
+  CROSS_ROUND_V02_LIVE_TRACE_2026_08_01,
+  CROSS_ROUND_V03_BLUE_COUNTERFACTUALS_2026_08_02,
+  CROSS_ROUND_V03_LIVE_BOUNDARY_2026_08_02,
+  CROSS_ROUND_RUNTIME_ENFORCEMENT_RELEASED,
+  EXPECTED_HASHES,
+  INTERMEDIATE_HOPS_SOURCE,
+  INVERSION_PROMOTION_PREREQUISITES,
+  PROVISIONAL_INVERSION_VETO_POLICY,
+  SENSORY_ANCHOR_SOURCE,
+} from "./fixtures";
+export type { BaselineClueRecord, InversionProbeClueResult } from "./fixtures";
+export {
+  BLIND_INVERSION_PROTOCOL_VERSION,
+  PROVISIONAL_INVERSION_VETO_POLICY_HASH,
+  PROVISIONAL_INVERSION_VETO_POLICY_ID,
+  conceptRecoversTarget,
+  evaluateBlindInversion,
+  normalizeInversionTokens,
+} from "./inversion";
+export type {
+  BlindInversionAudit,
+  BlindInversionConcept,
+  BlindInversionEvaluation,
+  InversionVetoOutcome,
+} from "./inversion";
+export {
+  CLUE_COLUMN_NUMBERS,
+  LEGAL_CODE_TRIPLES,
+  HYPOTHESIS_SUPPORTS,
+  MAX_CODE_HYPOTHESES,
+  MINIMUM_HARD_VETO_SUPPORT,
+  REFERENT_STRENGTHS,
+  CROSS_ROUND_AUDITOR_BATCH_SIZE,
+  CROSS_ROUND_AUDITOR_PROMPT_HASH,
+  CROSS_ROUND_AUDITOR_SYSTEM_PROMPT,
+  CROSS_ROUND_COLUMN_VETO_POLICY_HASH,
+  CROSS_ROUND_COLUMN_VETO_POLICY_ID,
+  CROSS_ROUND_INVERSION_PROTOCOL_VERSION,
+  buildPublicClueLedger,
+  combineInversionOutcomes,
+  composeCrossRoundAuditorTask,
+  evaluateCrossRoundInversion,
+  ledgerColumnHasHistory,
+  parseCrossRoundAuditorReply,
+  publicLedgerClueCount,
+  publicLedgerHasHistory,
+} from "./crossRoundInversion";
+export type {
+  CodeHypothesis,
+  CrossRoundAuditorReply,
+  CrossRoundClueAudit,
+  HistoryMatch,
+  HypothesisSupport,
+  ReferentStrength,
+  CrossRoundInversionEvaluation,
+  CrossRoundInversionPolicy,
+  CrossRoundPositionEvaluation,
+  PublicClueLedger,
+  PublicLedgerColumn,
+  ResolvedClueRound,
+} from "./crossRoundInversion";
+export { runConformance } from "./conformance";
+export type { ConformanceCheck, ConformanceReport } from "./conformance";
