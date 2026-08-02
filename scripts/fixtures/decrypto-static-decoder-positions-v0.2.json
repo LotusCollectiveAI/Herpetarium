@@ -1,0 +1,109 @@
+{
+  "fixtureVersion": "decrypto-static-decoder-positions@0.2.0",
+  "source": {
+    "uncommittedSourceArtifactSha256": "54f1f34c61246b5a4042a86a276ea51587ddfccd7023f2239492e512a8f8d9ff",
+    "sourceArtifactAvailability": "uncommitted_provenance_only",
+    "sourceArtifactDependency": "none",
+    "reconstructionAuthority": "content_hashed_sanitized_fixture",
+    "allBot": true,
+    "noHumanSource": true
+  },
+  "evidenceLimitations": {
+    "independentGames": 1,
+    "sourceMatchCount": 1,
+    "historicalDecodeCeiling": {
+      "correct": 4,
+      "total": 4,
+      "notation": "4/4"
+    },
+    "mirroredSides": 2,
+    "sourceRounds": 2,
+    "positionsWithPriorHistory": 2,
+    "effectiveIndependentUnit": "one_game",
+    "conclusionPermissions": {
+      "parity": "forbidden",
+      "strategy": "forbidden"
+    }
+  },
+  "positions": [
+    {
+      "sourceCluegiverArm": "treatment",
+      "ownKeywords": ["lantern", "dance", "river", "cloud"],
+      "ownClues": ["bed", "wick", "altitude"],
+      "opponentClues": ["horn", "twinkle", "prophecy"],
+      "resolvedHistory": [],
+      "outcome": {
+        "code": [3, 1, 4],
+        "ownDecode": [3, 1, 4],
+        "decodedCorrectly": true
+      }
+    },
+    {
+      "sourceCluegiverArm": "control",
+      "ownKeywords": ["canyon", "star", "unicorn", "oracle"],
+      "ownClues": ["horn", "twinkle", "prophecy"],
+      "opponentClues": ["bed", "wick", "altitude"],
+      "resolvedHistory": [],
+      "outcome": {
+        "code": [3, 2, 4],
+        "ownDecode": [3, 2, 4],
+        "decodedCorrectly": true
+      }
+    },
+    {
+      "sourceCluegiverArm": "treatment",
+      "ownKeywords": ["lantern", "dance", "river", "cloud"],
+      "ownClues": ["rhythm", "storage", "camping"],
+      "opponentClues": ["erosion", "supernova", "rainbow"],
+      "resolvedHistory": [
+        {
+          "own": {
+            "clues": ["bed", "wick", "altitude"],
+            "code": [3, 1, 4],
+            "ownDecode": [3, 1, 4],
+            "decodedCorrectly": true
+          },
+          "opponent": {
+            "clues": ["horn", "twinkle", "prophecy"],
+            "code": [3, 2, 4],
+            "ownDecode": [3, 2, 4],
+            "decodedCorrectly": true
+          }
+        }
+      ],
+      "outcome": {
+        "code": [2, 4, 1],
+        "ownDecode": [2, 4, 1],
+        "decodedCorrectly": true
+      }
+    },
+    {
+      "sourceCluegiverArm": "control",
+      "ownKeywords": ["canyon", "star", "unicorn", "oracle"],
+      "ownClues": ["erosion", "supernova", "rainbow"],
+      "opponentClues": ["rhythm", "storage", "camping"],
+      "resolvedHistory": [
+        {
+          "own": {
+            "clues": ["horn", "twinkle", "prophecy"],
+            "code": [3, 2, 4],
+            "ownDecode": [3, 2, 4],
+            "decodedCorrectly": true
+          },
+          "opponent": {
+            "clues": ["bed", "wick", "altitude"],
+            "code": [3, 1, 4],
+            "ownDecode": [3, 1, 4],
+            "decodedCorrectly": true
+          }
+        }
+      ],
+      "outcome": {
+        "code": [1, 2, 3],
+        "ownDecode": [1, 2, 3],
+        "decodedCorrectly": true
+      }
+    }
+  ],
+  "contentHash": "a0f8c89ca38ea3e020d3abaf2a7942a8e45faf56243cd4f42777dc6d8c4c1134"
+}

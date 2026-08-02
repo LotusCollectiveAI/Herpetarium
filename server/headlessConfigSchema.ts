@@ -223,6 +223,17 @@ const teamRosterSchema = z
 const provenanceText = (max: number) =>
   z.string().trim().min(1).max(max);
 
+const ablationFlagSchema = z.enum([
+  "no_history",
+  "no_scratch_notes",
+  "no_opponent_history",
+  "no_opponent_transcript",
+  "no_chain_of_thought",
+  "random_clues",
+  "no_persona",
+  "no_semantic_context",
+]);
+
 export const headlessMatchConfigSchema = z
   .object({
     players: z.array(headlessPlayerSchema).min(2).max(6),
@@ -235,6 +246,11 @@ export const headlessMatchConfigSchema = z
       .optional(),
     fastMode: z.boolean().optional(),
     strictExecution: z.boolean().optional(),
+    ablations: z
+      .object({ flags: z.array(ablationFlagSchema).min(1) })
+      .strict()
+      .optional(),
+    enablePostMatchReflection: z.boolean().optional(),
     seed: z
       .union([z.string().min(1).max(200), z.number().int().transform(String)])
       .optional(),
@@ -248,16 +264,6 @@ export const headlessMatchConfigSchema = z
     matchmakingBucket: provenanceText(24).optional(),
   })
   .strict();
-
-const ablationFlagSchema = z.enum([
-  "no_history",
-  "no_scratch_notes",
-  "no_opponent_history",
-  "no_chain_of_thought",
-  "random_clues",
-  "no_persona",
-  "no_semantic_context",
-]);
 
 export const tournamentConfigSchema = z
   .object({

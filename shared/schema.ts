@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex, check, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export {
@@ -552,6 +553,7 @@ export interface MatchQualityEvent {
   type:
     | "fallback_clue"
     | "api_error"
+    | "validation_failure"
     | "deliberation_failure"
     | "match_failure";
   roundNumber: number;
@@ -562,6 +564,9 @@ export interface MatchQualityEvent {
   model?: string;
   timedOut?: boolean;
   usedFallback?: boolean;
+  actionApplied?: boolean;
+  strictExecution?: boolean;
+  validationProblems?: string[];
   error?: string | null;
   detail?: string;
 }
@@ -583,12 +588,17 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   matchId: integer("match_id"),
   gameId: varchar("game_id", { length: 100 }),
   roundNumber: integer("round_number"),
+  team: varchar("team", { length: 10 }).$type<"amber" | "blue" | null>(),
+  actorId: varchar("actor_id", { length: 100 }),
   provider: varchar("provider", { length: 20 }).notNull(),
   model: varchar("model", { length: 100 }).notNull(),
   actionType: varchar("action_type", { length: 30 }).notNull(),
   prompt: text("prompt").notNull(),
   rawResponse: text("raw_response"),
   parsedResult: jsonb("parsed_result"),
+  // null = not yet/not applicable; false = adjudicated but rejected.
+  actionApplied: boolean("action_applied"),
+  validationMetadata: jsonb("validation_metadata"),
   latencyMs: integer("latency_ms"),
   timedOut: boolean("timed_out").notNull().default(false),
   error: text("error"),
@@ -614,6 +624,46 @@ export type ProviderAttemptStatus =
   | "timed_out";
 
 /**
+ * Operator-private receipt for one paid OpenRouter response. The exact HTTP
+ * body is intentionally isolated from gameplay-facing AI-call logs and routes.
+ * A null body is still explicit about why no body was stored.
+ */
+export interface PrivateProviderResponseReceipt {
+  version: "openrouter-private-paid-call-receipt@0.1.0";
+  storageClass: "operator_private";
+  source: "openrouter_http_response";
+  responseBody: {
+    storage:
+      | "stored_exact"
+      | "not_stored_non_2xx"
+      | "unavailable_before_response"
+      | "body_read_failed";
+    text: string | null;
+    sha256: string | null;
+    utf8Bytes: number | null;
+  };
+  reasoning: {
+    presence:
+      | "present"
+      | "absent"
+      | "uninspectable_invalid_json"
+      | "unavailable";
+    storage:
+      | "within_exact_response_body"
+      | "not_returned"
+      | "uninspectable"
+      | "unavailable";
+    providerFields: string[];
+    sha256: string | null;
+    utf8Bytes: number | null;
+    reasoningTokens: number | null;
+  };
+  exactResponseBodyStored: boolean;
+  hiddenReasoningStored: boolean;
+  receiptContentSha256: string;
+}
+
+/**
  * Durable write-ahead truth for strict provider execution. A row left in
  * `started` state is intentionally indeterminate: the process died or lost
  * contact before it could prove a terminal provider outcome.
@@ -623,6 +673,8 @@ export const providerAttempts = pgTable("provider_attempts", {
   matchId: integer("match_id"),
   gameId: varchar("game_id", { length: 100 }),
   roundNumber: integer("round_number"),
+  team: varchar("team", { length: 10 }).$type<"amber" | "blue" | null>(),
+  actorId: varchar("actor_id", { length: 100 }),
   actionType: varchar("action_type", { length: 30 }).notNull(),
   provider: varchar("provider", { length: 20 }).notNull(),
   model: varchar("model", { length: 100 }).notNull(),
@@ -633,8 +685,13 @@ export const providerAttempts = pgTable("provider_attempts", {
     .default("started"),
   requestMetadata: jsonb("request_metadata"),
   terminalMetadata: jsonb("terminal_metadata"),
+  privateResponseReceipt: jsonb("private_response_receipt")
+    .$type<PrivateProviderResponseReceipt | null>(),
   error: text("error"),
   aiCallLogId: integer("ai_call_log_id"),
+  // Mirrors the linked AI-call disposition without erasing attempt lifecycle.
+  actionApplied: boolean("action_applied"),
+  validationMetadata: jsonb("validation_metadata"),
   startedAt: timestamp("started_at", { withTimezone: true })
     .defaultNow()
     .notNull(),
@@ -648,6 +705,118 @@ export type InsertProviderAttempt = z.infer<
   typeof insertProviderAttemptSchema
 >;
 export type ProviderAttempt = typeof providerAttempts.$inferSelect;
+
+/**
+ * Immutable quarantine for completed-game decision evidence imported from
+ * The Table. A quarantined game is deliberately not a Herpetarium match,
+ * evaluation, training split, or promotion claim. Every decision in one game
+ * inherits the single legacy_unassigned partition from its parent.
+ */
+export type DecryptoQuarantinePartition = "legacy_unassigned";
+
+export const decryptoQuarantineGames = pgTable(
+  "decrypto_quarantine_games",
+  {
+    id: serial("id").primaryKey(),
+    sourceApp: varchar("source_app", { length: 32 })
+      .$type<"the-table">()
+      .notNull()
+      .default("the-table"),
+    sourceGameId: varchar("source_game_id", { length: 100 }).notNull(),
+    sourceCompletedAt: timestamp("source_completed_at", {
+      withTimezone: true,
+    }).notNull(),
+    exportVersion: varchar("export_version", { length: 128 }).notNull(),
+    partition: varchar("partition", { length: 32 })
+      .$type<DecryptoQuarantinePartition>()
+      .notNull()
+      .default("legacy_unassigned"),
+    canonicalExport: text("canonical_export").notNull(),
+    canonicalExportSha256: varchar("canonical_export_sha256", {
+      length: 64,
+    }).notNull(),
+    decisionCount: integer("decision_count").notNull(),
+    importedAt: timestamp("imported_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    sourceGameUnique: uniqueIndex(
+      "decrypto_quarantine_games_source_app_game_id_unique",
+    ).on(table.sourceApp, table.sourceGameId),
+    sourceAppCheck: check(
+      "decrypto_quarantine_games_source_app_check",
+      sql`${table.sourceApp} = 'the-table'`,
+    ),
+    partitionCheck: check(
+      "decrypto_quarantine_games_partition_check",
+      sql`${table.partition} = 'legacy_unassigned'`,
+    ),
+    canonicalHashCheck: check(
+      "decrypto_quarantine_games_canonical_hash_check",
+      sql`${table.canonicalExportSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+    decisionCountCheck: check(
+      "decrypto_quarantine_games_decision_count_check",
+      sql`${table.decisionCount} >= 0`,
+    ),
+  }),
+);
+
+export const insertDecryptoQuarantineGameSchema = createInsertSchema(
+  decryptoQuarantineGames,
+).omit({ id: true, importedAt: true });
+export type InsertDecryptoQuarantineGame = z.infer<
+  typeof insertDecryptoQuarantineGameSchema
+>;
+export type DecryptoQuarantineGame =
+  typeof decryptoQuarantineGames.$inferSelect;
+
+export const decryptoQuarantineDecisions = pgTable(
+  "decrypto_quarantine_decisions",
+  {
+    id: serial("id").primaryKey(),
+    quarantineGameId: integer("quarantine_game_id").notNull(),
+    sourceDecisionId: varchar("source_decision_id", {
+      length: 200,
+    }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 64 }).notNull(),
+    canonicalDecision: text("canonical_decision").notNull(),
+    canonicalDecisionSha256: varchar("canonical_decision_sha256", {
+      length: 64,
+    }).notNull(),
+  },
+  (table) => ({
+    gameForeignKey: foreignKey({
+      name: "decrypto_quarantine_decisions_game_fk",
+      columns: [table.quarantineGameId],
+      foreignColumns: [decryptoQuarantineGames.id],
+    }).onDelete("restrict"),
+    idempotencyUnique: uniqueIndex(
+      "decrypto_quarantine_decisions_idempotency_key_unique",
+    ).on(table.idempotencyKey),
+    gameDecisionUnique: uniqueIndex(
+      "decrypto_quarantine_decisions_game_decision_unique",
+    ).on(table.quarantineGameId, table.sourceDecisionId),
+    idempotencyHashCheck: check(
+      "decrypto_quarantine_decisions_idempotency_hash_check",
+      sql`${table.idempotencyKey} ~ '^[a-f0-9]{64}$'`,
+    ),
+    canonicalHashCheck: check(
+      "decrypto_quarantine_decisions_canonical_hash_check",
+      sql`${table.canonicalDecisionSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+  }),
+);
+
+export const insertDecryptoQuarantineDecisionSchema = createInsertSchema(
+  decryptoQuarantineDecisions,
+).omit({ id: true });
+export type InsertDecryptoQuarantineDecision = z.infer<
+  typeof insertDecryptoQuarantineDecisionSchema
+>;
+export type DecryptoQuarantineDecision =
+  typeof decryptoQuarantineDecisions.$inferSelect;
 
 // Tournament tables
 
@@ -755,6 +924,7 @@ export type AblationFlag =
   | "no_history"
   | "no_scratch_notes"
   | "no_opponent_history"
+  | "no_opponent_transcript"
   | "no_chain_of_thought"
   | "random_clues"
   // Enriched strategy module ablations:
@@ -1610,6 +1780,7 @@ export const experimentConfigSchema = z.object({
   ablations: z.object({
     flags: z.array(z.enum([
       "no_history", "no_scratch_notes", "no_opponent_history",
+      "no_opponent_transcript",
       "no_chain_of_thought", "random_clues",
       "no_persona", "no_semantic_context",
     ])),

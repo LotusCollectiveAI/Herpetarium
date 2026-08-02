@@ -17,6 +17,7 @@ import {
   HeadlessPromptOverrides,
   TeamId,
   PromptRole,
+  AiCallLog,
 } from "@shared/schema";
 import {
   createNewGame,
@@ -41,6 +42,8 @@ import {
   generateInterception,
   generateDeliberationMessage,
   generateReflection,
+  buildGuessPromptForConfig,
+  buildInterceptionPromptForConfig,
   estimateCost,
   AICallResult,
 } from "./ai";
@@ -54,15 +57,28 @@ import {
 } from "./promptStrategies";
 import type { DeliberationOwnTemplateParams, DeliberationInterceptTemplateParams } from "./promptStrategies";
 import { storage } from "./storage";
-import { log } from "./index";
+import { log } from "./log";
 import type { ModelHealthTracker } from "./modelHealth";
-import { resolveRoleCandidatePolicy } from "./headlessPromptAuthority";
+import { buildHeadlessClueCallPrompt } from "./headlessPromptConstruction";
 import {
   beginStrictOpenRouterAttempt,
   type StrictProviderAttemptHandle,
 } from "./providerAttemptTelemetry";
 import { runWithAbortableTimeout } from "./abortableTimeout";
 import { buildHeadlessStrategyLineage } from "./headlessLineage";
+import {
+  hasActionValidationFailure,
+  parseReadyCodeSignal,
+  rejectedHeadlessCallResult,
+  resolveActionValidationDisposition,
+  resolveCodeActionValidationDisposition,
+  type HeadlessCodeActionType,
+} from "./headlessValidationPolicy";
+import {
+  HERPETARIUM_CLUE_RULES,
+  validateClueSubmission,
+  validateCodeGuess,
+} from "@shared/substrate";
 
 // Timeout is now controlled per-player via config.timeoutMs (validated by schema: min 10s, max 1hr)
 
@@ -76,12 +92,13 @@ interface HeadlessResult {
   updatedScratchNotes?: Partial<Record<"amber" | "blue", ScratchNotesSnapshot>>;
 }
 
-async function withTimeout<T>(
+export async function withTimeout<T>(
   timeoutMs: number,
   promise: Promise<AICallResult<T>>,
   fallback: T,
   model: string,
   providerAttempt?: StrictProviderAttemptHandle,
+  promptOnRejection = "",
 ): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
   const outcome = await runWithAbortableTimeout({
     timeoutMs,
@@ -128,16 +145,15 @@ async function withTimeout<T>(
       : undefined;
 
   return {
-    result: {
-      result: fallback,
-      prompt: "",
-      rawResponse: "",
+    result: rejectedHeadlessCallResult({
+      fallback,
+      prompt: promptOnRejection,
       model,
-      latencyMs: outcome.timedOut ? timeoutMs : 0,
-      error: error instanceof Error ? error.message : String(error),
-      parseQuality: "error" as const,
+      error,
+      timedOut: outcome.timedOut,
+      timeoutMs,
       providerMetadata,
-    },
+    }),
     timedOut: outcome.timedOut,
   };
 }
@@ -147,6 +163,8 @@ async function beginProviderAttempt(
   gameId: string,
   roundNumber: number,
   actionType: string,
+  team: "amber" | "blue",
+  actorId: string,
   config: AIPlayerConfig,
   strictExecution: boolean | undefined,
 ): Promise<StrictProviderAttemptHandle | undefined> {
@@ -160,6 +178,8 @@ async function beginProviderAttempt(
     matchId,
     gameId,
     roundNumber,
+    team,
+    actorId,
     actionType,
     provider: "openrouter",
     model: config.model,
@@ -219,33 +239,48 @@ async function logAiCall(
   roundNumber: number,
   provider: string,
   actionType: string,
+  team: "amber" | "blue",
+  actorId: string,
   callResult: AICallResult<any>,
   timedOut: boolean,
   usedFallback = false,
   strictExecution = false,
   providerAttempt?: StrictProviderAttemptHandle,
-) {
+): Promise<AiCallLog | undefined> {
   const strictFailure =
     strictExecution &&
     (timedOut ||
       Boolean(callResult.error) ||
       callResult.parseQuality !== "clean");
+  const rejectedCodePlaceholder =
+    (actionType === "generate_guess" ||
+      actionType === "generate_interception") &&
+    (timedOut ||
+      Boolean(callResult.error) ||
+      callResult.parseQuality === "error" ||
+      callResult.parseQuality === "fallback_used");
+  const suppressParsedResult = strictFailure || rejectedCodePlaceholder;
   try {
     const aiCallLog = await storage.createAiCallLog({
       matchId,
       gameId,
       roundNumber,
+      team,
+      actorId,
       provider,
       model: callResult.model,
       actionType,
       prompt: callResult.prompt,
       rawResponse: callResult.rawResponse || null,
-      parsedResult: strictFailure ? null : callResult.result,
+      parsedResult: suppressParsedResult ? null : callResult.result,
+      actionApplied: null,
+      validationMetadata: null,
       latencyMs: callResult.latencyMs,
       timedOut,
       error: callResult.error || null,
       parseQuality: callResult.parseQuality || null,
-      usedFallback: strictExecution ? false : usedFallback,
+      usedFallback:
+        strictExecution || rejectedCodePlaceholder ? false : usedFallback,
       promptTokens: callResult.promptTokens || null,
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
@@ -254,6 +289,7 @@ async function logAiCall(
       providerMetadata: callResult.providerMetadata || null,
     });
     await providerAttempt?.linkAiCallLog(aiCallLog.id);
+    return aiCallLog;
   } catch (err) {
     log(`[headless] Failed to log AI call: ${err}`, "headless");
     if (strictExecution) {
@@ -263,16 +299,93 @@ async function logAiCall(
         }`,
       );
     }
+    return undefined;
   }
 }
 
-interface MatchQualityRuntimeState {
+async function recordActionDisposition(
+  aiCallLog: AiCallLog | undefined,
+  providerAttempt: StrictProviderAttemptHandle | undefined,
+  actionApplied: boolean,
+  validationMetadata: Record<string, unknown>,
+  strictExecution: boolean | undefined,
+): Promise<void> {
+  try {
+    if (aiCallLog) {
+      const updated = await storage.updateAiCallLog(aiCallLog.id, {
+        actionApplied,
+        validationMetadata,
+      });
+      if (!updated) {
+        throw new Error(`AI call log ${aiCallLog.id} no longer exists`);
+      }
+    } else if (strictExecution) {
+      throw new Error("strict AI call log was not persisted");
+    }
+    await providerAttempt?.recordActionDisposition({
+      actionApplied,
+      validationMetadata,
+    });
+  } catch (error) {
+    log(
+      `[headless] Failed to persist action disposition: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      "headless",
+    );
+    if (strictExecution) {
+      throw new Error(
+        `Strict execution could not persist action disposition: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+}
+
+function strictCallValidation(
+  callResult: AICallResult<unknown>,
+  timedOut: boolean,
+): Record<string, unknown> {
+  const problems = [
+    ...(timedOut ? ["timeout"] : []),
+    ...(callResult.error ? [callResult.error] : []),
+    ...(callResult.parseQuality !== "clean"
+      ? [`parse quality ${String(callResult.parseQuality)}`]
+      : []),
+  ];
+  return {
+    validator: "headless.strict-call-result@0.1",
+    passed: problems.length === 0,
+    problems,
+  };
+}
+
+function applyValidatedCodeAction(
+  game: GameState,
+  team: "amber" | "blue",
+  actionType: HeadlessCodeActionType,
+  candidate: unknown,
+): GameState {
+  const problems = validateCodeGuess(candidate);
+  if (problems.length > 0) {
+    throw new Error(
+      `Code-action application invariant rejected ${actionType}: ${problems.join("; ")}`,
+    );
+  }
+  const guess = candidate as [number, number, number];
+  return actionType === "generate_guess"
+    ? submitOwnTeamGuess(game, team, guess)
+    : submitInterception(game, team, guess);
+}
+
+export interface MatchQualityRuntimeState {
   clueCalls: Record<"amber" | "blue", number>;
   fallbackClueCalls: Record<"amber" | "blue", number>;
   taintEvents: MatchQualityEvent[];
 }
 
-function createMatchQualityRuntimeState(): MatchQualityRuntimeState {
+export function createMatchQualityRuntimeState(): MatchQualityRuntimeState {
   return {
     clueCalls: { amber: 0, blue: 0 },
     fallbackClueCalls: { amber: 0, blue: 0 },
@@ -282,6 +395,38 @@ function createMatchQualityRuntimeState(): MatchQualityRuntimeState {
 
 function recordMatchQualityEvent(state: MatchQualityRuntimeState, event: MatchQualityEvent) {
   state.taintEvents.push(event);
+}
+
+function recordActionValidationFailure(
+  state: MatchQualityRuntimeState,
+  input: {
+    roundNumber: number;
+    actionType: string;
+    team: "amber" | "blue";
+    player: Player;
+    config: AIPlayerConfig;
+    problems: string[];
+    actionApplied: boolean;
+    strictExecution: boolean | undefined;
+  },
+): void {
+  recordMatchQualityEvent(state, {
+    type: "validation_failure",
+    roundNumber: input.roundNumber,
+    actionType: input.actionType,
+    team: input.team,
+    playerName: input.player.name,
+    provider: input.config.provider,
+    model: input.config.model,
+    actionApplied: input.actionApplied,
+    strictExecution: input.strictExecution === true,
+    validationProblems: input.problems,
+    detail: input.actionApplied
+      ? "applied_non_strict_continuity"
+      : input.strictExecution
+        ? "rejected_strict"
+        : "rejected_exploratory",
+  });
 }
 
 function maybeRecordApiError(
@@ -309,7 +454,7 @@ function maybeRecordApiError(
   });
 }
 
-function buildMatchQualitySummary(state: MatchQualityRuntimeState): { qualityStatus: MatchQualityStatus; qualitySummary: MatchQualitySummary } {
+export function buildMatchQualitySummary(state: MatchQualityRuntimeState): { qualityStatus: MatchQualityStatus; qualitySummary: MatchQualitySummary } {
   const clueGeneration = {
     amber: {
       clueCalls: state.clueCalls.amber,
@@ -329,6 +474,9 @@ function buildMatchQualitySummary(state: MatchQualityRuntimeState): { qualitySta
   }
   if (clueGeneration.blue.fallbackRate > 0.25) {
     taintReasons.push("blue_clue_fallback_rate_exceeded");
+  }
+  if (hasActionValidationFailure(state.taintEvents)) {
+    taintReasons.push("action_validation_failure");
   }
 
   return {
@@ -370,28 +518,17 @@ async function processClues(
     const GENERIC_FALLBACK_POOL = ["signal", "trace", "mark", "pulse", "drift", "bloom", "frost", "ridge", "shore", "vault"];
     const fallbackClues = Array.from({ length: 3 }, () => GENERIC_FALLBACK_POOL[Math.floor(Math.random() * GENERIC_FALLBACK_POOL.length)]);
     const teamNotesClue = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
-    const clueParams = {
+    const cluePrompt = buildHeadlessClueCallPrompt({
+      config,
+      team,
       keywords,
       targetCode: code,
       history,
       scratchNotes: teamNotesClue,
       ablations,
-      systemPromptOverride: resolveRoleSystemPrompt(
-        promptOverrides,
-        team,
-        "cluegiver",
-      ),
-      taskDirectives: resolveRoleTaskDirectives(
-        promptOverrides,
-        team,
-        "cluegiver",
-      ),
-      candidatePolicy: resolveRoleCandidatePolicy(
-        promptOverrides,
-        team,
-        "cluegiver",
-      ),
-    };
+      promptOverrides,
+    });
+    const clueParams = cluePrompt.params;
 
     const actionType = "generate_clues";
     const providerAttempt = await beginProviderAttempt(
@@ -399,6 +536,8 @@ async function processClues(
       game.id,
       game.round,
       actionType,
+      team,
+      clueGiver.id,
       config,
       matchConfig?.strictExecution,
     );
@@ -413,6 +552,7 @@ async function processClues(
       fallbackClues,
       config.model,
       providerAttempt,
+      cluePrompt.fullPrompt,
     );
 
     if (timedOut) {
@@ -444,18 +584,98 @@ async function processClues(
       });
     }
     maybeRecordApiError(qualityState, game.round, actionType, team, clueGiver, config, callResult, timedOut);
-    await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, actionType, callResult, timedOut, usedFallback, matchConfig?.strictExecution, providerAttempt);
+    const aiCallLog = await logAiCall(
+      matchId,
+      game.id,
+      game.round,
+      clueGiver.aiProvider,
+      actionType,
+      team,
+      clueGiver.id,
+      callResult,
+      timedOut,
+      usedFallback,
+      matchConfig?.strictExecution,
+      providerAttempt,
+    );
     if (
       matchConfig?.strictExecution &&
       (timedOut || callResult.error || callResult.parseQuality !== "clean")
     ) {
+      await recordActionDisposition(
+        aiCallLog,
+        providerAttempt,
+        false,
+        strictCallValidation(callResult, timedOut),
+        matchConfig.strictExecution,
+      );
       throw new Error(
         `Strict execution invalidated generate_clues for ${clueGiver.name}: ${
           callResult.error || (timedOut ? "timeout" : `parse quality ${String(callResult.parseQuality)}`)
         }`,
       );
     }
+
+    const clueProblems =
+      keywords.length === 4 && callResult.result.length === 3
+        ? validateClueSubmission(
+            {
+              kind: "clues",
+              clues: callResult.result as [string, string, string],
+            },
+            {
+              ownKeywords: keywords as [string, string, string, string],
+              previousOwnClues: history.flatMap((round) => round.clues),
+            },
+            HERPETARIUM_CLUE_RULES,
+          )
+        : [
+            `expected four keywords and three clues; received ${keywords.length} keywords and ${callResult.result.length} clues`,
+          ];
+    const clueValidation = {
+      validator: "shared.validateClueSubmission@substrate",
+      ruleSet: "HERPETARIUM_CLUE_RULES",
+      ruleOptions: HERPETARIUM_CLUE_RULES,
+      passed: clueProblems.length === 0,
+      problems: clueProblems,
+    };
+    const clueDisposition = resolveActionValidationDisposition(
+      clueValidation,
+      matchConfig?.strictExecution,
+    );
+    if (clueDisposition.taintsMatch) {
+      recordActionValidationFailure(qualityState, {
+        roundNumber: game.round,
+        actionType,
+        team,
+        player: clueGiver,
+        config,
+        problems: clueProblems,
+        actionApplied: clueDisposition.actionApplied,
+        strictExecution: matchConfig?.strictExecution,
+      });
+    }
+    if (clueDisposition.rejectMatch) {
+      await recordActionDisposition(
+        aiCallLog,
+        providerAttempt,
+        false,
+        clueDisposition.validationMetadata,
+        matchConfig?.strictExecution,
+      );
+      throw new Error(
+        `Illegal clue submission for ${clueGiver.name}; response retained and action rejected without regeneration: ${clueProblems.join("; ")}`,
+      );
+    }
+
     game = submitClues(game, team, callResult.result);
+    await recordActionDisposition(
+      aiCallLog,
+      providerAttempt,
+      true,
+      clueDisposition.validationMetadata,
+      matchConfig?.strictExecution,
+    );
   }
   return game;
 }
@@ -502,6 +722,8 @@ async function processGuesses(
       game.id,
       game.round,
       actionType,
+      team,
+      aiGuesser.id,
       config,
       matchConfig?.strictExecution,
     );
@@ -516,6 +738,7 @@ async function processGuesses(
       fallbackGuess,
       config.model,
       providerAttempt,
+      buildGuessPromptForConfig(config, guessParams),
     );
 
     if (timedOut) {
@@ -531,18 +754,68 @@ async function processGuesses(
     const usedFallback =
       matchConfig?.strictExecution === true ? false : fallbackCandidate;
     maybeRecordApiError(qualityState, game.round, actionType, team, aiGuesser, config, callResult, timedOut);
-    await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, actionType, callResult, timedOut, usedFallback, matchConfig?.strictExecution, providerAttempt);
-    if (
-      matchConfig?.strictExecution &&
-      (timedOut || callResult.error || callResult.parseQuality !== "clean")
-    ) {
+    const aiCallLog = await logAiCall(
+      matchId,
+      game.id,
+      game.round,
+      aiGuesser.aiProvider,
+      actionType,
+      team,
+      aiGuesser.id,
+      callResult,
+      timedOut,
+      usedFallback,
+      matchConfig?.strictExecution,
+      providerAttempt,
+    );
+    const validationDisposition =
+      resolveCodeActionValidationDisposition({
+        actionType,
+        candidate: callResult.result,
+        parseQuality: callResult.parseQuality,
+        timedOut,
+        error: callResult.error,
+        strictExecution: matchConfig?.strictExecution,
+      });
+    const validationProblems =
+      validationDisposition.validationMetadata.problems as string[];
+    if (validationDisposition.taintsMatch) {
+      recordActionValidationFailure(qualityState, {
+        roundNumber: game.round,
+        actionType,
+        team,
+        player: aiGuesser,
+        config,
+        problems: validationProblems,
+        actionApplied: validationDisposition.actionApplied,
+        strictExecution: matchConfig?.strictExecution,
+      });
+    }
+    if (validationDisposition.rejectMatch) {
+      await recordActionDisposition(
+        aiCallLog,
+        providerAttempt,
+        false,
+        validationDisposition.validationMetadata,
+        matchConfig?.strictExecution,
+      );
       throw new Error(
-        `Strict execution invalidated generate_guess for ${aiGuesser.name}: ${
-          callResult.error || (timedOut ? "timeout" : `parse quality ${String(callResult.parseQuality)}`)
-        }`,
+        `Own-team guess rejected for ${aiGuesser.name}; response retained, no action applied, and no retry or replacement attempted: ${validationProblems.join("; ")}`,
       );
     }
-    game = submitOwnTeamGuess(game, team, callResult.result);
+    game = applyValidatedCodeAction(
+      game,
+      team,
+      actionType,
+      callResult.result,
+    );
+    await recordActionDisposition(
+      aiCallLog,
+      providerAttempt,
+      true,
+      validationDisposition.validationMetadata,
+      matchConfig?.strictExecution,
+    );
   }
   return game;
 }
@@ -584,6 +857,8 @@ async function processInterceptions(
       game.id,
       game.round,
       actionType,
+      team,
+      aiInterceptor.id,
       config,
       matchConfig?.strictExecution,
     );
@@ -598,6 +873,7 @@ async function processInterceptions(
       fallbackGuess,
       config.model,
       providerAttempt,
+      buildInterceptionPromptForConfig(config, interceptParams),
     );
 
     if (timedOut) {
@@ -613,18 +889,68 @@ async function processInterceptions(
     const usedFallback =
       matchConfig?.strictExecution === true ? false : fallbackCandidate;
     maybeRecordApiError(qualityState, game.round, actionType, team, aiInterceptor, config, callResult, timedOut);
-    await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, actionType, callResult, timedOut, usedFallback, matchConfig?.strictExecution, providerAttempt);
-    if (
-      matchConfig?.strictExecution &&
-      (timedOut || callResult.error || callResult.parseQuality !== "clean")
-    ) {
+    const aiCallLog = await logAiCall(
+      matchId,
+      game.id,
+      game.round,
+      aiInterceptor.aiProvider,
+      actionType,
+      team,
+      aiInterceptor.id,
+      callResult,
+      timedOut,
+      usedFallback,
+      matchConfig?.strictExecution,
+      providerAttempt,
+    );
+    const validationDisposition =
+      resolveCodeActionValidationDisposition({
+        actionType,
+        candidate: callResult.result,
+        parseQuality: callResult.parseQuality,
+        timedOut,
+        error: callResult.error,
+        strictExecution: matchConfig?.strictExecution,
+      });
+    const validationProblems =
+      validationDisposition.validationMetadata.problems as string[];
+    if (validationDisposition.taintsMatch) {
+      recordActionValidationFailure(qualityState, {
+        roundNumber: game.round,
+        actionType,
+        team,
+        player: aiInterceptor,
+        config,
+        problems: validationProblems,
+        actionApplied: validationDisposition.actionApplied,
+        strictExecution: matchConfig?.strictExecution,
+      });
+    }
+    if (validationDisposition.rejectMatch) {
+      await recordActionDisposition(
+        aiCallLog,
+        providerAttempt,
+        false,
+        validationDisposition.validationMetadata,
+        matchConfig?.strictExecution,
+      );
       throw new Error(
-        `Strict execution invalidated generate_interception for ${aiInterceptor.name}: ${
-          callResult.error || (timedOut ? "timeout" : `parse quality ${String(callResult.parseQuality)}`)
-        }`,
+        `Interception rejected for ${aiInterceptor.name}; response retained, no action applied, and no retry or replacement attempted: ${validationProblems.join("; ")}`,
       );
     }
-    game = submitInterception(game, team, callResult.result);
+    game = applyValidatedCodeAction(
+      game,
+      team,
+      actionType,
+      callResult.result,
+    );
+    await recordActionDisposition(
+      aiCallLog,
+      providerAttempt,
+      true,
+      validationDisposition.validationMetadata,
+      matchConfig?.strictExecution,
+    );
   }
   return game;
 }
@@ -661,12 +987,6 @@ interface DeliberationResult {
   terminationReason: "timeout" | "phase_timeout" | "error" | "max_exchanges" | null;
 }
 
-function parseReadySignal(content: string): [number, number, number] | null {
-  const match = content.match(/READY:\s*([1-4])\s*,\s*([1-4])\s*,\s*([1-4])/i);
-  if (!match) return null;
-  return [parseInt(match[1]), parseInt(match[2]), parseInt(match[3])];
-}
-
 function arraysEqual(a: number[], b: number[]): boolean {
   return a.length === b.length && a.every((val, idx) => val === b[idx]);
 }
@@ -689,32 +1009,43 @@ async function processDeliberation(
     getConfigForPlayer(playerA).timeoutMs + getConfigForPlayer(playerB).timeoutMs
   );
 
-  const finalizeDeliberation = (
-    terminationReason: DeliberationResult["terminationReason"],
+  const rejectDeliberation = (
+    terminationReason: Exclude<
+      DeliberationResult["terminationReason"],
+      null
+    >,
     error: string | null,
     timedOut: boolean,
-    usedFallback: boolean,
-  ): DeliberationResult => {
-    if (context.strictExecution && terminationReason !== null) {
-      throw new Error(
-        `Strict execution invalidated ${context.phase} for ${context.team}: ${
-          error || terminationReason
-        }`,
-      );
-    }
-    const readyValues = [...readySignals.values()];
-    const fallbackAnswer = readyValues.length > 0 ? readyValues[readyValues.length - 1] : [1, 2, 3] as [number, number, number];
-
-    return {
-      answer: fallbackAnswer,
-      messages,
-      totalExchanges: Math.ceil(messages.length / 2),
-      consensusReached: false,
+    player: Player = playerA,
+  ): never => {
+    const config = getConfigForPlayer(player);
+    recordMatchQualityEvent(qualityState, {
+      type: "deliberation_failure",
+      roundNumber,
+      actionType:
+        context.phase === "own_guess_deliberation"
+          ? "deliberation_own"
+          : "deliberation_intercept",
+      team: context.team,
+      playerName: player.name,
+      provider: config.provider,
+      model: config.model,
       timedOut,
-      usedFallback,
+      usedFallback: false,
+      actionApplied: false,
+      strictExecution: context.strictExecution === true,
+      validationProblems: [
+        error || terminationReason,
+        "no guess/interception action was applied",
+      ],
       error,
-      terminationReason,
-    };
+      detail: `${terminationReason}_rejected_no_action`,
+    });
+    throw new Error(
+      `Deliberation invalidated ${context.phase} for ${context.team}; no action applied and no fallback, retry, or replacement used: ${
+        error || terminationReason
+      }`,
+    );
   };
 
   for (let exchange = 0; exchange < MAX_EXCHANGES; exchange++) {
@@ -761,7 +1092,11 @@ async function processDeliberation(
         }
       } else {
         // opponent_intercept_deliberation
-        const opponentTranscriptFormatted = (context.opponentDeliberationTranscript || [])
+        const opponentTranscriptFormatted = (
+          context.ablations?.includes("no_opponent_transcript")
+            ? []
+            : context.opponentDeliberationTranscript || []
+        )
           .map(m => ({ playerName: m.playerName, content: m.content }));
 
         const templateParams: DeliberationInterceptTemplateParams = {
@@ -793,13 +1128,15 @@ async function processDeliberation(
       }
 
       // Append scratch notes (prefer scratchNotesByTeam, fall back to legacy map)
-      const teamNote = context.scratchNotesByTeam?.[context.team];
-      if (teamNote) {
-        prompt += formatScratchNotes(teamNote);
-      } else {
-        const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
-        if (context.scratchNotes?.[noteKey]) {
-          prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+      if (!context.ablations?.includes("no_scratch_notes")) {
+        const teamNote = context.scratchNotesByTeam?.[context.team];
+        if (teamNote) {
+          prompt += formatScratchNotes(teamNote);
+        } else {
+          const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
+          if (context.scratchNotes?.[noteKey]) {
+            prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+          }
         }
       }
 
@@ -809,22 +1146,12 @@ async function processDeliberation(
       const remainingPhaseMs = maxPhaseDurationMs - (Date.now() - phaseStartMs);
       if (remainingPhaseMs <= 0) {
         const error = "deliberation phase timeout";
-        if (!context.strictExecution) {
-          recordMatchQualityEvent(qualityState, {
-            type: "deliberation_failure",
-            roundNumber,
-            actionType: context.phase === "own_guess_deliberation" ? "deliberation_own" : "deliberation_intercept",
-            team: context.team,
-            playerName: currentPlayer.name,
-            provider: config.provider,
-            model: config.model,
-            timedOut: true,
-            usedFallback: true,
-            error,
-            detail: "phase_timeout",
-          });
-        }
-        return finalizeDeliberation("phase_timeout", error, true, true);
+        rejectDeliberation(
+          "phase_timeout",
+          error,
+          true,
+          currentPlayer,
+        );
       }
 
       const actionType = context.phase === "own_guess_deliberation"
@@ -836,6 +1163,8 @@ async function processDeliberation(
         gameId,
         roundNumber,
         actionType,
+        context.team,
+        currentPlayer.id,
         config,
         context.strictExecution,
       );
@@ -860,10 +1189,7 @@ async function processDeliberation(
       const usedFallback =
         context.strictExecution === true ? false : fallbackCandidate;
 
-      const readySignal = parseReadySignal(callResult.result);
-      if (readySignal) {
-        readySignals.set(currentPlayer.id, readySignal);
-      }
+      const readyAttempt = parseReadyCodeSignal(callResult.result);
 
       const message: ChatterMessage = {
         playerId: currentPlayer.id,
@@ -876,7 +1202,7 @@ async function processDeliberation(
         promptTokens: callResult.promptTokens,
         completionTokens: callResult.completionTokens,
         estimatedCostUsd: callResult.estimatedCostUsd,
-        readySignal,
+        readySignal: null,
         status: timedOut ? "timeout" : callResult.error ? "error" : usedFallback ? "fallback" : "ok",
         timedOut,
         usedFallback,
@@ -886,12 +1212,14 @@ async function processDeliberation(
 
       // Log to ai_call_logs
       maybeRecordApiError(qualityState, roundNumber, actionType, context.team, currentPlayer, config, callResult, timedOut);
-      await logAiCall(
+      const aiCallLog = await logAiCall(
         matchId,
         gameId,
         roundNumber,
         currentPlayer.aiProvider!,
         actionType,
+        context.team,
+        currentPlayer.id,
         callResult,
         timedOut,
         usedFallback,
@@ -900,26 +1228,103 @@ async function processDeliberation(
       );
 
       if (timedOut || callResult.error || !callResult.result.trim()) {
-        if (!context.strictExecution) {
-          recordMatchQualityEvent(qualityState, {
-            type: "deliberation_failure",
-            roundNumber,
-            actionType,
-            team: context.team,
-            playerName: currentPlayer.name,
-            provider: config.provider,
-            model: config.model,
-            timedOut,
-            usedFallback,
-            error: callResult.error || (timedOut ? "timeout" : "empty deliberation response"),
-            detail: timedOut ? "call_timeout" : callResult.error ? "call_error" : "empty_response",
-          });
-        }
-        return finalizeDeliberation(
+        await recordActionDisposition(
+          aiCallLog,
+          providerAttempt,
+          false,
+          {
+            ...strictCallValidation(callResult, timedOut),
+            validator: "headless.deliberation-message@0.1",
+            nonEmpty: callResult.result.trim().length > 0,
+          },
+          context.strictExecution,
+        );
+        rejectDeliberation(
           timedOut ? "timeout" : "error",
           callResult.error || (timedOut ? "timeout" : "empty deliberation response"),
           timedOut,
+          currentPlayer,
+        );
+      }
+
+      if (readyAttempt.present) {
+        const codeActionType =
+          context.phase === "own_guess_deliberation"
+            ? "generate_guess"
+            : "generate_interception";
+        const readyDisposition =
+          resolveCodeActionValidationDisposition({
+            actionType: codeActionType,
+            candidate: readyAttempt.candidate,
+            parseQuality: callResult.parseQuality,
+            timedOut,
+            error: callResult.error,
+            strictExecution: context.strictExecution,
+          });
+        const readyProblems =
+          readyDisposition.validationMetadata.problems as string[];
+        if (readyDisposition.taintsMatch) {
+          recordActionValidationFailure(qualityState, {
+            roundNumber,
+            actionType: codeActionType,
+            team: context.team,
+            player: currentPlayer,
+            config,
+            problems: readyProblems,
+            actionApplied: readyDisposition.actionApplied,
+            strictExecution: context.strictExecution,
+          });
+        }
+        if (readyDisposition.rejectMatch) {
+          await recordActionDisposition(
+            aiCallLog,
+            providerAttempt,
+            false,
+            {
+              ...readyDisposition.validationMetadata,
+              deliberationPhase: context.phase,
+              readySignalAccepted: false,
+            },
+            context.strictExecution,
+          );
+          rejectDeliberation(
+            "error",
+            `invalid READY action: ${readyProblems.join("; ")}`,
+            false,
+            currentPlayer,
+          );
+        }
+
+        const readySignal = readyAttempt.candidate as [
+          number,
+          number,
+          number,
+        ];
+        message.readySignal = readySignal;
+        readySignals.set(currentPlayer.id, readySignal);
+        await recordActionDisposition(
+          aiCallLog,
+          providerAttempt,
           true,
+          {
+            ...readyDisposition.validationMetadata,
+            deliberationPhase: context.phase,
+            readySignalAccepted: true,
+          },
+          context.strictExecution,
+        );
+      } else {
+        await recordActionDisposition(
+          aiCallLog,
+          providerAttempt,
+          true,
+          {
+            validator: "headless.deliberation-message@0.1",
+            passed: true,
+            nonEmpty: true,
+            readySignal: null,
+          },
+          context.strictExecution,
         );
       }
 
@@ -942,7 +1347,57 @@ async function processDeliberation(
     }
   }
 
-  return finalizeDeliberation("max_exchanges", null, false, false);
+  return rejectDeliberation("max_exchanges", null, false);
+}
+
+function requireApplicableDeliberationCodeAction(input: {
+  result: DeliberationResult;
+  actionType: HeadlessCodeActionType;
+  team: "amber" | "blue";
+  player: Player;
+  qualityState: MatchQualityRuntimeState;
+  strictExecution: boolean | undefined;
+  roundNumber: number;
+}): void {
+  const disposition = resolveCodeActionValidationDisposition({
+    actionType: input.actionType,
+    candidate: input.result.answer,
+    parseQuality: "clean",
+    timedOut: input.result.timedOut,
+    error: input.result.error,
+    strictExecution: input.strictExecution,
+  });
+  const structuralProblems = [
+    ...(!input.result.consensusReached
+      ? ["deliberation did not reach consensus"]
+      : []),
+    ...(input.result.usedFallback
+      ? ["deliberation reported a fallback"]
+      : []),
+    ...(input.result.terminationReason !== null
+      ? [`deliberation terminated via ${input.result.terminationReason}`]
+      : []),
+  ];
+  const validationProblems = [
+    ...(disposition.validationMetadata.problems as string[]),
+    ...structuralProblems,
+  ];
+  if (disposition.rejectMatch || structuralProblems.length > 0) {
+    const config = getConfigForPlayer(input.player);
+    recordActionValidationFailure(input.qualityState, {
+      roundNumber: input.roundNumber,
+      actionType: input.actionType,
+      team: input.team,
+      player: input.player,
+      config,
+      problems: validationProblems,
+      actionApplied: false,
+      strictExecution: input.strictExecution,
+    });
+    throw new Error(
+      `Deliberation ${input.actionType} rejected before application; no retry or replacement attempted: ${validationProblems.join("; ")}`,
+    );
+  }
 }
 
 async function persistRoundResults(matchId: number, game: GameState) {
@@ -979,12 +1434,14 @@ const CONSOLIDATION_THRESHOLD_RATIO = 0.8;
 async function logReflectionCall(
   matchId: number,
   gameId: string,
+  team: "amber" | "blue",
+  actorId: string,
   provider: string,
   callResult: AICallResult<string>,
   timedOut = false,
   strictExecution = false,
   providerAttempt?: StrictProviderAttemptHandle,
-) {
+): Promise<AiCallLog | undefined> {
   const strictFailure =
     strictExecution && (timedOut || Boolean(callResult.error));
   try {
@@ -992,6 +1449,8 @@ async function logReflectionCall(
       matchId,
       gameId,
       roundNumber: 0,
+      team,
+      actorId,
       provider,
       model: callResult.model,
       actionType: "reflection",
@@ -1000,6 +1459,8 @@ async function logReflectionCall(
       parsedResult: strictFailure
         ? null
         : { notes: callResult.result.slice(0, 500) },
+      actionApplied: null,
+      validationMetadata: null,
       latencyMs: callResult.latencyMs,
       timedOut,
       error: callResult.error || null,
@@ -1013,6 +1474,7 @@ async function logReflectionCall(
       providerMetadata: callResult.providerMetadata || null,
     });
     await providerAttempt?.linkAiCallLog(aiCallLog.id);
+    return aiCallLog;
   } catch (err) {
     log(`[headless] Failed to log reflection AI call: ${err}`, "headless");
     if (strictExecution) {
@@ -1022,6 +1484,7 @@ async function logReflectionCall(
         }`,
       );
     }
+    return undefined;
   }
 }
 
@@ -1074,6 +1537,8 @@ async function buildUpdatedScratchNotes(
         gameId,
         0,
         "reflection",
+        team,
+        reflectionPlayer.id,
         playerConfig,
         config.strictExecution,
       );
@@ -1100,9 +1565,11 @@ async function buildUpdatedScratchNotes(
           };
       const reflectionResult = reflectionOutcome.result;
 
-      await logReflectionCall(
+      const aiCallLog = await logReflectionCall(
         matchId,
         gameId,
+        team,
+        reflectionPlayer.id,
         playerConfig.provider,
         reflectionResult,
         reflectionOutcome.timedOut,
@@ -1111,6 +1578,20 @@ async function buildUpdatedScratchNotes(
       );
 
       if (reflectionOutcome.timedOut || reflectionResult.error) {
+        await recordActionDisposition(
+          aiCallLog,
+          providerAttempt,
+          false,
+          {
+            validator: "headless.reflection-result@0.1",
+            passed: false,
+            problems: [
+              reflectionResult.error ||
+                (reflectionOutcome.timedOut ? "timeout" : "unknown failure"),
+            ],
+          },
+          config.strictExecution,
+        );
         if (config.strictExecution) {
           throw new Error(
             `Strict execution invalidated reflection for team ${team}: ${
@@ -1143,6 +1624,17 @@ async function buildUpdatedScratchNotes(
         tokenCount: Math.ceil(notesText.length / 4),
         lastUpdatedMatchId: matchId,
       };
+      await recordActionDisposition(
+        aiCallLog,
+        providerAttempt,
+        true,
+        {
+          validator: "headless.reflection-result@0.1",
+          passed: true,
+          tokenCount: Math.ceil(notesText.length / 4),
+        },
+        config.strictExecution,
+      );
     } catch (err) {
       if (config.strictExecution) {
         throw err;
@@ -1316,7 +1808,17 @@ export async function runHeadlessMatch(
       // Persist chatter and apply guesses
       for (const team of ["amber", "blue"] as const) {
         const result = ownDelibResults[team];
-        if (result) {
+        const context = team === "amber" ? amberCtx : blueCtx;
+        if (result && context) {
+          requireApplicableDeliberationCodeAction({
+            result,
+            actionType: "generate_guess",
+            team,
+            player: context.guessers[0],
+            qualityState,
+            strictExecution: config.strictExecution,
+            roundNumber: game.round,
+          });
           await storage.createTeamChatter({
             matchId,
             gameId: game.id,
@@ -1328,7 +1830,12 @@ export async function runHeadlessMatch(
             consensusReached: result.consensusReached,
             finalAnswer: result.answer,
           });
-          game = submitOwnTeamGuess(game, team, result.answer);
+          game = applyValidatedCodeAction(
+            game,
+            team,
+            "generate_guess",
+            result.answer,
+          );
         }
       }
 
@@ -1365,6 +1872,15 @@ export async function runHeadlessMatch(
           score: buildScore(),
         }, matchId, game.id, game.round, qualityState, healthTracker);
 
+        requireApplicableDeliberationCodeAction({
+          result,
+          actionType: "generate_interception",
+          team,
+          player: guessers[0],
+          qualityState,
+          strictExecution: config.strictExecution,
+          roundNumber: game.round,
+        });
         await storage.createTeamChatter({
           matchId,
           gameId: game.id,
@@ -1377,7 +1893,12 @@ export async function runHeadlessMatch(
           finalAnswer: result.answer,
         });
 
-        game = submitInterception(game, team, result.answer);
+        game = applyValidatedCodeAction(
+          game,
+          team,
+          "generate_interception",
+          result.answer,
+        );
       }
 
     } else {

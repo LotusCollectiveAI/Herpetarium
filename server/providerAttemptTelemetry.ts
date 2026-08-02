@@ -7,6 +7,7 @@ import type {
   ProviderAttemptTelemetry,
   ProviderAttemptTerminalStatus,
 } from "./ai";
+import { unavailablePrivateProviderReceipt } from "./privateProviderReceipt";
 
 /**
  * Narrow storage contract so lifecycle behavior can be tested without loading
@@ -26,6 +27,8 @@ export interface StrictProviderAttemptContext {
   matchId: number;
   gameId: string;
   roundNumber: number;
+  team: "amber" | "blue";
+  actorId: string;
   actionType: string;
   provider: "openrouter";
   model: string;
@@ -42,6 +45,10 @@ export interface StrictProviderAttemptHandle {
   ): Promise<void>;
   markTimedOut(timeoutMs: number): Promise<void>;
   linkAiCallLog(aiCallLogId: number): Promise<void>;
+  recordActionDisposition(input: {
+    actionApplied: boolean;
+    validationMetadata: Record<string, unknown>;
+  }): Promise<void>;
 }
 
 function errorText(error: unknown): string {
@@ -61,6 +68,8 @@ export async function beginStrictOpenRouterAttempt(
     matchId: context.matchId,
     gameId: context.gameId,
     roundNumber: context.roundNumber,
+    team: context.team,
+    actorId: context.actorId,
     actionType: context.actionType,
     provider: context.provider,
     model: context.model,
@@ -68,8 +77,11 @@ export async function beginStrictOpenRouterAttempt(
     status: "started",
     requestMetadata: null,
     terminalMetadata: null,
+    privateResponseReceipt: null,
     error: null,
     aiCallLogId: null,
+    actionApplied: null,
+    validationMetadata: null,
     completedAt: null,
   });
 
@@ -89,6 +101,9 @@ export async function beginStrictOpenRouterAttempt(
     input: {
       status: ProviderAttemptTerminalStatus;
       metadata: Record<string, unknown>;
+      privateResponseReceipt: Parameters<
+        ProviderAttemptTelemetry["markTerminal"]
+      >[0]["privateResponseReceipt"];
       error?: string | null;
     },
   ): Promise<void> => {
@@ -99,6 +114,7 @@ export async function beginStrictOpenRouterAttempt(
     terminalWrite = persistUpdate({
       status: input.status,
       terminalMetadata: input.metadata,
+      privateResponseReceipt: input.privateResponseReceipt,
       error: input.error ?? null,
       completedAt: new Date(),
     });
@@ -126,6 +142,9 @@ export async function beginStrictOpenRouterAttempt(
       return markTerminal({
         status: "failed",
         metadata,
+        privateResponseReceipt: unavailablePrivateProviderReceipt(
+          "unavailable_before_response",
+        ),
         error,
       });
     },
@@ -136,6 +155,9 @@ export async function beginStrictOpenRouterAttempt(
           timeoutMs,
           cancellationRequested: true,
         },
+        privateResponseReceipt: unavailablePrivateProviderReceipt(
+          "unavailable_before_response",
+        ),
         error: `Timed out after ${timeoutMs}ms`,
       });
     },
@@ -147,6 +169,12 @@ export async function beginStrictOpenRouterAttempt(
           `Could not link provider attempt ${attempt.id} to AI call log ${aiCallLogId}: ${errorText(error)}`,
         );
       }
+    },
+    async recordActionDisposition(input) {
+      await persistUpdate({
+        actionApplied: input.actionApplied,
+        validationMetadata: input.validationMetadata,
+      });
     },
   };
 }

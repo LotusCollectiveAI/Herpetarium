@@ -6,6 +6,18 @@ export {
   sha256Hex,
 } from "./hash";
 export {
+  SHA256_HEX_PATTERN,
+  assertNoSecretBearingFields,
+  cloneAndDeepFreeze,
+  exactKeys,
+  findSecretBearingPaths,
+  identityRef,
+  sameContentIdentity,
+  validateContentIdentityRef,
+  validateExactContentIdentityRef,
+} from "./identity";
+export type { ContentIdentityRef } from "./identity";
+export {
   CIPHER_ENCRYPT_CANDIDATE_POLICY,
   CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
   CIPHER_ENCRYPT_CANDIDATE_POLICY_HASH,
@@ -13,6 +25,35 @@ export {
   composeCandidatePolicyTaskInstruction,
 } from "./candidatePolicy";
 export type { CandidatePolicyArtifact } from "./candidatePolicy";
+export {
+  JOINT_ASSIGNMENT_DECODER_COMPILER_HASH,
+  JOINT_ASSIGNMENT_DECODER_COMPILER_ID,
+  JOINT_ASSIGNMENT_DECODER_POLICY,
+  JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
+  JOINT_ASSIGNMENT_DECODER_POLICY_HASH,
+  JOINT_ASSIGNMENT_DECODER_POLICY_ID,
+  JOINT_ASSIGNMENT_DECODER_SYSTEM_PROMPT,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ARTIFACT,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_HASH,
+  JOINT_ASSIGNMENT_TRANSCRIPT_TREATMENT_ID,
+  MAX_JOINT_ASSIGNMENT_ABS_SCORE,
+  compileJointAssignmentDecoderPrompt,
+  formatJointAssignmentPublicationSafeClaim,
+  solveGlobalInjectiveAssignment,
+  validateJointAssignmentAction,
+  verifyCompiledJointAssignmentDecoderPrompt,
+  verifyJointAssignmentDecoderPolicy,
+} from "./jointAssignmentDecoder";
+export type {
+  CompiledJointAssignmentDecoderPrompt,
+  CompiledJointAssignmentDecoderPromptSource,
+  JointAssignmentDecoderPolicyArtifact,
+  JointAssignmentPublicationSafeClaim,
+  JointAssignmentScoreMatrix,
+  JointAssignmentScoreRow,
+  JointAssignmentSolution,
+  RankedJointAssignment,
+} from "./jointAssignmentDecoder";
 export {
   DIRECTIVE_MODULES,
   GENOME_MODULE_KEYS,
@@ -61,15 +102,31 @@ export {
   validateModelRef,
 } from "./modelRef";
 export type { AliasMutation, ModelRef, ResolvedModel } from "./modelRef";
-export { assertRoleLegal } from "./observation";
+export {
+  OBSERVATION_V2_VERSION,
+  assertRoleLegal,
+  mintObservationV2,
+  observationV2ContentHash,
+  validateObservationV2,
+  verifyObservationV2,
+} from "./observation";
 export type {
+  AnyDecryptoObservation,
   ChatChannel,
   ChatLine,
   CodeTriple,
   DecryptoObservation,
+  DecryptoObservationV2,
+  DecryptoObservationV2Source,
+  ObservationActorV2,
+  ObservationLane,
+  ObservationLineV2,
   ObservationRole,
+  ObservationV2Role,
   ResolvedRoundView,
+  ResolvedRoundViewV2,
   ResolvedSideView,
+  ResolvedSideViewV2,
   TeamChatVisibility,
   TeamTokens,
 } from "./observation";
@@ -89,14 +146,105 @@ export type {
   DecryptoAction,
   DeliberationMessage,
 } from "./actions";
-export { TRACE_VERSION, validateTraceEnvelope } from "./trace";
+export {
+  TRACE_VERSION,
+  TRACE_V2_VERSION,
+  mintTraceEnvelopeV2,
+  traceV2ContentHash,
+  validateDecisionChain,
+  validateTraceEnvelope,
+  validateTraceEnvelopeV2,
+  verifyTraceEnvelopeV2,
+} from "./trace";
 export type {
+  ActionEventRef,
+  AnyTraceEnvelope,
+  ContentBlobRef,
   ResearchExportStamp,
   TraceApp,
+  TraceClassification,
   TraceEnvelope,
+  TraceEnvelopeV2,
+  TraceEnvelopeV2Source,
   TraceOutcome,
+  TraceOutcomeV2,
   TraceTaskKind,
+  TraceTaskKindV2,
+  TraceUsageV2,
 } from "./trace";
+export {
+  BOT_BUILD_MANIFEST_VERSION,
+  botBuildContentHash,
+  findBotBuildRegistryConflicts,
+  mintBotBuildManifest,
+  mintWireConfig,
+  validateBotBuildManifestSource,
+  validateRequestedModelRoute,
+  validateWireConfigSource,
+  verifyBotBuildManifest,
+  verifyWireConfig,
+} from "./botBuild";
+export type {
+  BotBuildManifest,
+  BotBuildManifestSource,
+  JsonScalar,
+  JsonValue,
+  RequestedModelRoute,
+  WireConfig,
+  WireConfigSource,
+} from "./botBuild";
+export {
+  CLUEGIVER_BOT_BUILD_MANIFEST_VERSION,
+  cluegiverBotBuildContentHash,
+  findCluegiverBotBuildRegistryConflicts,
+  mintCluegiverBotBuildManifest,
+  validateBotBuildReferenceForDecisionRole,
+  validateCluegiverBotBuildManifestSource,
+  validateGuessDecisionContext,
+  verifyCluegiverBotBuildManifest,
+} from "./cluegiverBotBuild";
+export type {
+  BotBuildManifestForDecision,
+  BotDecisionRole,
+  CluegiverBotBuildManifest,
+  CluegiverBotBuildManifestSource,
+} from "./cluegiverBotBuild";
+export {
+  CLUEGIVER_OBSERVATION_VERSION,
+  cluegiverObservationContentHash,
+  mintCluegiverObservation,
+  validateCluegiverDecisionContext,
+  validateCluegiverObservation,
+  verifyCluegiverObservation,
+} from "./cluegiverObservation";
+export type {
+  CluegiverObservationActor,
+  CluegiverObservationLine,
+  CluegiverSeatRole,
+  DecryptoCluegiverObservation,
+  DecryptoCluegiverObservationSource,
+  ResolvedCluegiverRoundView,
+  ResolvedCluegiverSideView,
+} from "./cluegiverObservation";
+export {
+  COMPETITIVE_PROTOCOL_SCHEMA_VERSION,
+  TABLE_COMPETITIVE_PROTOCOL_ID,
+  TABLE_COMPETITIVE_V1,
+  TABLE_COMPETITIVE_V1_SOURCE,
+  competitiveProtocolContentHash,
+  mintCompetitiveProtocol,
+  tableCompetitiveIdentitySet,
+  validateCompetitiveProtocolSource,
+  validateTableCompetitiveIdentities,
+  verifyCompetitiveProtocol,
+} from "./protocol";
+export type {
+  CompetitiveIdentitySet,
+  CompetitiveProtocol,
+  CompetitiveProtocolSource,
+  TableCompetitiveRules,
+  TableCompetitiveVisibility,
+} from "./protocol";
 export {
   BASELINE_GAME_CLUES,
   BASELINE_GAME_ID,

@@ -135,10 +135,13 @@ export function formatScratchNotes(notes?: string): string {
  * nature. The 2026-08-01 cross-round leak was authored against exactly that
  * rendering asymmetry.
  *
- * The Table renders the identical object for its encryptor via the same
- * shared builder. That parity is the point: the intermediate-hops treatment is
- * only comparable across the two apps if both actors are shown the channel
- * they are being asked to defend.
+ * The Table can render the same pure ledger object via the shared builder, but
+ * current prompt assignment is not parity: this Herpetarium helper is
+ * treatment-only and adds an operative rejection instruction, while The Table
+ * currently shows the ledger to every encryptor without that instruction.
+ * Therefore this A/B measures a bundled within-Herpetarium treatment only.
+ * Cross-app transfer requires independently proving identical arm assignment
+ * and byte-identical full prompts for every role and round.
  *
  * TREATMENT ONLY. This is appended solely on the candidate-policy branch. An
  * earlier draft added it to the plain baseline as well, which silently changed
@@ -573,7 +576,18 @@ Step 1 — Opponent Model: What do opponents know so far? Which keywords might t
     prompt += `\nStep 4 — Teammate Communication: Ensure your teammate can still decode. Think about what your teammate knows about your cluing style.
 Step 5 — Final Selection: Choose 3 single-word clues that balance teammate clarity with opponent deception.
 
-RULES: Each clue must be a complete, real English word. No abbreviations, acronyms, fragments, or prefixes. No phrases, numbers, or symbols. Cannot be any keyword or share the same root.`;
+ENFORCED CLUE RULES (the submission is rejected in strict research runs if any
+rule fails): Return exactly 3 distinct clues. Each clue must be one complete,
+real English word of at most 40 characters: no phrases, abbreviations,
+acronyms, fragments, numbers, or symbols. Normalization lowercases text and
+removes every character that is not a letter or digit. No clue may equal a
+keyword after normalization. For any keyword with at least 4 normalized
+characters, your clue must also not contain that keyword anywhere once
+normalized (this catches it hidden across separators), and no word of your clue
+may begin with that keyword's first 4 normalized characters. A keyword shorter
+than 4 normalized characters is checked for exact equality only.
+Never repeat a clue your team used in an
+earlier round.`;
     return finalizeCluePrompt(
       prompt,
       params,

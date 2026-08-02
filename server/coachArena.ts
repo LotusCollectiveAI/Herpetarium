@@ -18,7 +18,7 @@ import {
   type SprintResult,
 } from "./coachLoop";
 import { buildDisclosureText } from "./disclosure";
-import { log } from "./index";
+import { log } from "./log";
 import { storage } from "./storage";
 
 const COACH_ARENA_SOURCE = "coach_arena";

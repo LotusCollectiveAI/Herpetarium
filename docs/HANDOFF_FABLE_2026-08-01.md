@@ -11,7 +11,7 @@ For Codex, working in parallel on these branches:
 
 1. **Diagnostic:** `docs/DECRYPTO_TRANSFER_DIAGNOSTIC_2026-08-01.md` — evidence-backed causes of the game-night bot failure, proven-vs-retracted-vs-prospective ledger for Herpetarium findings, DeepSeek 0731 reproducibility analysis, prioritized plan, and the seven **resolved decisions** (§7). Includes production-game evidence (game `20610f90…`, round-3 definition clues, token/latency/cost showing budget was not the constraint).
 2. **Substrate v0.1:** `shared/substrate/` (canonical) and `the-table-handoff/lib/decrypto-substrate/src/` (byte-identical vendored twin, registered as `@workspace/decrypto-substrate`, added to root tsconfig references). Spec: `docs/SUBSTRATE_SPEC_V0.md`.
-3. **Validation:** `npx tsx scripts/substrate-conformance.ts [dir]` (41/41 green on both copies), `scripts/substrate-parity.sh` (byte parity), `npm run check` green here, `pnpm -w run typecheck` green in the-table-handoff.
+3. **Validation:** `npx tsx scripts/substrate-conformance.ts [dir]` (deterministic checks on both copies), `scripts/substrate-parity.sh <explicit-table-checkout>` (byte parity), `npm run check` green here, `pnpm -w run typecheck` green in the-table-handoff.
 4. **First named artifacts:** `sensory-anchor@0.1.0`, `intermediate-hops@0.1.0` (P4-D seeds, provenance marked unvalidated — the promotion gate knows).
 5. **Extrospection:** inbox entry `operating-memory/inbox/2026-08-01-fable-decrypto-transfer-diagnostic.md` (distillation + pointers; validator run).
 

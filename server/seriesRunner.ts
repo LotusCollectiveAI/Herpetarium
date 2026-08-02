@@ -4,7 +4,7 @@ import type { AIProvider } from "@shared/schema";
 import { runHeadlessMatch } from "./headlessRunner";
 import { generateReflection, ReflectionParams, AICallResult } from "./ai";
 import { storage } from "./storage";
-import { log } from "./index";
+import { log } from "./log";
 import { createHash } from "crypto";
 
 const activeSeries = new Map<number, boolean>();

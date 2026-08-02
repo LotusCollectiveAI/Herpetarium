@@ -29,6 +29,20 @@
       "when": 1785620925715,
       "tag": "0011_headless_strategy_lineage",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785653272753,
+      "tag": "0012_telemetry_action_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1785683307000,
+      "tag": "0013_decrypto_quarantine_import",
+      "breakpoints": true
     }
   ]
 }

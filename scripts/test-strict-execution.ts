@@ -67,7 +67,8 @@ interface MockResponseOverrides {
   provider?: string;
   finishReason?: string;
   attempt?: number;
-  attempts?: unknown[];
+  attempts?: unknown;
+  omitAttempts?: boolean;
   availableEndpoints?: unknown[];
   status?: number;
   errorBody?: string;
@@ -112,6 +113,21 @@ function mockOpenRouterResponse(
     });
   }
 
+  const openRouterMetadata: Record<string, unknown> = {
+    attempt: overrides.attempt ?? 1,
+    endpoints: {
+      available:
+        overrides.availableEndpoints ??
+        [{ provider: "DeepInfra", selected: true }],
+    },
+  };
+  if (!overrides.omitAttempts) {
+    openRouterMetadata.attempts =
+      overrides.attempts === undefined
+        ? [{ provider: "DeepInfra", status: 200 }]
+        : overrides.attempts;
+  }
+
   const body = {
     id: "generation-offline-test",
     model: overrides.model ?? EXACT_MODEL,
@@ -125,17 +141,7 @@ function mockOpenRouterResponse(
         native_finish_reason: "stop",
       },
     ],
-    openrouter_metadata: {
-      attempt: overrides.attempt ?? 1,
-      attempts:
-        overrides.attempts ??
-        [{ provider: "DeepInfra", status: "success" }],
-      endpoints: {
-        available:
-          overrides.availableEndpoints ??
-          [{ provider: "DeepInfra", selected: true }],
-      },
-    },
+    openrouter_metadata: openRouterMetadata,
     usage: {
       prompt_tokens: 11,
       completion_tokens: 7,
@@ -965,13 +971,53 @@ async function testRouteProofIsMandatory(): Promise<void> {
       fixture: {
         attempt: 2,
         attempts: [
-          { provider: "Other", status: "failed" },
-          { provider: "DeepInfra", status: "success" },
+          { provider: "Other", status: 502 },
+          { provider: "DeepInfra", status: 200 },
         ],
       },
       pattern:
-        /route proof did not show exactly one successful DeepInfra attempt/,
+        /route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt/,
       label: "multi-attempt route",
+    },
+    {
+      fixture: {
+        attempts: [{ provider: "AnotherProvider", status: 200 }],
+      },
+      pattern:
+        /route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt/,
+      label: "contradictory detailed provider",
+    },
+    {
+      fixture: {
+        attempts: [{ provider: "DeepInfra", status: 502 }],
+      },
+      pattern:
+        /route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt/,
+      label: "failed detailed attempt",
+    },
+    {
+      fixture: {
+        attempts: [{ provider: "DeepInfra", status: "502" }],
+      },
+      pattern:
+        /route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt/,
+      label: "failed decimal-string detailed attempt",
+    },
+    {
+      fixture: {
+        attempts: [{ provider: "DeepInfra", status: "success" }],
+      },
+      pattern:
+        /route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt/,
+      label: "ambiguous semantic detailed status",
+    },
+    {
+      fixture: {
+        attempts: { provider: "DeepInfra", status: 200 },
+      },
+      pattern:
+        /route proof did not show router attempt=1, one selected DeepInfra endpoint, and zero or one successful DeepInfra detailed attempt/,
+      label: "malformed detailed-attempt shape",
     },
     {
       fixture: { model: "deepseek/deepseek-v4-flash" },
@@ -1015,6 +1061,72 @@ async function testRouteProofIsMandatory(): Promise<void> {
       `${failure.label} rejection retains physical-attempt telemetry`,
     );
   }
+}
+
+async function testDetailedRouteAttemptMayBeAbsent(): Promise<void> {
+  const captured = installFetchMock([
+    {
+      content: "ANSWER: 1,2,3",
+      omitAttempts: true,
+    },
+    {
+      content: "ANSWER: 1,2,3",
+      attempts: [],
+    },
+  ]);
+
+  const responses = await Promise.all([
+    callAI(
+      deepSeekConfig,
+      "offline system",
+      "offline user",
+      { strictExecution: true },
+    ),
+    callAI(
+      deepSeekConfig,
+      "offline system",
+      "offline user",
+      { strictExecution: true },
+    ),
+  ]);
+
+  for (const response of responses) {
+    equal(
+      response.text,
+      "ANSWER: 1,2,3",
+      "strict execution accepts route proof when detailed attempts are absent or empty",
+    );
+  }
+  equal(
+    captured.length,
+    2,
+    "absent and empty detailed arrays each still make exactly one physical request",
+  );
+}
+
+async function testDetailedRouteAttemptAcceptsDecimalHttpStatus(): Promise<void> {
+  const captured = installFetchMock([
+    {
+      content: "ANSWER: 1,2,3",
+      attempts: [{ provider: "DeepInfra", status: "200" }],
+    },
+  ]);
+  const response = await callAI(
+    deepSeekConfig,
+    "offline system",
+    "offline user",
+    { strictExecution: true },
+  );
+  equal(
+    response.text,
+    "ANSWER: 1,2,3",
+    "lossless decimal-string HTTP 200 route status is accepted",
+  );
+  equal(
+    captured.length,
+    1,
+    "decimal-string status still represents one physical request",
+  );
 }
 
 async function testStrictRateLimitIsNotRetried(): Promise<void> {
@@ -1264,8 +1376,30 @@ async function testStrictMatchFailureContract(): Promise<void> {
     "taint is persisted before the annotated match error escapes",
   );
 
-  for (const functionName of [
+  const clueBody = await loadFunctionBody(
+    "server/headlessRunner.ts",
     "processClues",
+  );
+  ok(
+    /strictExecution[\s\S]*?callResult\.parseQuality\s*!==\s*"clean"/m.test(
+      clueBody,
+    ),
+    "processClues blocks non-clean strict results before game submission",
+  );
+  occursBefore(
+    clueBody,
+    "await logAiCall(",
+    "throw new Error(",
+    "processClues persists failed-call telemetry before invalidation",
+  );
+  occursBefore(
+    clueBody,
+    "throw new Error(",
+    "game = submitClues",
+    "processClues invalidates before a strict synthetic result reaches game state",
+  );
+
+  for (const functionName of [
     "processGuesses",
     "processInterceptions",
   ]) {
@@ -1274,26 +1408,25 @@ async function testStrictMatchFailureContract(): Promise<void> {
       functionName,
     );
     ok(
-      /strictExecution[\s\S]*?callResult\.parseQuality\s*!==\s*"clean"/m.test(
-        phaseBody,
-      ),
-      `${functionName} blocks non-clean strict results before game submission`,
+      phaseBody.includes("resolveCodeActionValidationDisposition("),
+      `${functionName} uses the all-mode code-action gate`,
     );
     occursBefore(
       phaseBody,
       "await logAiCall(",
-      "throw new Error(",
-      `${functionName} persists failed-call telemetry before invalidation`,
+      "resolveCodeActionValidationDisposition(",
+      `${functionName} persists failed-call telemetry before validation`,
     );
     occursBefore(
       phaseBody,
-      "throw new Error(",
-      functionName === "processClues"
-        ? "game = submitClues"
-        : functionName === "processGuesses"
-          ? "game = submitOwnTeamGuess"
-          : "game = submitInterception",
-      `${functionName} invalidates before any synthetic result reaches game state`,
+      "resolveCodeActionValidationDisposition(",
+      "applyValidatedCodeAction(",
+      `${functionName} validates before any result reaches game state`,
+    );
+    ok(
+      !phaseBody.includes("submitOwnTeamGuess(") &&
+        !phaseBody.includes("submitInterception("),
+      `${functionName} cannot bypass the validated application helper`,
     );
   }
 
@@ -1317,10 +1450,12 @@ async function testStrictMatchFailureContract(): Promise<void> {
     "processDeliberation",
   );
   ok(
-    /context\.strictExecution\s*&&\s*terminationReason\s*!==\s*null/m.test(
-      deliberationBody,
-    ),
-    "strict deliberation rejects incomplete termination",
+    deliberationBody.includes("rejectDeliberation") &&
+      deliberationBody.includes(
+        'rejectDeliberation("max_exchanges", null, false)',
+      ) &&
+      !deliberationBody.includes("fallbackAnswer"),
+    "deliberation rejects incomplete termination in every mode without a synthetic answer",
   );
 
   const reflectionLogBody = await loadFunctionBody(
@@ -1482,6 +1617,8 @@ async function main(): Promise<void> {
     await testGameplayRequestContract();
     await testValidationDisablesReasoning();
     await testRouteProofIsMandatory();
+    await testDetailedRouteAttemptMayBeAbsent();
+    await testDetailedRouteAttemptAcceptsDecimalHttpStatus();
     await testStrictRateLimitIsNotRetried();
     await testStrictAnswerProtocol();
     await testStrictReflectionProtocol();
