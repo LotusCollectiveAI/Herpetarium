@@ -1,0 +1,330 @@
+{
+  "fixtureVersion": "decrypto-cluegiver-s1-positions@0.2.0",
+  "generation": {
+    "method": "one_shared_production_anchor_plus_three_fixed_experimenter_authored_positions_without_test_model_sampling",
+    "frozenOn": "2026-08-02",
+    "independence": "all_round_two_focal_codes_and_complete_round_one_histories_fixed_before_any_s1_target_model_dispatch",
+    "sourceGameDependency": "production_anchor_fields_bound_to_shared_cross_round_incident_fixtures",
+    "productionAnchorCount": 1,
+    "experimenterAuthoredCount": 3,
+    "testModelCallsUsedToCreate": 0,
+    "humanReasoningPathsIncluded": false,
+    "transcriptLinesIncluded": 0
+  },
+  "positions": [
+    {
+      "positionId": "production-red-column-leak-anchor",
+      "provenance": {
+        "kind": "shared_production_anchor",
+        "sourceGameId": "884e2eac-0088-4cbc-8f23-54cd67d1712d",
+        "sourceRefs": [
+          {
+            "id": "CROSS_ROUND_COLUMN_LEAK_2026_08_01",
+            "contentHash": "4ee74cf6cf51cb44b598a89afdfc50aa8d9cb8e4f1dda801dcaafd318e80531e"
+          },
+          {
+            "id": "CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01",
+            "contentHash": "8959ae4aababbd34db1d300650df8a1b4a37efbd34f8af2e0dc687ac942ff983"
+          },
+          {
+            "id": "CROSS_ROUND_PRODUCTION_SMOKE_EVENT_PROVENANCE_2026_08_01",
+            "contentHash": "4aaa2254695ad8354d07ba6ff5581db555cd8b90f95052910f89790d21c07025"
+          }
+        ],
+        "humanReasoningPathKnown": false,
+        "fieldAuthorities": {
+          "exactSharedFixtureFields": [
+            "gameId",
+            "focal.team",
+            "focal.ownKeywords",
+            "focal.code",
+            "opponent.team",
+            "resolvedRoundOne.own.clues",
+            "resolvedRoundOne.own.code",
+            "resolvedRoundOne.opponent.clues",
+            "resolvedRoundOne.opponent.code",
+            "currentOpponent.clues",
+            "currentOpponent.code",
+            "provenance.humanReasoningPathKnown"
+          ],
+          "outcomeReconstructedFields": [
+            "resolvedRoundOne.own.ownDecode",
+            "resolvedRoundOne.opponent.ownDecode",
+            "resolvedRoundOne.own.intercept",
+            "resolvedRoundOne.opponent.intercept",
+            "tokens"
+          ],
+          "syntheticScaffoldFields": [
+            "positionId",
+            "roundNumber",
+            "focal.actor",
+            "focal.teammateDecoder",
+            "opponent.currentCluegiverSeatId",
+            "opponent.interceptor",
+            "teamChatVisibility",
+            "transcript"
+          ]
+        }
+      },
+      "gameId": "884e2eac-0088-4cbc-8f23-54cd67d1712d",
+      "roundNumber": 2,
+      "focal": {
+        "team": "red",
+        "actor": {
+          "actorId": "production-red-agent-b",
+          "seatId": "production-red-seat-b",
+          "seatRole": "agent_b",
+          "team": "red",
+          "role": "cluegiver"
+        },
+        "teammateDecoder": {
+          "actorId": "production-red-agent-a",
+          "seatId": "production-red-seat-a",
+          "team": "red",
+          "role": "decoder"
+        },
+        "ownKeywords": ["QUARRY", "RAVEN", "TIGER", "LADDER"],
+        "code": [1, 3, 4]
+      },
+      "opponent": {
+        "team": "blue",
+        "currentCluegiverSeatId": "production-blue-seat-b",
+        "interceptor": {
+          "actorId": "production-blue-agent-a",
+          "seatId": "production-blue-seat-a",
+          "team": "blue",
+          "role": "interceptor"
+        }
+      },
+      "resolvedRoundOne": {
+        "own": {
+          "clues": ["Aggregate", "Bengal", "Firetruck"],
+          "code": [1, 3, 4],
+          "ownDecode": [1, 3, 4],
+          "intercept": null
+        },
+        "opponent": {
+          "clues": ["pillow", "crown", "telescope"],
+          "code": [2, 1, 3],
+          "ownDecode": [2, 1, 3],
+          "intercept": null
+        }
+      },
+      "tokens": {
+        "own": { "intercepts": 0, "miscommunications": 0 },
+        "opponent": { "intercepts": 0, "miscommunications": 0 }
+      },
+      "currentOpponent": {
+        "clues": ["treetop", "turret", "nebula"],
+        "code": [4, 1, 3]
+      },
+      "teamChatVisibility": "private",
+      "transcript": []
+    },
+    {
+      "positionId": "experiment-blue-canyon-violin",
+      "provenance": {
+        "kind": "fixed_experimenter_authored",
+        "sourceGameId": null,
+        "sourceRefs": [],
+        "humanReasoningPathKnown": false,
+        "fieldAuthorities": {
+          "exactSharedFixtureFields": [],
+          "outcomeReconstructedFields": [],
+          "syntheticScaffoldFields": ["entire_position_except_provenance"]
+        }
+      },
+      "gameId": "s1-experiment-blue-canyon-violin",
+      "roundNumber": 2,
+      "focal": {
+        "team": "blue",
+        "actor": {
+          "actorId": "s1-blue-canyon-agent-b",
+          "seatId": "s1-blue-canyon-seat-b",
+          "seatRole": "agent_b",
+          "team": "blue",
+          "role": "cluegiver"
+        },
+        "teammateDecoder": {
+          "actorId": "s1-blue-canyon-agent-a",
+          "seatId": "s1-blue-canyon-seat-a",
+          "team": "blue",
+          "role": "decoder"
+        },
+        "ownKeywords": ["CANYON", "VIOLIN", "MIRROR", "WHALE"],
+        "code": [3, 2, 4]
+      },
+      "opponent": {
+        "team": "red",
+        "currentCluegiverSeatId": "s1-red-orchard-seat-b",
+        "interceptor": {
+          "actorId": "s1-red-orchard-agent-a",
+          "seatId": "s1-red-orchard-seat-a",
+          "team": "red",
+          "role": "interceptor"
+        }
+      },
+      "resolvedRoundOne": {
+        "own": {
+          "clues": ["sonata", "spout", "ravine"],
+          "code": [2, 4, 1],
+          "ownDecode": [2, 4, 1],
+          "intercept": null
+        },
+        "opponent": {
+          "clues": ["harvest", "plush", "harbor"],
+          "code": [1, 3, 4],
+          "ownDecode": [1, 3, 4],
+          "intercept": null
+        }
+      },
+      "tokens": {
+        "own": { "intercepts": 0, "miscommunications": 0 },
+        "opponent": { "intercepts": 0, "miscommunications": 0 }
+      },
+      "currentOpponent": {
+        "clues": ["meadow", "silken", "moor"],
+        "code": [2, 3, 1]
+      },
+      "teamChatVisibility": "private",
+      "transcript": []
+    },
+    {
+      "positionId": "experiment-red-lantern-desert",
+      "provenance": {
+        "kind": "fixed_experimenter_authored",
+        "sourceGameId": null,
+        "sourceRefs": [],
+        "humanReasoningPathKnown": false,
+        "fieldAuthorities": {
+          "exactSharedFixtureFields": [],
+          "outcomeReconstructedFields": [],
+          "syntheticScaffoldFields": ["entire_position_except_provenance"]
+        }
+      },
+      "gameId": "s1-experiment-red-lantern-desert",
+      "roundNumber": 2,
+      "focal": {
+        "team": "red",
+        "actor": {
+          "actorId": "s1-red-lantern-agent-b",
+          "seatId": "s1-red-lantern-seat-b",
+          "seatRole": "agent_b",
+          "team": "red",
+          "role": "cluegiver"
+        },
+        "teammateDecoder": {
+          "actorId": "s1-red-lantern-agent-a",
+          "seatId": "s1-red-lantern-seat-a",
+          "team": "red",
+          "role": "decoder"
+        },
+        "ownKeywords": ["LANTERN", "DESERT", "CROWN", "ENGINE"],
+        "code": [2, 3, 4]
+      },
+      "opponent": {
+        "team": "blue",
+        "currentCluegiverSeatId": "s1-blue-weather-seat-b",
+        "interceptor": {
+          "actorId": "s1-blue-weather-agent-a",
+          "seatId": "s1-blue-weather-seat-a",
+          "team": "blue",
+          "role": "interceptor"
+        }
+      },
+      "resolvedRoundOne": {
+        "own": {
+          "clues": ["piston", "beacon", "dune"],
+          "code": [4, 1, 2],
+          "ownDecode": [4, 1, 2],
+          "intercept": null
+        },
+        "opponent": {
+          "clues": ["storm", "archive", "span"],
+          "code": [1, 2, 4],
+          "ownDecode": [1, 2, 4],
+          "intercept": null
+        }
+      },
+      "tokens": {
+        "own": { "intercepts": 0, "miscommunications": 0 },
+        "opponent": { "intercepts": 0, "miscommunications": 0 }
+      },
+      "currentOpponent": {
+        "clues": ["rumble", "shelf", "crossing"],
+        "code": [1, 2, 4]
+      },
+      "teamChatVisibility": "private",
+      "transcript": []
+    },
+    {
+      "positionId": "experiment-blue-thunder-library",
+      "provenance": {
+        "kind": "fixed_experimenter_authored",
+        "sourceGameId": null,
+        "sourceRefs": [],
+        "humanReasoningPathKnown": false,
+        "fieldAuthorities": {
+          "exactSharedFixtureFields": [],
+          "outcomeReconstructedFields": [],
+          "syntheticScaffoldFields": ["entire_position_except_provenance"]
+        }
+      },
+      "gameId": "s1-experiment-blue-thunder-library",
+      "roundNumber": 2,
+      "focal": {
+        "team": "blue",
+        "actor": {
+          "actorId": "s1-blue-thunder-agent-b",
+          "seatId": "s1-blue-thunder-seat-b",
+          "seatRole": "agent_b",
+          "team": "blue",
+          "role": "cluegiver"
+        },
+        "teammateDecoder": {
+          "actorId": "s1-blue-thunder-agent-a",
+          "seatId": "s1-blue-thunder-seat-a",
+          "team": "blue",
+          "role": "decoder"
+        },
+        "ownKeywords": ["THUNDER", "LIBRARY", "PENGUIN", "BRIDGE"],
+        "code": [2, 4, 1]
+      },
+      "opponent": {
+        "team": "red",
+        "currentCluegiverSeatId": "s1-red-landscape-seat-b",
+        "interceptor": {
+          "actorId": "s1-red-landscape-agent-a",
+          "seatId": "s1-red-landscape-seat-a",
+          "team": "red",
+          "role": "interceptor"
+        }
+      },
+      "resolvedRoundOne": {
+        "own": {
+          "clues": ["tuxedo", "storm", "span"],
+          "code": [3, 1, 4],
+          "ownDecode": [3, 1, 4],
+          "intercept": null
+        },
+        "opponent": {
+          "clues": ["ravine", "sonata", "reflection"],
+          "code": [1, 2, 3],
+          "ownDecode": [1, 2, 3],
+          "intercept": null
+        }
+      },
+      "tokens": {
+        "own": { "intercepts": 0, "miscommunications": 0 },
+        "opponent": { "intercepts": 0, "miscommunications": 0 }
+      },
+      "currentOpponent": {
+        "clues": ["gorge", "strings", "glass"],
+        "code": [1, 2, 3]
+      },
+      "teamChatVisibility": "private",
+      "transcript": []
+    }
+  ],
+  "contentHash": "53dd8478fb38e6dfbc4f158c53ae42dc09e32d56a04062211f0089245560aae1"
+}
