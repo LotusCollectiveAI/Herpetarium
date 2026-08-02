@@ -9,7 +9,7 @@
 import type { ExperimentConfig, HeadlessMatchConfig, AIPlayerConfig, AblationFlag } from "@shared/schema";
 import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
-import { log } from "./index";
+import { log } from "./log";
 import { bootstrapConfidenceInterval, cohensD } from "./metrics";
 
 interface ExperimentCell {

@@ -2,7 +2,7 @@ import type { GenomeModules, StrategyGenome, EvolutionConfig, PhaseTransition, A
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { callAI } from "./ai";
-import { log } from "./index";
+import { log } from "./log";
 
 const activeRuns = new Map<number, boolean>();
 const DEFAULT_EXECUTION_GUIDANCE = "Focus on clear, unambiguous clues that your teammates can decode reliably. When uncertain, prefer simpler associations over clever ones.";

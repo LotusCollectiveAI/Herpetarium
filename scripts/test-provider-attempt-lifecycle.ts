@@ -9,6 +9,7 @@ import { resolve } from "node:path";
 import ts from "typescript";
 import {
   callAI,
+  generateClues,
   resetProviderThrottleState,
 } from "../server/ai";
 import { runWithAbortableTimeout } from "../server/abortableTimeout";
@@ -22,6 +23,8 @@ import type {
   ProviderAttempt,
   ProviderAttemptStatus,
 } from "@shared/schema";
+import { verifyPrivateProviderReceipt } from "../server/privateProviderReceipt";
+import { canonicalJson } from "@shared/substrate/hash";
 
 const EXACT_MODEL = "deepseek/deepseek-v4-flash-0731";
 const originalFetch = globalThis.fetch;
@@ -57,6 +60,8 @@ class MemoryAttemptStore implements ProviderAttemptStore {
       matchId: entry.matchId ?? null,
       gameId: entry.gameId ?? null,
       roundNumber: entry.roundNumber ?? null,
+      team: entry.team ?? null,
+      actorId: entry.actorId ?? null,
       actionType: entry.actionType,
       provider: entry.provider,
       model: entry.model,
@@ -64,8 +69,12 @@ class MemoryAttemptStore implements ProviderAttemptStore {
       status: (entry.status ?? "started") as ProviderAttemptStatus,
       requestMetadata: entry.requestMetadata ?? null,
       terminalMetadata: entry.terminalMetadata ?? null,
+      privateResponseReceipt:
+        entry.privateResponseReceipt ?? null,
       error: entry.error ?? null,
       aiCallLogId: entry.aiCallLogId ?? null,
+      actionApplied: entry.actionApplied ?? null,
+      validationMetadata: entry.validationMetadata ?? null,
       startedAt: new Date("2026-08-01T12:00:00.000Z"),
       completedAt: entry.completedAt ?? null,
     };
@@ -89,6 +98,9 @@ class MemoryAttemptStore implements ProviderAttemptStore {
     if (data.aiCallLogId !== undefined) {
       this.events.push("update:ai_call_log");
     }
+    if (data.actionApplied !== undefined) {
+      this.events.push("update:action_disposition");
+    }
     const updated: ProviderAttempt = {
       ...row,
       ...data,
@@ -104,6 +116,8 @@ function context(actionType = "generate_clues") {
     matchId: 41,
     gameId: "offline-game",
     roundNumber: 2,
+    team: "amber" as const,
+    actorId: "offline-actor",
     actionType,
     provider: "openrouter" as const,
     model: EXACT_MODEL,
@@ -111,7 +125,10 @@ function context(actionType = "generate_clues") {
   };
 }
 
-function successfulResponse(content = "ANSWER: cipher,veil,signal"): Response {
+function successfulResponse(
+  content = "ANSWER: cipher,veil,signal",
+  reasoning: string | null = "OPERATOR_PRIVATE_REASONING",
+): Response {
   return new Response(
     JSON.stringify({
       id: "generation-offline-attempt",
@@ -119,14 +136,17 @@ function successfulResponse(content = "ANSWER: cipher,veil,signal"): Response {
       provider: "DeepInfra",
       choices: [
         {
-          message: { content },
+          message: {
+            content,
+            ...(reasoning === null ? {} : { reasoning }),
+          },
           finish_reason: "stop",
           native_finish_reason: "stop",
         },
       ],
       openrouter_metadata: {
         attempt: 1,
-        attempts: [{ provider: "DeepInfra", status: "success" }],
+        attempts: [{ provider: "DeepInfra", status: 200 }],
         endpoints: {
           available: [{ provider: "DeepInfra", selected: true }],
         },
@@ -136,6 +156,9 @@ function successfulResponse(content = "ANSWER: cipher,veil,signal"): Response {
         completion_tokens: 5,
         total_tokens: 18,
         cost: 0.000002,
+        completion_tokens_details: {
+          reasoning_tokens: 3,
+        },
       },
     }),
     {
@@ -213,6 +236,7 @@ async function testSuccessLifecycleAndLink(): Promise<void> {
   const store = new MemoryAttemptStore();
   const attempt = await beginStrictOpenRouterAttempt(store, context());
   let fetchCount = 0;
+  let capturedRequestBody: Record<string, unknown> | null = null;
   globalThis.fetch = (async (
     _input: string | URL | Request,
     init?: RequestInit,
@@ -220,6 +244,10 @@ async function testSuccessLifecycleAndLink(): Promise<void> {
     fetchCount += 1;
     store.events.push("fetch");
     ok(init?.signal === attempt.abortController.signal, "fetch receives the caller's exact AbortSignal");
+    capturedRequestBody =
+      typeof init?.body === "string"
+        ? (JSON.parse(init.body) as Record<string, unknown>)
+        : null;
     return successfulResponse();
   }) as typeof fetch;
 
@@ -234,8 +262,20 @@ async function testSuccessLifecycleAndLink(): Promise<void> {
     },
   );
   await attempt.linkAiCallLog(9001);
+  await attempt.recordActionDisposition({
+    actionApplied: true,
+    validationMetadata: {
+      validator: "shared_decrypto_action_validator",
+      passed: true,
+    },
+  });
 
   equal(fetchCount, 1, "success makes one physical request");
+  deepEqual(
+    capturedRequestBody?.reasoning,
+    { effort: "max", exclude: false },
+    "strict paid call requests returned reasoning for private retention",
+  );
   deepEqual(
     store.events.slice(0, 3),
     ["create:started", "update:request", "fetch"],
@@ -252,6 +292,19 @@ async function testSuccessLifecycleAndLink(): Promise<void> {
   ok(row.completedAt instanceof Date, "success records completion time");
   equal(row.aiCallLogId, 9001, "attempt links to its research AI-call row");
   equal(
+    row.actionApplied,
+    true,
+    "attempt records that the persisted response became a game action",
+  );
+  deepEqual(
+    row.validationMetadata,
+    {
+      validator: "shared_decrypto_action_validator",
+      passed: true,
+    },
+    "attempt records the exact validation disposition",
+  );
+  equal(
     (row.requestMetadata as Record<string, unknown>).requestedModel,
     EXACT_MODEL,
     "request metadata retains the exact requested model",
@@ -265,6 +318,59 @@ async function testSuccessLifecycleAndLink(): Promise<void> {
     result.providerMetadata?.upstreamProvider,
     "DeepInfra",
     "call result and terminal proof agree on upstream",
+  );
+  equal(
+    result.reasoningTrace,
+    undefined,
+    "provider reasoning is never copied into gameplay-facing call results",
+  );
+  equal(
+    verifyPrivateProviderReceipt(row.privateResponseReceipt).length,
+    0,
+    "successful paid-call receipt has valid body/reasoning lineage",
+  );
+  equal(
+    row.privateResponseReceipt?.reasoning.presence,
+    "present",
+    "successful receipt records provider-returned reasoning presence",
+  );
+  equal(
+    row.privateResponseReceipt?.hiddenReasoningStored,
+    true,
+    "successful receipt records that hidden reasoning is privately stored",
+  );
+  ok(
+    row.privateResponseReceipt?.responseBody.text?.includes(
+      "OPERATOR_PRIVATE_REASONING",
+    ),
+    "exact private body contains the returned reasoning",
+  );
+  const jsonbReorderedReceipt = JSON.parse(
+    canonicalJson(row.privateResponseReceipt),
+  ) as unknown;
+  equal(
+    verifyPrivateProviderReceipt(jsonbReorderedReceipt).length,
+    0,
+    "receipt digest survives JSONB-style recursive object-key reordering",
+  );
+  const malformedBodyReceipt = {
+    ...row.privateResponseReceipt,
+    responseBody: {
+      ...row.privateResponseReceipt!.responseBody,
+      text: 17,
+    },
+  };
+  ok(
+    verifyPrivateProviderReceipt(malformedBodyReceipt).some((issue) =>
+      issue.includes("exact response body lineage mismatch"),
+    ),
+    "malformed persisted body is rejected without throwing during verification",
+  );
+  ok(
+    !JSON.stringify(row).includes(
+      process.env.OPENROUTER_API_KEY!,
+    ),
+    "persisted paid-call row never contains the authorization secret",
   );
 }
 
@@ -330,6 +436,212 @@ async function testFailureIsTerminalAndSanitized(): Promise<void> {
     ),
     false,
     "failed response does not fabricate usage",
+  );
+  equal(
+    row.privateResponseReceipt?.responseBody.storage,
+    "not_stored_non_2xx",
+    "non-2xx response text is explicitly not copied into the private paid-call receipt",
+  );
+  equal(
+    verifyPrivateProviderReceipt(row.privateResponseReceipt).length,
+    0,
+    "non-2xx absence receipt retains valid lineage without sensitive body text",
+  );
+}
+
+async function testPrivateReceiptFailureAndParsePaths(): Promise<void> {
+  const config = getConfigForModel("openrouter", EXACT_MODEL);
+
+  const invalidJsonStore = new MemoryAttemptStore();
+  const invalidJsonAttempt = await beginStrictOpenRouterAttempt(
+    invalidJsonStore,
+    context("generate_guess"),
+  );
+  const invalidJsonBody =
+    '{"choices":[{"message":{"reasoning":"PRIVATE_PARTIAL_REASONING"}';
+  globalThis.fetch = (async () =>
+    new Response(invalidJsonBody, {
+      status: 200,
+      headers: { "x-request-id": "invalid-json-receipt" },
+    })) as typeof fetch;
+  await expectReject(
+    () =>
+      callAI(config, "offline system", "offline user", {
+        strictExecution: true,
+        signal: invalidJsonAttempt.abortController.signal,
+        providerAttemptTelemetry: invalidJsonAttempt.telemetry,
+      }),
+    /response JSON parse error/,
+  );
+  const invalidJsonRow = invalidJsonStore.rows.get(
+    invalidJsonAttempt.attemptId,
+  );
+  ok(invalidJsonRow, "invalid-JSON attempt row remains present");
+  equal(
+    invalidJsonRow.privateResponseReceipt?.responseBody.text,
+    invalidJsonBody,
+    "invalid-JSON exact HTTP body survives only in the private receipt",
+  );
+  equal(
+    invalidJsonRow.privateResponseReceipt?.reasoning.presence,
+    "uninspectable_invalid_json",
+    "invalid JSON never fabricates reasoning presence or absence",
+  );
+  equal(
+    verifyPrivateProviderReceipt(
+      invalidJsonRow.privateResponseReceipt,
+    ).length,
+    0,
+    "invalid-JSON private receipt recomputes exact body lineage",
+  );
+
+  const routeStore = new MemoryAttemptStore();
+  const routeAttempt = await beginStrictOpenRouterAttempt(
+    routeStore,
+    context("generate_interception"),
+  );
+  const routeBody = JSON.stringify({
+    id: "generation-offline-route-failure",
+    model: EXACT_MODEL,
+    provider: "WrongProvider",
+    choices: [
+      {
+        message: {
+          content: "ANSWER: 1,2,3",
+          reasoning: "PRIVATE_ROUTE_FAILURE_REASONING",
+        },
+        finish_reason: "stop",
+      },
+    ],
+    openrouter_metadata: {
+      attempt: 1,
+      attempts: [{ provider: "WrongProvider", status: 200 }],
+      endpoints: {
+        available: [{ provider: "WrongProvider", selected: true }],
+      },
+    },
+    usage: {
+      prompt_tokens: 13,
+      completion_tokens: 5,
+      total_tokens: 18,
+      completion_tokens_details: { reasoning_tokens: 3 },
+    },
+  });
+  globalThis.fetch = (async () =>
+    new Response(routeBody, {
+      status: 200,
+      headers: { "x-request-id": "route-failure-receipt" },
+    })) as typeof fetch;
+  await expectReject(
+    () =>
+      callAI(config, "offline system", "offline user", {
+        strictExecution: true,
+        signal: routeAttempt.abortController.signal,
+        providerAttemptTelemetry: routeAttempt.telemetry,
+      }),
+    /served provider WrongProvider/,
+  );
+  const routeRow = routeStore.rows.get(routeAttempt.attemptId);
+  ok(routeRow, "route-failure attempt row remains present");
+  equal(
+    routeRow.privateResponseReceipt?.responseBody.text,
+    routeBody,
+    "route-invalid paid response retains its exact private body",
+  );
+  equal(
+    routeRow.privateResponseReceipt?.hiddenReasoningStored,
+    true,
+    "route-invalid paid response still retains returned reasoning",
+  );
+  equal(
+    verifyPrivateProviderReceipt(
+      routeRow.privateResponseReceipt,
+    ).length,
+    0,
+    "route-failure private receipt retains body/reasoning lineage",
+  );
+
+  const parseStore = new MemoryAttemptStore();
+  const parseAttempt = await beginStrictOpenRouterAttempt(
+    parseStore,
+    context("generate_clues"),
+  );
+  globalThis.fetch = (async () =>
+    successfulResponse(
+      "three clues without the required answer marker",
+      "PRIVATE_PARSE_FAILURE_REASONING",
+    )) as typeof fetch;
+  const parseResult = await generateClues(
+    config,
+    {
+      keywords: ["planet", "forest", "castle", "silver"],
+      targetCode: [1, 2, 3],
+      history: [],
+    },
+    {
+      strictExecution: true,
+      signal: parseAttempt.abortController.signal,
+      providerAttemptTelemetry: parseAttempt.telemetry,
+    },
+  );
+  equal(
+    parseResult.parseQuality,
+    "error",
+    "application-level parse failure remains an invalid strict result",
+  );
+  equal(
+    parseResult.reasoningTrace,
+    undefined,
+    "parse failure does not copy private reasoning into the AI-call result",
+  );
+  const parseRow = parseStore.rows.get(parseAttempt.attemptId);
+  ok(parseRow, "parse-failure attempt row remains present");
+  equal(
+    parseRow.status,
+    "succeeded",
+    "provider lifecycle remains successful before application parsing",
+  );
+  equal(
+    parseRow.privateResponseReceipt?.hiddenReasoningStored,
+    true,
+    "parse failure preserves the returned reasoning in its private receipt",
+  );
+  equal(
+    verifyPrivateProviderReceipt(
+      parseRow.privateResponseReceipt,
+    ).length,
+    0,
+    "parse-failure paid-call receipt retains exact lineage",
+  );
+
+  const absentStore = new MemoryAttemptStore();
+  const absentAttempt = await beginStrictOpenRouterAttempt(
+    absentStore,
+    context("generate_guess"),
+  );
+  globalThis.fetch = (async () =>
+    successfulResponse("ANSWER: 1,2,3", null)) as typeof fetch;
+  await callAI(config, "offline system", "offline user", {
+    strictExecution: true,
+    signal: absentAttempt.abortController.signal,
+    providerAttemptTelemetry: absentAttempt.telemetry,
+  });
+  const absentRow = absentStore.rows.get(absentAttempt.attemptId);
+  ok(absentRow, "reasoning-absent attempt row remains present");
+  equal(
+    absentRow.privateResponseReceipt?.reasoning.presence,
+    "absent",
+    "provider-omitted reasoning is recorded as explicit absence",
+  );
+  equal(
+    absentRow.privateResponseReceipt?.reasoning.reasoningTokens,
+    3,
+    "reasoning-token count survives even when no reasoning text is returned",
+  );
+  equal(
+    absentRow.privateResponseReceipt?.hiddenReasoningStored,
+    false,
+    "reasoning absence is never misreported as stored content",
   );
 }
 
@@ -671,6 +983,199 @@ async function testTimezoneAwareMigrationContract(): Promise<void> {
   );
 }
 
+async function testActionAttributionMigrationContract(): Promise<void> {
+  const [
+    schemaSource,
+    storageSource,
+    migration0012,
+    snapshot0012Text,
+    journalText,
+    routesSource,
+    exportRouterSource,
+    trackedEvidenceSource,
+  ] =
+    await Promise.all([
+      readFile(resolve(process.cwd(), "shared/schema.ts"), "utf8"),
+      readFile(resolve(process.cwd(), "server/storage.ts"), "utf8"),
+      readFile(
+        resolve(
+          process.cwd(),
+          "migrations/0012_telemetry_action_attribution.sql",
+        ),
+        "utf8",
+      ),
+      readFile(
+        resolve(process.cwd(), "migrations/meta/0012_snapshot.json"),
+        "utf8",
+      ),
+      readFile(
+        resolve(process.cwd(), "migrations/meta/_journal.json"),
+        "utf8",
+      ),
+      readFile(resolve(process.cwd(), "server/routes.ts"), "utf8"),
+      readFile(
+        resolve(process.cwd(), "server/exportRouter.ts"),
+        "utf8",
+      ),
+      readFile(
+        resolve(
+          process.cwd(),
+          "docs/evidence/cross-round-v03-repeat-20260802.md",
+        ),
+        "utf8",
+      ),
+    ]);
+
+  for (const table of ["ai_call_logs", "provider_attempts"]) {
+    for (const [column, sqlType] of [
+      ["team", "varchar\\(10\\)"],
+      ["actor_id", "varchar\\(100\\)"],
+      ["action_applied", "boolean"],
+      ["validation_metadata", "jsonb"],
+    ] as const) {
+      ok(
+        new RegExp(
+          `ALTER TABLE "${table}" ADD COLUMN "${column}" ${sqlType}`,
+        ).test(migration0012),
+        `0012 adds nullable ${table}.${column}`,
+      );
+    }
+  }
+  ok(
+    /ALTER TABLE "provider_attempts" ADD COLUMN "private_response_receipt" jsonb/.test(
+      migration0012,
+    ),
+    "0012 adds the nullable operator-private paid-call receipt",
+  );
+
+  ok(
+    /team:\s*varchar\("team",\s*\{\s*length:\s*10\s*\}\)/m.test(
+      schemaSource,
+    ),
+    "typed schema exposes team attribution",
+  );
+  ok(
+    /actorId:\s*varchar\("actor_id",\s*\{\s*length:\s*100\s*\}\)/m.test(
+      schemaSource,
+    ),
+    "typed schema exposes actor attribution",
+  );
+  ok(
+    /actionApplied:\s*boolean\("action_applied"\)/m.test(schemaSource),
+    "typed schema exposes action disposition",
+  );
+  ok(
+    /validationMetadata:\s*jsonb\("validation_metadata"\)/m.test(
+      schemaSource,
+    ),
+    "typed schema exposes validation metadata",
+  );
+  ok(
+    /privateResponseReceipt:\s*jsonb\("private_response_receipt"\)/m.test(
+      schemaSource,
+    ),
+    "typed schema isolates the private paid-call receipt on provider attempts",
+  );
+  for (const [label, source] of [
+    ["gameplay routes", routesSource],
+    ["export routes", exportRouterSource],
+  ] as const) {
+    equal(
+      source.includes("privateResponseReceipt"),
+      false,
+      `${label} do not expose the operator-private receipt field`,
+    );
+    equal(
+      source.includes("getProviderAttempts"),
+      false,
+      `${label} do not retrieve provider-attempt rows`,
+    );
+  }
+  equal(
+    trackedEvidenceSource.includes("OPERATOR_PRIVATE_REASONING"),
+    false,
+    "tracked evidence never contains the private receipt test sentinel",
+  );
+  equal(
+    trackedEvidenceSource.includes("PRIVATE_ROUTE_FAILURE_REASONING"),
+    false,
+    "tracked evidence never contains route-failure private reasoning",
+  );
+  ok(
+    /orderBy\(aiCallLogs\.createdAt,\s*aiCallLogs\.id\)/m.test(
+      storageSource,
+    ),
+    "AI-call retrieval has a deterministic ID tie-breaker",
+  );
+  ok(
+    /orderBy\(providerAttempts\.startedAt,\s*providerAttempts\.id\)/m.test(
+      storageSource,
+    ),
+    "provider-attempt retrieval has a deterministic ID tie-breaker",
+  );
+
+  type AttributionSnapshot = {
+    tables: Record<
+      string,
+      {
+        columns: Record<
+          string,
+          { type: string; notNull: boolean }
+        >;
+      }
+    >;
+  };
+  const snapshot = JSON.parse(snapshot0012Text) as AttributionSnapshot;
+  for (const table of [
+    "public.ai_call_logs",
+    "public.provider_attempts",
+  ]) {
+    const columns = snapshot.tables[table]?.columns;
+    ok(columns, `0012 snapshot includes ${table}`);
+    for (const [column, type] of [
+      ["team", "varchar(10)"],
+      ["actor_id", "varchar(100)"],
+      ["action_applied", "boolean"],
+      ["validation_metadata", "jsonb"],
+    ] as const) {
+      equal(
+        columns[column]?.type,
+        type,
+        `0012 snapshot records ${table}.${column} type`,
+      );
+      equal(
+        columns[column]?.notNull,
+        false,
+        `0012 keeps ${table}.${column} nullable for historical rows`,
+      );
+    }
+  }
+  const providerColumns =
+    snapshot.tables["public.provider_attempts"]?.columns;
+  equal(
+    providerColumns?.private_response_receipt?.type,
+    "jsonb",
+    "0012 snapshot records provider_attempts.private_response_receipt",
+  );
+  equal(
+    providerColumns?.private_response_receipt?.notNull,
+    false,
+    "private receipt remains nullable for historical rows",
+  );
+
+  const journal = JSON.parse(journalText) as {
+    entries: Array<{ idx: number; tag: string }>;
+  };
+  ok(
+    journal.entries.some(
+      (entry) =>
+        entry.idx === 12 &&
+        entry.tag === "0012_telemetry_action_attribution",
+    ),
+    "action-attribution migration is journaled at 0012",
+  );
+}
+
 async function main(): Promise<void> {
   process.env.OPENROUTER_API_KEY = "offline-provider-attempt-test-key";
   resetProviderThrottleState();
@@ -679,10 +1184,12 @@ async function main(): Promise<void> {
     await testKnownPreDispatchFailureIsTerminal();
     await testSuccessLifecycleAndLink();
     await testFailureIsTerminalAndSanitized();
+    await testPrivateReceiptFailureAndParsePaths();
     await testDeadlineAbortsFetch();
     await testIgnoredAbortIsBounded();
     await testHeadlessCallSiteWiring();
     await testTimezoneAwareMigrationContract();
+    await testActionAttributionMigrationContract();
     console.log(
       `Strict provider-attempt lifecycle checks passed (${assertions} assertions).`,
     );

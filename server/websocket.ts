@@ -18,7 +18,7 @@ import {
 } from "./game";
 import { generateClues, generateGuess, generateInterception, AICallResult } from "./ai";
 import { storage } from "./storage";
-import { log } from "./index";
+import { log } from "./log";
 
 interface ClientConnection {
   ws: WebSocket;

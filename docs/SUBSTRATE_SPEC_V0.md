@@ -15,7 +15,7 @@ A dependency-free TypeScript vocabulary both applications compile against, defin
 | Prompt compilation | `compile.ts` | Semantics-preserving port of `genomeCompiler.ts` v2.0.0 (same titles, composition, output text) so trained genomes compile identically in both apps; legacy 32-bit hash retained for DB lineage |
 | Exact Table candidate treatment | `candidatePolicy.ts` | Immutable id, exact actor-call policy text, and content hash for `within-call-blind-inversion-selection@0.3.0`; pure composition helper fixes the authority order as compiled cluegiver directives → candidate policy → app-owned action/output contract, so Herpetarium can run the exact Table arm rather than a paraphrase |
 | Blind-inversion decision policy | `inversion.ts` | Dependency-free target normalization/recovery and typed `hard_veto | soft_regenerate_once | pass` evaluation implementing `PROVISIONAL_INVERSION_VETO_POLICY`; provider calls stay app-owned, while both apps execute identical post-audit semantics |
-| Cross-round column audit | `crossRoundInversion.ts` | One content-hashed, fixed-three-clue instrument shared by both apps: public resolved clue-number ledger construction, exact prompt/task text, tolerant-but-fail-closed reply parser, unique-top/tie-aware column recovery, and typed veto semantics. The Table gates live encryptor submissions; Herpetarium's `probe:cross-round` command evaluates completed durable rounds read-only without changing tournament treatment. |
+| Cross-round column audit | `crossRoundInversion.ts` | One content-hashed, fixed-three-clue instrument shared by both apps: public resolved clue-number ledger construction, exact prompt/task text, tolerant-but-fail-closed reply parser, unique-top/tie-aware column recovery, and typed veto semantics. The Table has enforcement plumbing, but its runtime release gate is interlocked off; Herpetarium's `probe:cross-round` command evaluates completed durable rounds read-only without changing tournament treatment. |
 | Role-legal observations | `observation.ts` | Target contract: the schema *cannot express* opponent keywords; live code is encryptor-only; team-chat visibility (`open | private` — the two product worlds) is part of the observation and `assertRoleLegal` enforces transcript legality against it; `decisionFocus` names the one pending decision. Runtime construction/assertion is not wired yet. |
 | Action schemas + rule legality | `actions.ts` | Guess validation (3 distinct 1..4); clue legality (keyword echo/derivative/stem/repeat/length) with the human Table phrase regime and bot single-word regimes explicit: `TABLE_CLUE_RULES`, `TABLE_BOT_CLUE_RULES`, `HERPETARIUM_CLUE_RULES` |
 | Model identity | `modelRef.ts` | Pinned `ModelRef` (provider, canonical slug, pinned upstream, alias epoch); `KNOWN_ALIAS_MUTATIONS` ledger (entry #1: DeepSeek `deepseek-v4-flash` → 0731 on 2026-07-31); the two sanctioned DeepSeek lanes (dated OpenRouter slug + upstream pin as canonical treatment; direct alias as provenance canary) |
@@ -91,14 +91,190 @@ reported — not before shipping.
    enemy communications" directive. That measures transcript-reading, not
    clue opacity. Admit it only at `teamSize: 2` or behind a new
    `no_opponent_transcript` ablation, required alongside `no_scratch_notes`.
-3. **The candidate-policy A/B has no matching control at The Table.** Only
-   the policy text and its position in the authority order are shared; the
-   third component differs entirely (Table: a ~45-line JSON-envelope action
-   contract that *already* instructs multi-candidate generation, teammate and
-   blind-opponent simulation, cross-keyword rejection, and history
-   inspection; Herpetarium: a one-line `ANSWER:` format directive). A
-   "policy on vs off" effect here is an **upper bound** on the Table's
-   marginal effect and cannot be transferred as-is to license seating.
+3. **The candidate-policy A/B has no matching control or arm assignment at
+   The Table.** Only the policy text and its position in the authority order
+   are shared; the action contract differs (Table: a ~45-line JSON-envelope
+   contract that already instructs multi-candidate generation, teammate and
+   blind-opponent simulation, cross-keyword rejection, and history inspection;
+   Herpetarium: a one-line `ANSWER:` format directive). The ledger treatment
+   differs too: Herpetarium gives its column ledger and operative
+   public-association rejection instruction only to the treatment cluegiver,
+   while The Table currently renders the ledger for every encryptor and omits
+   that operative rejection instruction. The Herpetarium contrast therefore
+   measures its full bundled candidate-policy/authority plus treatment-only
+   operative-ledger package. It is not a Table marginal effect, upper bound,
+   lower bound, or seating license. Transfer requires byte-identical full
+   prompts and identical arm assignment per role and round; semantic similarity
+   is not enough.
+
+### Candidate-policy A/B execution contract
+
+The candidate-policy experiment uses a brand-new local PostgreSQL database
+whose name begins `herp_decrypto_ab_`, reached only through the `/tmp` or
+`/var/run/postgresql` Unix socket with no credentials in the URL. Provision it
+with `npm run experiment:candidate-policy-ab-db-prepare`. That command validates
+the disposable target and proves it has zero application rows before invoking
+the existing `npm run db:push` schema-sync command, then re-inspects the exact
+schema and zero-row state. Migration-journal replay is not an accepted
+provisioning path because this repository's journal intentionally does not
+represent every historical schema transition. The global `db:push` command is
+unchanged and must not be run directly for this experiment.
+
+Strict research execution persists each response before shared action
+validation, applies no fallback, and rejects an illegal action without
+regeneration. Exploratory non-strict runs preserve their historical continuity:
+an illegal parsed/fallback action is applied unchanged, but its
+`passed:false`, `actionApplied:true` disposition and match taint are durable.
+**That taint has a consequence worth stating plainly: a non-strict validation
+failure sets `qualityStatus: "tainted"` with reason `action_validation_failure`,
+and the legacy tournament/eval aggregation in `server/routes.ts` drops tainted
+matches from its denominators by default (only `includeTainted` keeps them).**
+So in exploratory runs an illegal action removes the whole match from the
+default legacy rates while every row stays durable — the legacy aggregate
+silently describes a filtered subset. The strict A/B harness never reads that
+path: it retains every match, counts every observed durable paid attempt, and
+suppresses the behavioral comparison instead of dropping matches. The
+preregistration records this disposition explicitly under
+`nonStrictTaintedMatchDisposition`.
+
+The A/B preregistration records the complete enforced clue contract and the
+known 28% within-triple duplicate probability of three draws with replacement
+from each ten-word synthetic fallback pool. Runtime reports expose the observed
+legality funnel even for failed and incomplete runs. Keyword normalization is
+lowercase-then-drop-non-alphanumeric; the containment and first-four-character
+stem rules apply only to keywords with **at least four normalized characters**,
+and shorter keywords are checked for exact equality only. The enforced prompt
+text states that same gate verbatim, so the model is never told a rule stricter
+than the one the validator applies.
+
+Round-one prompt proofs are constructed through
+`buildHeadlessClueCallPrompt`, the same production seam used immediately before
+the headless runner dispatches a clue request. Before any match can start, each
+baseline and treatment byte string is compared with a separately composed
+oracle that calls the pinned advanced-strategy contract directly. The
+preregistration stores both construction identities, the exact prompt bytes,
+hashes, lengths, and a successful independent-oracle marker. A disagreement is
+a pre-dispatch hard failure; a proof cannot certify a mutation in its own
+production construction path.
+
+The mirrored A/B schedule swaps the treatment between Amber and Blue; it does
+not rotate every actor role. In current 2v2 execution the cluegiver alternates
+between seats, the other teammate decodes, and Seat 1 performs interception
+every round. Behavioral rounds are nested within each mirrored seed block. The
+primary window is pinned at rounds 2-4 and is asserted against
+`roundsPerMatch`: a behavior-bearing schedule that ran a different number of
+rounds fails loudly rather than reporting a window narrower than the match.
+`interceptions made` is not a fourth estimand and is not recomputed as one. It
+is reported as `opponentArmVulnerabilityRateAlias`, assigned directly from the
+opposite arm's vulnerability rate, alongside a `reciprocalAliasIdentity` record
+proving each arm's interceptions equal the other arm's vulnerable rounds. Its
+contrast is therefore the exact negation of the vulnerability contrast.
+
+The two-round mechanism canary is excluded from behavioral analysis, but that
+is not the same as being untreated: it seats the identical mirrored arms and
+dispatches the exact candidate policy and authority wrapper on treatment
+cluegiver calls, which is the whole point of proving the carrier before
+behavioral spending. Its package is named
+`candidate_policy_authority_carrier_exercised_behavior_excluded` and every
+schedule carries a `treatmentPackageMeaning` sentence so the label cannot be
+read as "no treatment". The current pilot and full schedules explicitly name
+`full_candidate_policy_authority_plus_treatment_only_ledger_and_rejection` as
+their treatment package. A future minimal-mechanism pilot must instead
+pre-register `minimal_ledger_plus_rejection_only`; it cannot inherit the current
+pilot's identity or results. Neither package transfers to The Table until the
+exact prompt bytes and arm assignment are proven identical there.
+
+The mechanism schedule's `plannedProviderCalls: 24` is a **maximum**, reached
+only if both two-round mirrors reach every scheduled action. A strict parse,
+validation, transport, or telemetry failure can terminate one match before its
+later actions are dispatched, while the already-started mirror is allowed to
+settle. Reports therefore keep `plannedProviderCalls` separate from observed
+durable `providerCalls`. For matches with available captures,
+`maximumProviderCallsForCapturedLaunchedMatches` defines the relevant maximum
+and `exactNeverDispatchedCallsForCapturedLaunchedMatches` is populated only
+when AI-call/provider-attempt linkage is clean and there is no overage. Thus the
+live-like strict-failure shape is 17 observed of a 24-call captured maximum,
+with exactly seven calls never dispatched. Unavailable captures are not folded
+into that number:
+`unobservedProviderCallsDueToUnavailableCapture` is `0` when none are
+unavailable and otherwise `null`, accompanied by
+`unobservedProviderCallsUpperBound`. Any observed count above the captured
+maximum is exposed as `providerCallOverageAgainstCapturedMaximum`; it is never
+clamped away. Observed AI rows without linked provider attempts and unlinked
+provider attempts are separately named linkage defects. The incomplete run is
+retained as observed, with no retry, replacement, or recommendation to rerun
+it.
+
+The legacy Herpetarium headless runner is also not the Table competitive
+protocol: it allows round-1 interception, resolves own guesses before
+interceptions, lets the active cluegiver intercept in 2v2, uses different
+team/rule-limit defaults, and its 3v3 path can expose opponent decode chatter.
+Consequently the canary proves mechanism and telemetry plumbing only. Pilot and
+full reports carry
+`releaseBoundary: blocked_table_protocol_and_prompt_parity` and
+`tableBotBuildLicenseEligible: false` even when internally complete. Their
+behavior is within-Herpetarium descriptive evidence only; it cannot license a
+Table BotBuild. That boundary remains until a `table-competitive-v1` runner and
+golden transition, role, visibility, and rules parity exist.
+
+Every strict paid OpenRouter call with durable attempt telemetry requests
+returned reasoning and stores the exact HTTP response body only in the
+operator-private `provider_attempts.private_response_receipt`. The receipt binds
+the body and any returned reasoning fields by SHA-256 and UTF-8 length; its
+self-digest uses recursively canonical JSON so PostgreSQL JSONB key reordering
+cannot break verification. If the provider returns token counts without reasoning text, the receipt records
+explicit absence plus the token count; it never fabricates text. Invalid JSON
+is preserved exactly and labeled uninspectable, while non-2xx response text is
+not copied into the receipt. Private receipt bodies are absent from gameplay
+routes and tracked evidence files.
+
+**The exact bytes exist in exactly two places: the disposable database's
+`provider_attempts` row and the 0600 per-match artifact.** The aggregate
+`report.json` is a projection, not a third copy. Each of its `matchArtifacts`
+entries points back at its authoritative artifact by stable relative path,
+`mode: "0600"`, and that file's own self-hash, and keeps every provider-attempt
+row along with the receipt's SHA-256, UTF-8 length, reasoning presence or
+explicit absence, reasoning-field names, reasoning-token count, and the full
+route/usage/headroom/disposition metadata — but never the body or reasoning
+text. Counts, lineage failures, and raw-body byte totals are still disclosed,
+now against a two-copy storage floor. Cost evidence is source-labeled:
+`providerReportedActual` contains only a provider usage receipt, while
+`roundedEstimate` contains the application's six-decimal model-registry
+estimate. `combinedKnownSumUsd` is retained for convenience but explicitly
+warns that it mixes those two evidence classes; unknown calls never disappear
+from the denominator.
+
+The legacy `matches.created_at`, `matches.completed_at`,
+`ai_call_logs.created_at`, and `team_chatter.created_at` columns are PostgreSQL
+`timestamp without time zone`. A JavaScript `Date#toJSON()` would append `Z`
+and falsely turn those wall-clock values into claimed UTC instants. Match and
+aggregate artifacts therefore replace each non-null value with a structured
+`localWallTime` string containing no offset, the source database type, a null
+timezone, and the explicit qualification
+`legacy_local_timestamp_timezone_unknown`. The timestamp contract is fixed in
+preregistration and repeated in each private and aggregate match entry.
+`provider_attempts.started_at` and `completed_at` are true `timestamptz`
+columns; those alone retain ISO-8601 UTC `Z` serialization.
+
+Provider error details follow the same private boundary. Aggregate runner error
+text recognizes provider HTTP/API/route/transport signals independently of a
+literal provider name, removes response detail, and caps every remaining
+summary. Exact error text remains only in the private match artifact and
+disposable database evidence.
+
+A launched match whose private artifact fails to persist is still a paid match.
+The harness re-reads that match once from the disposable database and folds its
+provider-attempt, cost, token, and route evidence into the operational rollup
+under `recoveredOperationalSummary`, again without any exact body, so no paid
+attempt present in recoverable evidence goes uncounted. This is a read, never a
+retry: the match is not re-run or replaced, its artifact stays absent, the
+sanitized persistence failure stays in the report, the run stays incomplete,
+and behavior stays suppressed. If the re-read itself fails the summary is
+recorded as `unavailable` with a sanitized reason. The launched-match maximum
+and captured-match maximum then remain separate: never-dispatched calls can
+still be exact for the available sibling, while the unavailable match
+contributes only a `null` exact count and a schedule-derived unobserved-call
+upper bound.
 
 ## 4c. The next cross-round experiment, pre-registered (decided 2026-08-02)
 
@@ -163,12 +339,25 @@ the only layer that can run in the product loop**, and it is currently the less
 instrumented of the two: `within-call-blind-inversion-selection@0.3.0` has never
 been live-tested at all, because the incident that motivated it predates it. Note
 also that no deterministic, provider-free lexical check helps here — exact
-reuse, stemming, substring and same-lemma tests all score **0 of 5** on the
-observed leak edges (`Aggregate`~`blast`, `Bengal`~`orange`,
-`Firetruck`~`ascent`, `crown`~`turret`, `telescope`~`nebula`), because the leak
-is a two-hop route through a latent word that neither public clue contains. Ship
-an exact-reuse invariant if you like, but report it as recall-0 on this corpus
-rather than as a guardrail.
+reuse, stemming, substring and same-lemma tests all score **0 of 5** on five
+analyst-hypothesized plausible public routes (`Aggregate`~`blast`,
+`Bengal`~`orange`, `Firetruck`~`ascent`, `crown`~`turret`,
+`telescope`~`nebula`). These are explanatory hypotheses, not observed human
+reasoning or observed leak edges; human chat was not inspected. Each proposed
+route is two-hop through a latent word that neither public clue contains. Ship
+an exact-reuse invariant if you like, but report it as recall-0 on this
+hypothesized set rather than as a guardrail.
+
+The completed unchanged-protocol repeat is indexed in
+[`evidence/cross-round-v03-repeat-20260802.md`](evidence/cross-round-v03-repeat-20260802.md).
+It remained globally incomplete (58/60 valid calls; two HTTP-200 truncated-JSON
+failures, with no retry or replacement) and therefore is still not a release
+boundary. Operationally, its 58 valid calls reached 50,980 completion tokens at
+nearest-rank p95 and 58,441 at maximum (89.2% of the 65,536 allowance), while
+latency reached 789,509 ms at nearest-rank p95 and 983,480 ms at maximum. Those
+observations are separate from the candidate-policy A/B data and are the
+empirical rationale for preserving completion-headroom, unknown-count, and
+latency-tail fields in every A/B report, including incomplete reports.
 
 ## 5. Non-goals of v0.1
 

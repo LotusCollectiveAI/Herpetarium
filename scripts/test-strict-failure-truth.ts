@@ -45,7 +45,7 @@ async function testBodyReadFailureRetainsRequestProof(): Promise<void> {
         "x-generation-id": "generation-body-read-failure",
       },
     });
-    Object.defineProperty(response, "json", {
+    Object.defineProperty(response, "text", {
       value: async () => {
         throw new TypeError("terminated");
       },

@@ -23,7 +23,7 @@ import { callAI, estimateCost } from "./ai";
 import { runBoundedSettledPool } from "./boundedPool";
 import { compileGenomePrompts } from "./genomeCompiler";
 import { runHeadlessMatch } from "./headlessRunner";
-import { log } from "./index";
+import { log } from "./log";
 import { storage } from "./storage";
 
 type Team = "amber" | "blue";
