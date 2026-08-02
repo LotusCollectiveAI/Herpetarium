@@ -14,6 +14,11 @@ import type { Express, Request, Response } from "express";
 import type { MatchPlayerConfig } from "@shared/schema";
 import { getStoredPlayerModelId, getStoredTeamRosters } from "@shared/schema";
 import { storage } from "./storage";
+import {
+  ExportQueryError,
+  loadAiLogsForExport,
+  parseOptionalExperimentId,
+} from "./exportScope";
 
 /**
  * Escape a value for CSV output. Handles:
@@ -45,7 +50,7 @@ export function registerExportRoutes(app: Express): void {
   // --- Matches CSV export ---
   app.get("/api/export/v2/matches", async (req: Request, res: Response) => {
     try {
-      const experimentId = req.query.experimentId as string | undefined;
+      const experimentId = parseOptionalExperimentId(req.query.experimentId);
       const matches = await storage.getAllMatches(experimentId ? { experimentId } : {});
 
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
@@ -117,6 +122,9 @@ export function registerExportRoutes(app: Express): void {
 
       res.end();
     } catch (err: any) {
+      if (err instanceof ExportQueryError) {
+        return res.status(err.statusCode).json({ error: err.message });
+      }
       res.status(500).json({ error: err.message || "Export failed" });
     }
   });
@@ -124,7 +132,7 @@ export function registerExportRoutes(app: Express): void {
   // --- Rounds CSV export ---
   app.get("/api/export/v2/rounds", async (req: Request, res: Response) => {
     try {
-      const experimentId = req.query.experimentId as string | undefined;
+      const experimentId = parseOptionalExperimentId(req.query.experimentId);
       const matches = await storage.getAllMatches(experimentId ? { experimentId } : {});
       const matchIds = matches.map(m => m.id);
       const rounds = await storage.getMatchRoundsForMatches(matchIds);
@@ -184,6 +192,9 @@ export function registerExportRoutes(app: Express): void {
 
       res.end();
     } catch (err: any) {
+      if (err instanceof ExportQueryError) {
+        return res.status(err.statusCode).json({ error: err.message });
+      }
       res.status(500).json({ error: err.message || "Export failed" });
     }
   });
@@ -191,11 +202,11 @@ export function registerExportRoutes(app: Express): void {
   // --- AI Call Logs CSV export ---
   app.get("/api/export/v2/ai-logs", async (req: Request, res: Response) => {
     try {
-      const experimentId = req.query.experimentId as string | undefined;
       const includeText = req.query.include_text === "true";
-      const matches = await storage.getAllMatches(experimentId ? { experimentId } : {});
-      const matchIds = matches.map(m => m.id);
-      const logs = await storage.getAllAiCallLogs(matchIds.length > 0 ? matchIds : undefined);
+      const { experimentId, logs } = await loadAiLogsForExport(
+        req.query.experimentId,
+        storage,
+      );
 
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
       res.setHeader("Content-Disposition",
@@ -231,6 +242,9 @@ export function registerExportRoutes(app: Express): void {
 
       res.end();
     } catch (err: any) {
+      if (err instanceof ExportQueryError) {
+        return res.status(err.statusCode).json({ error: err.message });
+      }
       res.status(500).json({ error: err.message || "Export failed" });
     }
   });

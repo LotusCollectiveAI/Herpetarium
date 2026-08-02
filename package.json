@@ -21,7 +21,8 @@
     "db:push": "drizzle-kit push",
     "test:cluegiver-ledger": "tsx scripts/test-cluegiver-column-ledger.ts",
     "test:cross-round-v03-postmortem": "tsx scripts/test-cross-round-v03-postmortem.ts",
-    "test:cross-round-v03-repeat": "tsx scripts/test-cross-round-repeat-experiment.ts"
+    "test:cross-round-v03-repeat": "tsx scripts/test-cross-round-repeat-experiment.ts",
+    "test:export-filter-scope": "tsx scripts/test-export-filter-scope.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
