@@ -14,13 +14,19 @@ import {
   JOINT_ASSIGNMENT_DECODER_COMPILER_ID,
   JOINT_ASSIGNMENT_DECODER_POLICY_ARTIFACT,
   canonicalJson,
-  compileJointAssignmentDecoderPrompt,
   contentHash,
   sha256Hex,
+  validateCluegiverDecisionContext,
+  validateCluegiverObservation,
+  validateGuessDecisionContext,
   validateJointAssignmentAction,
   verifyBotBuildManifest,
+  verifyCluegiverBotBuildManifest,
+  verifyCluegiverObservation,
   verifyCompiledJointAssignmentDecoderPrompt,
   verifyObservationV2,
+  type CluegiverBotBuildManifest,
+  type DecryptoCluegiverObservation,
   type DecryptoObservationV2,
 } from "@shared/substrate";
 import {
@@ -38,11 +44,9 @@ import {
   composeCluegiverS1Carrier,
   cluegiverS1ProviderPayload,
   removeExplicitCandidateBlock,
-  validatePlannedCluegiverAction,
-  validatePlannedCluegiverObservationDescriptor,
+  validateCluegiverS1Action,
   verifyCluegiverS1CompilerIdentity,
   type CluegiverS1ProviderPayload,
-  type PlannedCluegiverObservationDescriptor,
 } from "./lib/decrypto-cluegiver-s1-policies";
 
 let assertions = 0;
@@ -334,6 +338,16 @@ try {
     bench.CLUEGIVER_S1_EXPECTED_ACTIONS_SOURCE_SHA256,
     "shared action-validator implementation bytes are pinned",
   );
+  equal(
+    sources.sharedCluegiverObservationImplementation.sha256,
+    bench.CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256,
+    "actual shared cluegiver observation implementation bytes are loaded and pinned",
+  );
+  equal(
+    sources.sharedCluegiverBuildImplementation.sha256,
+    bench.CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256,
+    "actual shared cluegiver BotBuild implementation bytes are loaded and pinned",
+  );
   const compilerBinding = bench.mintCluegiverS1CompilerBinding(sources);
   ok(
     verifyCluegiverS1CompilerIdentity(compilerBinding),
@@ -435,22 +449,32 @@ try {
     "corrected preregistration schema is v0.2",
   );
   equal(
-    manifest.integrationGate.dispatchStatus,
-    "blocked_pending_shared_cluegiver_contract_integration",
-    "spend remains blocked until reviewed cluegiver contracts are integrated",
+    manifest.status,
+    "provider_free_shared_contracts_satisfied",
+    "manifest truthfully records shared-contract adoption",
   );
   equal(
-    manifest.integrationGate.requiredIntegrationCommit,
-    "86207c5",
-    "integration gate names the reviewed integration commit",
+    manifest.integrationGate.status,
+    "satisfied_at_reviewed_integration_head",
+    "reviewed shared-contract integration gate is satisfied",
+  );
+  equal(
+    manifest.integrationGate.reviewedIntegrationHead,
+    "6fe13f87fb97fa0fc27e0c3ef4ea588a92471110",
+    "manifest pins the exact reviewed integration HEAD",
+  );
+  equal(
+    manifest.integrationGate.reviewedContractCommit,
+    "86207c58d10eb6ed0deb8830335249f936e11525",
+    "manifest pins the exact reviewed cluegiver-contract commit",
   );
   deepEqual(
-    manifest.integrationGate.requiredRegistryAwareCompilationGates,
-    [
-      "validateCluegiverDecisionContext(observation, cluegiverBuild)",
-      "validateGuessDecisionContext(observation, assessorBuild)",
-    ],
-    "post-rebase compilation requires both registry-aware role/build gates",
+    manifest.integrationGate.registryAwareCompilationGates,
+    {
+      cluegiver: "load_bearing_before_every_cluegiver_compilation",
+      guess: "load_bearing_before_every_guess_compilation_and_materialization",
+    },
+    "both registry-aware role/build gates are load-bearing",
   );
   equal(
     manifest.integrationGate.reviewedObservationContract.sourceSha256,
@@ -461,6 +485,16 @@ try {
     manifest.integrationGate.reviewedBuildContract.sourceSha256,
     bench.CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256,
     "reviewed cluegiver build source bytes are pinned",
+  );
+  equal(
+    manifest.integrationGate.reviewedObservationContract.adoption,
+    "actual_shared_mint_verify",
+    "cluegiver observation uses the actual shared mint/verify contract",
+  );
+  equal(
+    manifest.integrationGate.reviewedBuildContract.adoption,
+    "actual_shared_mint_verify",
+    "cluegiver build uses the actual shared mint/verify contract",
   );
   equal(
     manifest.execution.providerCallsThisRun,
@@ -517,12 +551,24 @@ try {
   equal(
     manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C0_ARM].scope,
     "cluegiver",
-    "C0 build descriptor has reviewed cluegiver scope",
+    "C0 shared build has reviewed cluegiver scope",
   );
   equal(
     manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C1_ARM].scope,
     "cluegiver",
-    "C1 build descriptor has reviewed cluegiver scope",
+    "C1 shared build has reviewed cluegiver scope",
+  );
+  ok(
+    verifyCluegiverBotBuildManifest(
+      manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C0_ARM],
+    ),
+    "C0 actual shared cluegiver BotBuild verifies",
+  );
+  ok(
+    verifyCluegiverBotBuildManifest(
+      manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C1_ARM],
+    ),
+    "C1 actual shared cluegiver BotBuild verifies",
   );
   equal(
     manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C0_ARM].compilation
@@ -611,12 +657,24 @@ try {
       `${cell.cellId} cluegiver has no dependency`,
     );
     deepEqual(
-      validatePlannedCluegiverObservationDescriptor(parent.observation),
+      validateCluegiverObservation(parent.observation),
       [],
-      `${cell.cellId} cluegiver descriptor is strict and role-complete`,
+      `${cell.cellId} actual shared cluegiver observation is role-complete`,
+    );
+    ok(
+      verifyCluegiverObservation(parent.observation),
+      `${cell.cellId} actual shared cluegiver observation verifies`,
     );
     deepEqual(
-      validatePlannedCluegiverAction(
+      validateCluegiverDecisionContext(
+        parent.observation,
+        manifest.botBuilds.cluegiverByArm[parent.arm],
+      ),
+      [],
+      `${cell.cellId} cluegiver observation resolves to its verified build`,
+    );
+    deepEqual(
+      validateCluegiverS1Action(
         {
           rationale: "private",
           clues: [...bench.CLUEGIVER_S1_CLUE_PLACEHOLDERS],
@@ -652,8 +710,25 @@ try {
         verifyObservationV2(child.blindedInput.observationTemplate),
         `${child.jobId} blinded Observation v0.2 verifies`,
       );
-      const compiled = compileJointAssignmentDecoderPrompt(
+      deepEqual(
+        child.blindedInput.parentOutputProjection.requiredBotBuildManifest,
+        {
+          id: manifest.botBuilds.assessor.id,
+          contentHash: manifest.botBuilds.assessor.contentHash,
+        },
+        `${child.jobId} materializer names the exact required assessor build`,
+      );
+      deepEqual(
+        validateGuessDecisionContext(
+          child.blindedInput.observationTemplate,
+          manifest.botBuilds.assessor,
+        ),
+        [],
+        `${child.jobId} guess observation resolves to its verified build`,
+      );
+      const compiled = bench.compileCluegiverS1AssessorPrompt(
         child.blindedInput.observationTemplate,
+        manifest.botBuilds.assessor,
       );
       ok(
         verifyCompiledJointAssignmentDecoderPrompt(
@@ -760,11 +835,13 @@ try {
     );
     const compiledC0 = compileCluegiverS1Prompt({
       observation: c0Parent.observation,
+      botBuild: manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C0_ARM],
       arm: CLUEGIVER_S1_C0_ARM,
       compiler: manifest.implementationBindings.cluegiverPromptCompiler,
     });
     const compiledC1 = compileCluegiverS1Prompt({
       observation: c1Parent.observation,
+      botBuild: manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C1_ARM],
       arm: CLUEGIVER_S1_C1_ARM,
       compiler: manifest.implementationBindings.cluegiverPromptCompiler,
     });
@@ -845,6 +922,7 @@ try {
       rationale: rationaleSentinel,
       clues: ["quartz", "feather", "summit"],
     },
+    manifest.botBuilds.assessor,
   );
   ok(verifyObservationV2(materialized), "materialized observation verifies");
   ok(
@@ -856,7 +934,10 @@ try {
     ["quartz", "feather", "summit"],
     "decoder materializer inserts only parent clue triple",
   );
-  const materializedPrompt = compileJointAssignmentDecoderPrompt(materialized);
+  const materializedPrompt = bench.compileCluegiverS1AssessorPrompt(
+    materialized,
+    manifest.botBuilds.assessor,
+  );
   ok(
     !canonicalJson(materializedPrompt).includes(rationaleSentinel),
     "parent rationale cannot enter downstream compiled prompt",
@@ -866,9 +947,70 @@ try {
       bench.materializeAssessorObservationFromParentAction(
         firstAssessor.blindedInput.observationTemplate,
         { rationale: rationaleSentinel },
+        manifest.botBuilds.assessor,
       ),
     /exactly one three-clue array/,
     "downstream materializer fails closed without a clue triple",
+  );
+  throws(
+    () =>
+      bench.compileCluegiverS1AssessorPrompt(
+        firstAssessor.blindedInput.observationTemplate,
+        undefined as unknown as typeof manifest.botBuilds.assessor,
+      ),
+    /BotBuild manifest is unresolved/,
+    "guess compiler rejects an unresolved BotBuild manifest",
+  );
+  throws(
+    () =>
+      bench.compileCluegiverS1AssessorPrompt(
+        firstAssessor.blindedInput.observationTemplate,
+        manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C0_ARM],
+      ),
+    /decoder decision requires a decoder-scope BotBuild/,
+    "guess compiler rejects a cluegiver-scope BotBuild",
+  );
+  const tamperedAssessorBuild = structuredClone(manifest.botBuilds.assessor);
+  (tamperedAssessorBuild as unknown as { contentHash: string }).contentHash =
+    "f".repeat(64);
+  throws(
+    () =>
+      bench.compileCluegiverS1AssessorPrompt(
+        firstAssessor.blindedInput.observationTemplate,
+        tamperedAssessorBuild,
+      ),
+    /BotBuild manifest must verify/,
+    "guess compiler rejects a tampered decoder BotBuild",
+  );
+  throws(
+    () =>
+      bench.materializeAssessorObservationFromParentAction(
+        firstAssessor.blindedInput.observationTemplate,
+        { rationale: "private", clues: ["quartz", "feather", "summit"] },
+        undefined as unknown as typeof manifest.botBuilds.assessor,
+      ),
+    /BotBuild manifest is unresolved/,
+    "assessor materializer rejects an unresolved BotBuild before projection",
+  );
+  throws(
+    () =>
+      bench.materializeAssessorObservationFromParentAction(
+        firstAssessor.blindedInput.observationTemplate,
+        { rationale: "private", clues: ["quartz", "feather", "summit"] },
+        manifest.botBuilds.cluegiverByArm[CLUEGIVER_S1_C0_ARM],
+      ),
+    /decoder decision requires a decoder-scope BotBuild/,
+    "assessor materializer rejects a wrong-scope BotBuild before projection",
+  );
+  throws(
+    () =>
+      bench.materializeAssessorObservationFromParentAction(
+        firstAssessor.blindedInput.observationTemplate,
+        { rationale: "private", clues: ["quartz", "feather", "summit"] },
+        tamperedAssessorBuild,
+      ),
+    /BotBuild manifest must verify/,
+    "assessor materializer rejects a tampered BotBuild before projection",
   );
 
   const firstParent = manifest.dag.jobs.find(
@@ -889,21 +1031,60 @@ try {
   (extraNestedField as unknown as { contentHash: string }).contentHash =
     contentHash(extraNestedFieldSource);
   ok(
-    validatePlannedCluegiverObservationDescriptor(
-      extraNestedField as unknown as PlannedCluegiverObservationDescriptor,
+    validateCluegiverObservation(
+      extraNestedField as unknown as DecryptoCluegiverObservation,
     ).some((problem) => problem.includes('unknown field "decodedCorrectly"')),
-    "strict local cluegiver descriptor rejects extra resolved-round fields",
+    "strict shared cluegiver observation rejects extra resolved-round fields",
   );
   throws(
     () =>
       compileCluegiverS1Prompt({
         observation:
-          extraNestedField as unknown as PlannedCluegiverObservationDescriptor,
+          extraNestedField as unknown as DecryptoCluegiverObservation,
+        botBuild: manifest.botBuilds.cluegiverByArm[firstParent.arm],
         arm: CLUEGIVER_S1_C0_ARM,
         compiler: manifest.implementationBindings.cluegiverPromptCompiler,
       }),
-    /invalid planned cluegiver observation/,
+    /cluegiver observation must verify/,
     "cluegiver compiler rejects ad-hoc nested observation shapes",
+  );
+  const firstCluegiverBuild =
+    manifest.botBuilds.cluegiverByArm[firstParent.arm];
+  throws(
+    () =>
+      compileCluegiverS1Prompt({
+        observation: firstParent.observation,
+        botBuild: undefined as unknown as CluegiverBotBuildManifest,
+        arm: firstParent.arm,
+        compiler: manifest.implementationBindings.cluegiverPromptCompiler,
+      }),
+    /BotBuild manifest is unresolved/,
+    "cluegiver compiler rejects an unresolved BotBuild manifest",
+  );
+  throws(
+    () =>
+      compileCluegiverS1Prompt({
+        observation: firstParent.observation,
+        botBuild: manifest.botBuilds.assessor,
+        arm: firstParent.arm,
+        compiler: manifest.implementationBindings.cluegiverPromptCompiler,
+      }),
+    /cluegiver decision requires a cluegiver-scope BotBuild/,
+    "cluegiver compiler rejects a decoder-scope BotBuild",
+  );
+  const tamperedCluegiverBuild = structuredClone(firstCluegiverBuild);
+  (tamperedCluegiverBuild as unknown as { contentHash: string }).contentHash =
+    "f".repeat(64);
+  throws(
+    () =>
+      compileCluegiverS1Prompt({
+        observation: firstParent.observation,
+        botBuild: tamperedCluegiverBuild,
+        arm: firstParent.arm,
+        compiler: manifest.implementationBindings.cluegiverPromptCompiler,
+      }),
+    /BotBuild manifest must verify/,
+    "cluegiver compiler rejects a tampered cluegiver BotBuild",
   );
   const forgedCompilerForCall = structuredClone(
     manifest.implementationBindings.cluegiverPromptCompiler,
@@ -914,6 +1095,7 @@ try {
     () =>
       compileCluegiverS1Prompt({
         observation: firstParent.observation,
+        botBuild: firstCluegiverBuild,
         arm: CLUEGIVER_S1_C0_ARM,
         compiler: forgedCompilerForCall,
       }),
@@ -924,6 +1106,7 @@ try {
   const firstPayload = cluegiverS1ProviderPayload(
     compileCluegiverS1Prompt({
       observation: firstParent.observation,
+      botBuild: firstCluegiverBuild,
       arm: firstParent.arm,
       compiler: manifest.implementationBindings.cluegiverPromptCompiler,
     }),
@@ -1120,8 +1303,18 @@ try {
   equal(receipt.providerCallsThisRun, 0, "receipt records zero provider calls");
   equal(
     receipt.integrationGate,
-    "blocked_pending_shared_cluegiver_contract_integration",
-    "receipt preserves the no-spend integration gate",
+    "satisfied_at_reviewed_integration_head",
+    "receipt records satisfied shared-contract integration",
+  );
+  equal(
+    receipt.reviewedCluegiverObservationSourceSha256,
+    bench.CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256,
+    "receipt pins the adopted shared cluegiver observation source",
+  );
+  equal(
+    receipt.reviewedCluegiverBuildSourceSha256,
+    bench.CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256,
+    "receipt pins the adopted shared cluegiver build source",
   );
 
   const [runnerSource, policySource] = await Promise.all([

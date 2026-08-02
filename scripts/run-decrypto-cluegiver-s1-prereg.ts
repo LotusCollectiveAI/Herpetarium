@@ -14,6 +14,8 @@ import { fileURLToPath } from "node:url";
 import {
   BOT_BUILD_MANIFEST_VERSION,
   CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT,
+  CLUEGIVER_BOT_BUILD_MANIFEST_VERSION,
+  CLUEGIVER_OBSERVATION_VERSION,
   CROSS_ROUND_COLUMN_LEAK_BLUE_2026_08_01,
   CROSS_ROUND_COLUMN_LEAK_2026_08_01,
   CROSS_ROUND_PRODUCTION_SMOKE_EVENT_PROVENANCE_2026_08_01,
@@ -28,19 +30,30 @@ import {
   contentHash,
   exactKeys,
   mintBotBuildManifest,
+  mintCluegiverBotBuildManifest,
+  mintCluegiverObservation,
   mintObservationV2,
   mintWireConfig,
   sha256Hex,
   tableCompetitiveIdentitySet,
   validateClueSubmission,
+  validateCluegiverDecisionContext,
   validateCodeGuess,
+  validateGuessDecisionContext,
   validateJointAssignmentAction,
   verifyBotBuildManifest,
+  verifyCluegiverBotBuildManifest,
+  verifyCluegiverObservation,
   verifyCompiledJointAssignmentDecoderPrompt,
   verifyObservationV2,
   type BotBuildManifest,
+  type BotBuildManifestForDecision,
+  type CluegiverBotBuildManifest,
+  type CluegiverBotBuildManifestSource,
   type CodeTriple,
   type ContentIdentityRef,
+  type DecryptoCluegiverObservation,
+  type DecryptoCluegiverObservationSource,
   type DecryptoObservationV2,
   type DecryptoObservationV2Source,
   type RequestedModelRoute,
@@ -65,10 +78,8 @@ import {
   compileCluegiverS1Prompt,
   composeCluegiverS1Carrier,
   cluegiverS1ProviderPayload,
-  validatePlannedCluegiverAction,
   type CluegiverS1Arm,
   type CluegiverS1CompilerIdentity,
-  type PlannedCluegiverObservationDescriptor,
 } from "./lib/decrypto-cluegiver-s1-policies";
 
 const MODULE_DIRECTORY = dirname(fileURLToPath(import.meta.url));
@@ -97,14 +108,23 @@ const CANDIDATE_POLICY_SOURCE_PATH = resolve(
   REPOSITORY_ROOT,
   "shared/substrate/candidatePolicy.ts",
 );
+const CLUEGIVER_OBSERVATION_SOURCE_PATH = resolve(
+  REPOSITORY_ROOT,
+  "shared/substrate/cluegiverObservation.ts",
+);
+const CLUEGIVER_BUILD_SOURCE_PATH = resolve(
+  REPOSITORY_ROOT,
+  "shared/substrate/cluegiverBotBuild.ts",
+);
 
 export const CLUEGIVER_S1_FIXTURE_VERSION =
   "decrypto-cluegiver-s1-positions@0.2.0";
 export const CLUEGIVER_S1_PREREGISTRATION_VERSION =
   "decrypto-cluegiver-s1-preregistration@0.2.0";
 export const CLUEGIVER_S1_BASE_COMMIT =
-  "b23ea40210dddbfea73b57de5f5820857f63293c";
-export const CLUEGIVER_S1_REQUIRED_INTEGRATION_COMMIT = "86207c5";
+  "6fe13f87fb97fa0fc27e0c3ef4ea588a92471110";
+export const CLUEGIVER_S1_REVIEWED_CONTRACT_COMMIT =
+  "86207c58d10eb6ed0deb8830335249f936e11525";
 export const CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256 =
   "d4ff0ba4f6205c6740236b66643ce3e9a58dbd2720094cbd36d07bd1f589a106";
 export const CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256 =
@@ -281,6 +301,8 @@ export interface CluegiverS1SourceIdentities {
   readonly jointAssignmentCompilerImplementation: SourceByteIdentity;
   readonly sharedActionsImplementation: SourceByteIdentity;
   readonly sharedCandidatePolicyImplementation: SourceByteIdentity;
+  readonly sharedCluegiverObservationImplementation: SourceByteIdentity;
+  readonly sharedCluegiverBuildImplementation: SourceByteIdentity;
 }
 
 export interface CluegiverS1CompilerBinding extends CluegiverS1CompilerIdentity {
@@ -770,12 +792,16 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
     jointAssignmentBytes,
     actionsBytes,
     candidatePolicyBytes,
+    cluegiverObservationBytes,
+    cluegiverBuildBytes,
   ] = await Promise.all([
     readFile(SOURCE_RANGE_FIXTURE_PATH, "utf8"),
     readFile(POLICY_IMPLEMENTATION_PATH, "utf8"),
     readFile(JOINT_ASSIGNMENT_SOURCE_PATH, "utf8"),
     readFile(ACTIONS_SOURCE_PATH, "utf8"),
     readFile(CANDIDATE_POLICY_SOURCE_PATH, "utf8"),
+    readFile(CLUEGIVER_OBSERVATION_SOURCE_PATH, "utf8"),
+    readFile(CLUEGIVER_BUILD_SOURCE_PATH, "utf8"),
   ]);
   const extractedInstruction =
     extractTable7ddeInstructionFromSourceRange(sourceRangeBytes);
@@ -803,6 +829,14 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
       "shared/substrate/candidatePolicy.ts",
       candidatePolicyBytes,
     ),
+    sharedCluegiverObservationImplementation: sourceByteIdentity(
+      "shared/substrate/cluegiverObservation.ts",
+      cluegiverObservationBytes,
+    ),
+    sharedCluegiverBuildImplementation: sourceByteIdentity(
+      "shared/substrate/cluegiverBotBuild.ts",
+      cluegiverBuildBytes,
+    ),
   };
   if (
     identities.exactTable7ddeRange.sha256 !==
@@ -819,9 +853,15 @@ export async function loadCluegiverS1SourceIdentities(): Promise<CluegiverS1Sour
     identities.jointAssignmentCompilerImplementation.sha256 !==
       CLUEGIVER_S1_EXPECTED_JOINT_ASSIGNMENT_SOURCE_SHA256 ||
     identities.sharedActionsImplementation.sha256 !==
-      CLUEGIVER_S1_EXPECTED_ACTIONS_SOURCE_SHA256
+      CLUEGIVER_S1_EXPECTED_ACTIONS_SOURCE_SHA256 ||
+    identities.sharedCluegiverObservationImplementation.sha256 !==
+      CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256 ||
+    identities.sharedCluegiverBuildImplementation.sha256 !==
+      CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256
   ) {
-    throw new Error("shared assessor compiler/action source bytes drifted");
+    throw new Error(
+      "reviewed shared assessor/cluegiver contract source bytes drifted",
+    );
   }
   return cloneAndDeepFreeze(identities);
 }
@@ -923,7 +963,7 @@ function implementationBindings(
     cluegiverPromptCompiler: mintCluegiverS1CompilerBinding(sources),
     cluegiverActionValidator: implementationIdentity(
       "cluegiver-s1-action-validator@0.2.0",
-      ["validatePlannedCluegiverAction", "validateClueSubmission"],
+      ["validateCluegiverS1Action", "validateClueSubmission"],
       [
         sources.experimentCompilerImplementation,
         sources.sharedActionsImplementation,
@@ -1040,36 +1080,10 @@ function mintAssessorBotBuild(
   return manifest;
 }
 
-export interface PlannedCluegiverBotBuild {
-  readonly manifestVersion: "cluegiver-0.1";
-  readonly name: string;
-  readonly version: "0.1.0";
-  readonly game: "decrypto";
-  readonly scope: "cluegiver";
-  readonly strategyArtifact: ContentIdentityRef;
-  readonly compilation: {
-    readonly strategyCompiler: ContentIdentityRef;
-    readonly contextCompiler: ContentIdentityRef;
-    readonly candidatePolicy: ContentIdentityRef;
-    readonly actionContract: ContentIdentityRef;
-    readonly promptAssembler: ContentIdentityRef;
-    readonly compiledCarrier: ContentIdentityRef;
-  };
-  readonly execution: ReturnType<typeof sharedExecutionIdentities>;
-  readonly requestedRoute: RequestedModelRoute;
-  readonly gameplay: ReturnType<typeof tableCompetitiveIdentitySet>;
-  readonly provenance: {
-    readonly origin: string;
-    readonly mintedAt: string;
-  };
-  readonly id: string;
-  readonly contentHash: string;
-}
-
-function mintPlannedCluegiverBuild(
+function mintCluegiverS1BotBuild(
   arm: CluegiverS1Arm,
   bindings: CluegiverS1ImplementationBindings,
-): PlannedCluegiverBotBuild {
+): CluegiverBotBuildManifest {
   const name =
     arm === CLUEGIVER_S1_C0_ARM
       ? "decrypto-s1-cluegiver-c0"
@@ -1078,8 +1092,8 @@ function mintPlannedCluegiverBuild(
     arm === CLUEGIVER_S1_C0_ARM
       ? CLUEGIVER_S1_NO_EXPLICIT_CANDIDATE_POLICY
       : CIPHER_ENCRYPT_CANDIDATE_POLICY_ARTIFACT;
-  const source: Omit<PlannedCluegiverBotBuild, "id" | "contentHash"> = {
-    manifestVersion: "cluegiver-0.1" as const,
+  const source: CluegiverBotBuildManifestSource = {
+    manifestVersion: CLUEGIVER_BOT_BUILD_MANIFEST_VERSION,
     name,
     version: "0.1.0" as const,
     game: "decrypto" as const,
@@ -1122,15 +1136,15 @@ function mintPlannedCluegiverBuild(
     gameplay: tableCompetitiveIdentitySet(),
     provenance: {
       origin:
-        "provider-free S1 preregistration descriptor pending reviewed shared cluegiver contract integration",
+        "provider-free S1 preregistration with shared cluegiver contracts",
       mintedAt: "2026-08-02T00:00:00.000Z",
     },
   };
-  return cloneAndDeepFreeze({
-    ...source,
-    id: `cluegiver:${name}@0.1.0`,
-    contentHash: contentHash(source),
-  });
+  const manifest = mintCluegiverBotBuildManifest(source);
+  if (!verifyCluegiverBotBuildManifest(manifest)) {
+    throw new Error(`${arm} shared cluegiver BotBuild failed verification`);
+  }
+  return manifest;
 }
 
 function resolvedCluegiverSide(
@@ -1144,12 +1158,12 @@ function resolvedCluegiverSide(
   };
 }
 
-function mintPlannedCluegiverObservation(
+function mintCluegiverS1Observation(
   position: CluegiverS1Position,
-  build: PlannedCluegiverBotBuild,
-): PlannedCluegiverObservationDescriptor {
-  const source: Omit<PlannedCluegiverObservationDescriptor, "contentHash"> = {
-    observationVersion: "cluegiver-0.1" as const,
+  build: CluegiverBotBuildManifest,
+): DecryptoCluegiverObservation {
+  const source: DecryptoCluegiverObservationSource = {
+    observationVersion: CLUEGIVER_OBSERVATION_VERSION,
     decisionId: `s1-cluegiver:${position.positionId}`,
     logicalActionKey: `s1-clue-action:${position.positionId}:round-2`,
     gameId: position.gameId,
@@ -1182,10 +1196,19 @@ function mintPlannedCluegiverObservation(
       "Choose three legal strategic clues for the live round-two code.",
     transcript: [] as const,
   };
-  return cloneAndDeepFreeze({
-    ...source,
-    contentHash: contentHash(source),
-  });
+  const observation = mintCluegiverObservation(source);
+  if (!verifyCluegiverObservation(observation)) {
+    throw new Error(
+      `${observation.decisionId} shared cluegiver observation failed verification`,
+    );
+  }
+  const contextProblems = validateCluegiverDecisionContext(observation, build);
+  if (contextProblems.length > 0) {
+    throw new Error(
+      `${observation.decisionId} cluegiver decision context failed: ${contextProblems.join("; ")}`,
+    );
+  }
+  return observation;
 }
 
 function resolvedAssessorSide(
@@ -1280,13 +1303,54 @@ function mintAssessorObservationTemplate(input: {
   if (!verifyObservationV2(observation)) {
     throw new Error(`${decisionId} observation template failed verification`);
   }
+  const contextProblems = validateGuessDecisionContext(
+    observation,
+    assessorBuild,
+  );
+  if (contextProblems.length > 0) {
+    throw new Error(
+      `${decisionId} guess decision context failed: ${contextProblems.join("; ")}`,
+    );
+  }
   return observation;
+}
+
+export function compileCluegiverS1AssessorPrompt(
+  observation: DecryptoObservationV2,
+  assessorBuild: BotBuildManifestForDecision,
+) {
+  const contextProblems = validateGuessDecisionContext(
+    observation,
+    assessorBuild,
+  );
+  if (contextProblems.length > 0) {
+    throw new Error(
+      `invalid S1 guess decision context: ${contextProblems.join("; ")}`,
+    );
+  }
+  const compiled = compileJointAssignmentDecoderPrompt(observation);
+  if (!verifyCompiledJointAssignmentDecoderPrompt(compiled, observation)) {
+    throw new Error(
+      `${observation.decisionId} joint-assignment prompt failed verification`,
+    );
+  }
+  return compiled;
 }
 
 export function materializeAssessorObservationFromParentAction(
   template: DecryptoObservationV2,
   parentAction: unknown,
+  assessorBuild: BotBuildManifestForDecision,
 ): DecryptoObservationV2 {
+  const templateContextProblems = validateGuessDecisionContext(
+    template,
+    assessorBuild,
+  );
+  if (templateContextProblems.length > 0) {
+    throw new Error(
+      `cannot materialize invalid S1 guess decision context: ${templateContextProblems.join("; ")}`,
+    );
+  }
   const record = recordValue(parentAction);
   if (
     !Array.isArray(record?.clues) ||
@@ -1303,7 +1367,17 @@ export function materializeAssessorObservationFromParentAction(
     opponentClues:
       template.role === "interceptor" ? clues : [...template.opponentClues],
   };
-  return mintObservationV2(materialized);
+  const observation = mintObservationV2(materialized);
+  const materializedContextProblems = validateGuessDecisionContext(
+    observation,
+    assessorBuild,
+  );
+  if (materializedContextProblems.length > 0) {
+    throw new Error(
+      `materialized S1 guess decision context failed: ${materializedContextProblems.join("; ")}`,
+    );
+  }
+  return observation;
 }
 
 export function historyStrataForPosition(
@@ -1415,7 +1489,7 @@ export interface CluegiverS1ParentJob extends BaseDryRunJob {
   readonly promptCompiler: ContentIdentityRef;
   readonly actionContract: ContentIdentityRef;
   readonly actionValidator: ContentIdentityRef;
-  readonly observation: PlannedCluegiverObservationDescriptor;
+  readonly observation: DecryptoCluegiverObservation;
   readonly compiledPrompt: {
     readonly id: string;
     readonly contentHash: string;
@@ -1448,6 +1522,7 @@ export interface CluegiverS1AssessorJob extends BaseDryRunJob {
       readonly include: readonly ["clues"];
       readonly exclude: readonly ["rationale"];
       readonly materializer: "materializeAssessorObservationFromParentAction";
+      readonly requiredBotBuildManifest: ContentIdentityRef;
     };
   };
   readonly compiledPromptTemplate: {
@@ -1479,26 +1554,26 @@ export interface CluegiverS1DryRunCell {
 
 export interface CluegiverS1Preregistration {
   readonly preregistrationVersion: typeof CLUEGIVER_S1_PREREGISTRATION_VERSION;
-  readonly status: "provider_free_descriptor_only";
+  readonly status: "provider_free_shared_contracts_satisfied";
   readonly baseCommit: typeof CLUEGIVER_S1_BASE_COMMIT;
   readonly integrationGate: {
-    readonly dispatchStatus: "blocked_pending_shared_cluegiver_contract_integration";
-    readonly requiredIntegrationCommit: typeof CLUEGIVER_S1_REQUIRED_INTEGRATION_COMMIT;
+    readonly status: "satisfied_at_reviewed_integration_head";
+    readonly reviewedIntegrationHead: typeof CLUEGIVER_S1_BASE_COMMIT;
+    readonly reviewedContractCommit: typeof CLUEGIVER_S1_REVIEWED_CONTRACT_COMMIT;
     readonly reviewedObservationContract: {
       readonly version: "cluegiver-0.1";
       readonly sourceSha256: typeof CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256;
-      readonly localRepresentation: "exact_shape_descriptor";
+      readonly adoption: "actual_shared_mint_verify";
     };
     readonly reviewedBuildContract: {
       readonly version: "cluegiver-0.1";
       readonly sourceSha256: typeof CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256;
-      readonly localRepresentation: "exact_shape_descriptor";
+      readonly adoption: "actual_shared_mint_verify";
     };
-    readonly requiredRegistryAwareCompilationGates: readonly [
-      "validateCluegiverDecisionContext(observation, cluegiverBuild)",
-      "validateGuessDecisionContext(observation, assessorBuild)",
-    ];
-    readonly beforeSpend: "rebase_or_cherry_pick_then_replace_descriptor_minting_with_actual_shared_imports_and_re_review";
+    readonly registryAwareCompilationGates: {
+      readonly cluegiver: "load_bearing_before_every_cluegiver_compilation";
+      readonly guess: "load_bearing_before_every_guess_compilation_and_materialization";
+    };
   };
   readonly fixture: {
     readonly version: typeof CLUEGIVER_S1_FIXTURE_VERSION;
@@ -1528,7 +1603,7 @@ export interface CluegiverS1Preregistration {
   readonly botBuilds: {
     readonly assessor: BotBuildManifest;
     readonly cluegiverByArm: Readonly<
-      Record<CluegiverS1Arm, PlannedCluegiverBotBuild>
+      Record<CluegiverS1Arm, CluegiverBotBuildManifest>
     >;
   };
   readonly route: typeof CLUEGIVER_S1_ROUTE_PLAN;
@@ -1563,6 +1638,7 @@ export interface CluegiverS1Preregistration {
     readonly parentRationaleVisibleDownstream: false;
     readonly childObservationTemplatesVerify: true;
     readonly sharedAssessorPolicyCompilerAndValidator: true;
+    readonly sharedRegistryAwareDecisionContexts: true;
     readonly providerInvocations: 0;
     readonly c2Jobs: 0;
   };
@@ -1599,7 +1675,7 @@ function buildCell(input: {
   readonly position: CluegiverS1Position;
   readonly arm: CluegiverS1Arm;
   readonly bindings: CluegiverS1ImplementationBindings;
-  readonly cluegiverBuild: PlannedCluegiverBotBuild;
+  readonly cluegiverBuild: CluegiverBotBuildManifest;
   readonly assessorBuild: BotBuildManifest;
 }): {
   readonly cell: CluegiverS1DryRunCell;
@@ -1616,21 +1692,13 @@ function buildCell(input: {
   const orderingKey = makeCellOrderingKey(position.positionId, arm);
   const cellId = `s1-cell:${orderingKey.slice(0, 20)}`;
   const parentJobId = `${cellId}:cluegiver`;
-  const cluegiverObservation = mintPlannedCluegiverObservation(
+  const cluegiverObservation = mintCluegiverS1Observation(
     position,
     cluegiverBuild,
   );
-  if (
-    cluegiverObservation.identities.botBuild.id !== cluegiverBuild.id ||
-    cluegiverObservation.identities.botBuild.contentHash !==
-      cluegiverBuild.contentHash
-  ) {
-    throw new Error(
-      `${cellId} cluegiver observation/build registry binding failed`,
-    );
-  }
   const compiledParent = compileCluegiverS1Prompt({
     observation: cluegiverObservation,
+    botBuild: cluegiverBuild,
     arm,
     compiler: bindings.cluegiverPromptCompiler,
   });
@@ -1685,21 +1753,10 @@ function buildCell(input: {
         replication: typedReplication,
         assessorBuild,
       });
-      if (
-        observation.identities.botBuild.id !== assessorBuild.id ||
-        observation.identities.botBuild.contentHash !==
-          assessorBuild.contentHash
-      ) {
-        throw new Error(
-          `${cellId} ${role} replication ${replication} observation/build registry binding failed`,
-        );
-      }
-      const compiled = compileJointAssignmentDecoderPrompt(observation);
-      if (!verifyCompiledJointAssignmentDecoderPrompt(compiled, observation)) {
-        throw new Error(
-          `${cellId} ${role} replication ${replication} prompt failed`,
-        );
-      }
+      const compiled = compileCluegiverS1AssessorPrompt(
+        observation,
+        assessorBuild,
+      );
       const jobId = assessorJobId(parentJobId, role, typedReplication);
       children.push({
         ordinal: 0,
@@ -1735,6 +1792,10 @@ function buildCell(input: {
             include: ["clues"],
             exclude: ["rationale"],
             materializer: "materializeAssessorObservationFromParentAction",
+            requiredBotBuildManifest: {
+              id: assessorBuild.id,
+              contentHash: assessorBuild.contentHash,
+            },
           },
         },
         compiledPromptTemplate: {
@@ -1789,11 +1850,11 @@ export async function buildCluegiverS1Preregistration(
   const bindings = implementationBindings(sources);
   const assessorBuild = mintAssessorBotBuild(bindings);
   const cluegiverByArm = {
-    [CLUEGIVER_S1_C0_ARM]: mintPlannedCluegiverBuild(
+    [CLUEGIVER_S1_C0_ARM]: mintCluegiverS1BotBuild(
       CLUEGIVER_S1_C0_ARM,
       bindings,
     ),
-    [CLUEGIVER_S1_C1_ARM]: mintPlannedCluegiverBuild(
+    [CLUEGIVER_S1_C1_ARM]: mintCluegiverS1BotBuild(
       CLUEGIVER_S1_C1_ARM,
       bindings,
     ),
@@ -1830,31 +1891,31 @@ export async function buildCluegiverS1Preregistration(
     {
       preregistrationVersion:
         CLUEGIVER_S1_PREREGISTRATION_VERSION as typeof CLUEGIVER_S1_PREREGISTRATION_VERSION,
-      status: "provider_free_descriptor_only" as const,
+      status: "provider_free_shared_contracts_satisfied" as const,
       baseCommit: CLUEGIVER_S1_BASE_COMMIT as typeof CLUEGIVER_S1_BASE_COMMIT,
       integrationGate: {
-        dispatchStatus:
-          "blocked_pending_shared_cluegiver_contract_integration" as const,
-        requiredIntegrationCommit:
-          CLUEGIVER_S1_REQUIRED_INTEGRATION_COMMIT as typeof CLUEGIVER_S1_REQUIRED_INTEGRATION_COMMIT,
+        status: "satisfied_at_reviewed_integration_head" as const,
+        reviewedIntegrationHead:
+          CLUEGIVER_S1_BASE_COMMIT as typeof CLUEGIVER_S1_BASE_COMMIT,
+        reviewedContractCommit:
+          CLUEGIVER_S1_REVIEWED_CONTRACT_COMMIT as typeof CLUEGIVER_S1_REVIEWED_CONTRACT_COMMIT,
         reviewedObservationContract: {
           version: "cluegiver-0.1" as const,
           sourceSha256:
             CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256 as typeof CLUEGIVER_S1_REVIEWED_CLUEGIVER_OBSERVATION_SHA256,
-          localRepresentation: "exact_shape_descriptor" as const,
+          adoption: "actual_shared_mint_verify" as const,
         },
         reviewedBuildContract: {
           version: "cluegiver-0.1" as const,
           sourceSha256:
             CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256 as typeof CLUEGIVER_S1_REVIEWED_CLUEGIVER_BUILD_SHA256,
-          localRepresentation: "exact_shape_descriptor" as const,
+          adoption: "actual_shared_mint_verify" as const,
         },
-        requiredRegistryAwareCompilationGates: [
-          "validateCluegiverDecisionContext(observation, cluegiverBuild)",
-          "validateGuessDecisionContext(observation, assessorBuild)",
-        ] as const,
-        beforeSpend:
-          "rebase_or_cherry_pick_then_replace_descriptor_minting_with_actual_shared_imports_and_re_review" as const,
+        registryAwareCompilationGates: {
+          cluegiver: "load_bearing_before_every_cluegiver_compilation" as const,
+          guess:
+            "load_bearing_before_every_guess_compilation_and_materialization" as const,
+        },
       },
       fixture: {
         version: CLUEGIVER_S1_FIXTURE_VERSION,
@@ -1924,6 +1985,7 @@ export async function buildCluegiverS1Preregistration(
         parentRationaleVisibleDownstream: false as const,
         childObservationTemplatesVerify: true as const,
         sharedAssessorPolicyCompilerAndValidator: true as const,
+        sharedRegistryAwareDecisionContexts: true as const,
         providerInvocations: 0 as const,
         c2Jobs: 0 as const,
       },
@@ -1968,7 +2030,7 @@ async function main(): Promise<void> {
     canonicalJson({
       preregistrationVersion: preregistration.preregistrationVersion,
       status: preregistration.status,
-      integrationGate: preregistration.integrationGate.dispatchStatus,
+      integrationGate: preregistration.integrationGate.status,
       positions: preregistration.fixture.positionCount,
       cells: preregistration.dag.cellCount,
       jobs: preregistration.dag.jobs.length,

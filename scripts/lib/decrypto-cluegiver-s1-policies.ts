@@ -28,12 +28,13 @@ import {
   contentHash,
   exactKeys,
   sha256Hex,
-  validateCodeGuess,
+  validateCluegiverDecisionContext,
   validateClueSubmission,
-  validateExactContentIdentityRef,
-  validateTableCompetitiveIdentities,
+  verifyCluegiverObservation,
+  type BotBuildManifestForDecision,
   type CodeTriple,
   type ContentIdentityRef,
+  type DecryptoCluegiverObservation,
 } from "@shared/substrate";
 
 export const CLUEGIVER_S1_C0_ARM = "c0_implicit_old_instruction";
@@ -251,63 +252,6 @@ export interface CluegiverS1CompilerIdentity extends ContentIdentityRef {
   };
 }
 
-export interface PlannedCluegiverObservationDescriptor {
-  readonly observationVersion: "cluegiver-0.1";
-  readonly decisionId: string;
-  readonly logicalActionKey: string;
-  readonly gameId: string;
-  readonly roundNumber: 2;
-  readonly actor: {
-    readonly actorId: string;
-    readonly seatId: string;
-    readonly seatRole: "agent_b";
-    readonly team: string;
-    readonly role: "cluegiver";
-  };
-  readonly activeCluegiverSeatId: string;
-  readonly identities: {
-    readonly botBuild: ContentIdentityRef;
-    readonly protocol: ContentIdentityRef;
-    readonly visibility: ContentIdentityRef;
-    readonly rules: ContentIdentityRef;
-  };
-  readonly role: "cluegiver";
-  readonly team: string;
-  readonly ownKeywords: [string, string, string, string];
-  readonly code: CodeTriple;
-  readonly resolvedRounds: readonly [
-    {
-      readonly roundNumber: 1;
-      readonly own: {
-        readonly clues: [string, string, string];
-        readonly code: CodeTriple;
-        readonly ownDecode: CodeTriple;
-        readonly intercept: null;
-      };
-      readonly opponent: {
-        readonly clues: [string, string, string];
-        readonly code: CodeTriple;
-        readonly ownDecode: CodeTriple;
-        readonly intercept: null;
-      };
-    },
-  ];
-  readonly tokens: {
-    readonly own: {
-      readonly intercepts: number;
-      readonly miscommunications: number;
-    };
-    readonly opponent: {
-      readonly intercepts: number;
-      readonly miscommunications: number;
-    };
-  };
-  readonly teamChatVisibility: "open" | "private";
-  readonly decisionFocus: string;
-  readonly transcript: readonly [];
-  readonly contentHash: string;
-}
-
 function nonEmpty(value: unknown): boolean {
   return typeof value === "string" && value.trim() !== "";
 }
@@ -382,212 +326,6 @@ export function verifyCluegiverS1CompilerIdentity(
   }
 }
 
-function cluegiverSideProblems(
-  value: PlannedCluegiverObservationDescriptor["resolvedRounds"][0]["own"],
-  label: string,
-): string[] {
-  const problems = exactKeys(
-    value,
-    ["clues", "code", "ownDecode", "intercept"],
-    label,
-  );
-  if (
-    !Array.isArray(value?.clues) ||
-    value.clues.length !== 3 ||
-    !value.clues.every(nonEmpty)
-  ) {
-    problems.push(`${label}.clues must contain exactly three words`);
-  }
-  problems.push(
-    ...validateCodeGuess(value?.code).map(
-      (problem) => `${label}.code: ${problem}`,
-    ),
-    ...validateCodeGuess(value?.ownDecode).map(
-      (problem) => `${label}.ownDecode: ${problem}`,
-    ),
-  );
-  if (value?.intercept !== null) {
-    problems.push(`${label}.intercept must be null in round 1`);
-  }
-  return problems;
-}
-
-export function validatePlannedCluegiverObservationDescriptor(
-  observation: PlannedCluegiverObservationDescriptor,
-): string[] {
-  const problems = [
-    ...exactKeys(
-      observation,
-      [
-        "observationVersion",
-        "decisionId",
-        "logicalActionKey",
-        "gameId",
-        "roundNumber",
-        "actor",
-        "activeCluegiverSeatId",
-        "identities",
-        "role",
-        "team",
-        "ownKeywords",
-        "code",
-        "resolvedRounds",
-        "tokens",
-        "teamChatVisibility",
-        "decisionFocus",
-        "transcript",
-        "contentHash",
-      ],
-      "planned cluegiver observation",
-    ),
-    ...exactKeys(
-      observation?.actor,
-      ["actorId", "seatId", "seatRole", "team", "role"],
-      "planned cluegiver actor",
-    ),
-    ...exactKeys(
-      observation?.identities,
-      ["botBuild", "protocol", "visibility", "rules"],
-      "planned cluegiver identities",
-    ),
-    ...validateExactContentIdentityRef(
-      observation?.identities?.botBuild,
-      "planned cluegiver identities.botBuild",
-    ),
-    ...validateTableCompetitiveIdentities(
-      {
-        protocol: observation?.identities?.protocol,
-        visibility: observation?.identities?.visibility,
-        rules: observation?.identities?.rules,
-      },
-      "planned cluegiver identities",
-    ),
-  ];
-  if (
-    observation?.observationVersion !== "cluegiver-0.1" ||
-    observation?.roundNumber !== 2 ||
-    observation?.role !== "cluegiver"
-  ) {
-    problems.push(
-      "planned cluegiver observation must be cluegiver-0.1 round-2 cluegiver",
-    );
-  }
-  for (const [label, value] of [
-    ["decisionId", observation?.decisionId],
-    ["logicalActionKey", observation?.logicalActionKey],
-    ["gameId", observation?.gameId],
-    ["team", observation?.team],
-    ["decisionFocus", observation?.decisionFocus],
-    ["actor.actorId", observation?.actor?.actorId],
-    ["actor.seatId", observation?.actor?.seatId],
-  ] as const) {
-    if (!nonEmpty(value)) problems.push(`${label} is required`);
-  }
-  if (
-    observation?.actor?.seatRole !== "agent_b" ||
-    observation?.actor?.role !== "cluegiver" ||
-    observation?.actor?.team !== observation?.team ||
-    observation?.actor?.seatId !== observation?.activeCluegiverSeatId
-  ) {
-    problems.push("planned cluegiver actor/rotation binding is invalid");
-  }
-  if (
-    !Array.isArray(observation?.ownKeywords) ||
-    observation.ownKeywords.length !== 4 ||
-    !observation.ownKeywords.every(nonEmpty) ||
-    new Set(
-      observation.ownKeywords.map((keyword) =>
-        keyword.trim().toLocaleLowerCase("en-US"),
-      ),
-    ).size !== 4
-  ) {
-    problems.push("planned cluegiver ownKeywords must be four distinct words");
-  }
-  problems.push(
-    ...validateCodeGuess(observation?.code).map(
-      (problem) => `planned cluegiver code: ${problem}`,
-    ),
-  );
-  if (
-    !Array.isArray(observation?.resolvedRounds) ||
-    observation.resolvedRounds.length !== 1
-  ) {
-    problems.push("planned cluegiver history must contain exactly round 1");
-  } else {
-    const round = observation.resolvedRounds[0]!;
-    problems.push(
-      ...exactKeys(
-        round,
-        ["roundNumber", "own", "opponent"],
-        "planned cluegiver round 1",
-      ),
-      ...cluegiverSideProblems(round.own, "planned cluegiver round 1 own"),
-      ...cluegiverSideProblems(
-        round.opponent,
-        "planned cluegiver round 1 opponent",
-      ),
-    );
-    if (round.roundNumber !== 1) {
-      problems.push("planned cluegiver resolved history must start at round 1");
-    }
-    const same = (left: CodeTriple, right: CodeTriple) =>
-      left.every((digit, index) => digit === right[index]);
-    const expectedTokens = {
-      own: {
-        intercepts: 0,
-        miscommunications: same(round.own.code, round.own.ownDecode) ? 0 : 1,
-      },
-      opponent: {
-        intercepts: 0,
-        miscommunications: same(round.opponent.code, round.opponent.ownDecode)
-          ? 0
-          : 1,
-      },
-    };
-    if (canonicalJson(observation.tokens) !== canonicalJson(expectedTokens)) {
-      problems.push("planned cluegiver tokens must derive from full history");
-    }
-  }
-  problems.push(
-    ...exactKeys(
-      observation?.tokens,
-      ["own", "opponent"],
-      "planned cluegiver tokens",
-    ),
-    ...exactKeys(
-      observation?.tokens?.own,
-      ["intercepts", "miscommunications"],
-      "planned cluegiver own tokens",
-    ),
-    ...exactKeys(
-      observation?.tokens?.opponent,
-      ["intercepts", "miscommunications"],
-      "planned cluegiver opponent tokens",
-    ),
-  );
-  if (
-    observation?.teamChatVisibility !== "private" &&
-    observation?.teamChatVisibility !== "open"
-  ) {
-    problems.push("planned cluegiver teamChatVisibility must be private|open");
-  }
-  if (
-    !Array.isArray(observation?.transcript) ||
-    observation.transcript.length !== 0
-  ) {
-    problems.push("S1 planned cluegiver transcript must remain empty");
-  }
-  try {
-    const { contentHash: recorded, ...source } = observation;
-    if (contentHash(source) !== recorded) {
-      problems.push("planned cluegiver observation contentHash drifted");
-    }
-  } catch {
-    problems.push("planned cluegiver observation contentHash failed closed");
-  }
-  return problems;
-}
-
 export interface CluegiverS1PositionForCompiler {
   readonly positionId: string;
   readonly ownKeywords: readonly [string, string, string, string];
@@ -657,7 +395,7 @@ export function removeExplicitCandidateBlock(carrier: string): string {
 }
 
 function renderCluegiverUserPrompt(
-  observation: PlannedCluegiverObservationDescriptor,
+  observation: DecryptoCluegiverObservation,
   arm: CluegiverS1Arm,
 ): string {
   const position: CluegiverS1PositionForCompiler = {
@@ -711,16 +449,21 @@ export interface CompiledCluegiverS1Prompt {
 }
 
 export function compileCluegiverS1Prompt(input: {
-  readonly observation: PlannedCluegiverObservationDescriptor;
+  readonly observation: DecryptoCluegiverObservation;
+  readonly botBuild: BotBuildManifestForDecision;
   readonly arm: CluegiverS1Arm;
   readonly compiler: CluegiverS1CompilerIdentity;
 }): CompiledCluegiverS1Prompt {
-  const observationProblems = validatePlannedCluegiverObservationDescriptor(
+  if (!verifyCluegiverObservation(input.observation)) {
+    throw new Error("S1 cluegiver observation must verify");
+  }
+  const decisionContextProblems = validateCluegiverDecisionContext(
     input.observation,
+    input.botBuild,
   );
-  if (observationProblems.length > 0) {
+  if (decisionContextProblems.length > 0) {
     throw new Error(
-      `invalid planned cluegiver observation: ${observationProblems.join("; ")}`,
+      `invalid S1 cluegiver decision context: ${decisionContextProblems.join("; ")}`,
     );
   }
   if (!verifyCluegiverS1CompilerIdentity(input.compiler)) {
@@ -808,9 +551,9 @@ export function assertCluegiverS1ProviderPayload(
   if (problems.length > 0) throw new Error(problems.join("; "));
 }
 
-export function validatePlannedCluegiverAction(
+export function validateCluegiverS1Action(
   action: unknown,
-  observation: PlannedCluegiverObservationDescriptor,
+  observation: DecryptoCluegiverObservation,
 ): string[] {
   const record =
     action !== null && typeof action === "object"

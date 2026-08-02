@@ -1,24 +1,28 @@
 # Decrypto S1 paired cluegiver mechanism canary — provider-free preregistration
 
-**Status:** deterministic descriptor-only dry run. It executes zero provider
-calls, has no dispatcher, records no behavioral outcomes, licenses no spend,
-and supports no strategic-strength, efficacy, seating, or promotion claim.
+**Status:** deterministic provider-free dry run with the reviewed shared
+cluegiver contracts adopted. It executes zero provider calls, has no
+dispatcher, records no behavioral outcomes, licenses no spend, and supports no
+strategic-strength, efficacy, seating, or promotion claim.
 
 **Base:** Herpetarium
-`b23ea40210dddbfea73b57de5f5820857f63293c`.
+`6fe13f87fb97fa0fc27e0c3ef4ea588a92471110`, including reviewed
+cluegiver-contract commit
+`86207c58d10eb6ed0deb8830335249f936e11525`.
 
-**Blocking integration gate:** before any provider dispatch, this branch must
-rebase onto or cherry-pick reviewed shared cluegiver-contract integration
-commit `86207c5` (or a reviewed descendant). The experiment-local exact-shape
-descriptors must then be replaced with actual shared
-`mintCluegiverObservation` / `verifyCluegiverObservation` and
-`mintCluegiverBotBuildManifest` / `verifyCluegiverBotBuildManifest` imports.
-Both registry-aware role/build gates must be load-bearing before compilation:
+**Shared-contract integration is satisfied.** The scaffold now uses the actual
+shared `mintCluegiverObservation` / `verifyCluegiverObservation` and
+`mintCluegiverBotBuildManifest` / `verifyCluegiverBotBuildManifest`
+implementations. The registry-aware role/build gates are load-bearing:
 
-- `validateCluegiverDecisionContext(observation, cluegiverBuild)`;
-- `validateGuessDecisionContext(observation, assessorBuild)`.
+- `validateCluegiverDecisionContext` runs before every cluegiver compilation;
+- `validateGuessDecisionContext` runs before every decoder/interceptor
+  compilation and before and after parent-clue materialization.
 
-The reviewed cluegiver source bytes are pinned now:
+Unresolved, wrong-scope, and tampered manifests fail closed in adversarial
+tests. Provider dispatch remains independently unlicensed because this
+provider-free scaffold contains no dispatcher, not because shared-contract
+integration is pending. The exact reviewed source bytes are pinned:
 
 - `shared/substrate/cluegiverObservation.ts`:
   `d4ff0ba4f6205c6740236b66643ce3e9a58dbd2720094cbd36d07bd1f589a106`;
@@ -166,14 +170,21 @@ prompt, renderer, column-ledger helpers, and compiler verification:
 The shared action source is independently pinned at
 `4ddba7a357ebccaf590cdddcf595049ba9f2ed6a4472b00853d6cb43d5c871e1`.
 
-The local cluegiver compiler is strict even before integration: it rejects
-unknown nested resolved-round fields, recomputes the observation content hash,
-checks Table protocol identities, and rejects ad-hoc compiler hashes. Its
-compiler identity binds the exact implementation bytes containing its system
-prompt, renderer, carrier helpers, action validator bridge, and compiler:
-`624079a69db342ad82f3f50a4db351220ebdba9ebf781e4d2f590afbb1da9686`.
-This local validation does not waive the shared-contract and registry gates
-above.
+The cluegiver compiler consumes the actual shared observation and BotBuild
+types. It verifies the observation, resolves the observation's build reference
+through `validateCluegiverDecisionContext`, and rejects unknown nested
+resolved-round fields, tampered manifests, wrong scopes, unresolved builds,
+and ad-hoc compiler hashes before it can produce provider-visible prompt
+bytes. Its compiler identity binds the exact implementation bytes containing
+its system prompt, renderer, carrier helpers, shared decision-context gate,
+action-validator bridge, and compiler:
+`04ee3632f53c543fc6038e76c016ede307439359a95d24e74a4a6080d4007b36`.
+
+The decoder/interceptor path similarly routes all compilations through
+`validateGuessDecisionContext`. Its parent-action materializer validates the
+template/build pair before projection and the minted observation/build pair
+after projection. The DAG records the exact required assessor-build identity
+for every materializer invocation.
 
 ## Planned route and stopping behavior
 
@@ -227,7 +238,7 @@ Pinned v0.2 identities:
 - exact shared C1 candidate artifact:
   `cbaa877a34ae392be36a3cbd11e9b6d3cf1574433bfed34adbe0d5282792b068`;
 - implementation-bound cluegiver compiler:
-  `6b0b027564b4e8fd0cb1a3f56f7fac128cd7ad94d60cc1d37d63334c39477dad`;
+  `aae4eea467e6eb4143d94aa0c360cbfaa308e0b5896bd6397bdb6c1ea4a2e728`;
 - route:
   `1e0718acd814309bea3330240a972c761e2245f4de8a8a7a94f8ea3bb433260a`;
 - ordering-seed SHA-256:
@@ -235,12 +246,12 @@ Pinned v0.2 identities:
 - eight cells:
   `13eb781ebf785d41fe3849d064a132e86b755355eabdf97f3e11aed86feb51ac`;
 - complete 56-job DAG:
-  `9409b51f907e1348a8774e7d1b459a6060b3e867b466c09485431695538ae192`;
+  `3bb8064bbd3328178053bce15fe5377c634ce1d01ddcdf8841d4e65e55fab940`;
 - full preregistration:
-  `cc749a9177fb720b4c668e729a25e49ffde7d680a995c407c48030c2dc11606c`;
+  `3eac7a74d6e635baf7b5f0f40915f0679fae2e542bd74db1009be60d16463ecb`;
 - compact receipt:
-  `a8096ce880387f336af37beb8240e6b688f2bb08b19c21d8100e9f4ccb1b93f1`.
+  `051cf0728b1d6cc63012dbe2f52bdacf3d967b828209e9e265b141136515e6f2`.
 
 The checked-in receipt binds source bytes, fixture, cells, all 56 jobs, exact
 topological job IDs, compiler identities, zero provider calls, and the
-still-blocking shared-contract integration gate.
+satisfied shared-contract integration gate.
