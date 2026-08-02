@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex, check, foreignKey } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export {
@@ -704,6 +705,118 @@ export type InsertProviderAttempt = z.infer<
   typeof insertProviderAttemptSchema
 >;
 export type ProviderAttempt = typeof providerAttempts.$inferSelect;
+
+/**
+ * Immutable quarantine for completed-game decision evidence imported from
+ * The Table. A quarantined game is deliberately not a Herpetarium match,
+ * evaluation, training split, or promotion claim. Every decision in one game
+ * inherits the single legacy_unassigned partition from its parent.
+ */
+export type DecryptoQuarantinePartition = "legacy_unassigned";
+
+export const decryptoQuarantineGames = pgTable(
+  "decrypto_quarantine_games",
+  {
+    id: serial("id").primaryKey(),
+    sourceApp: varchar("source_app", { length: 32 })
+      .$type<"the-table">()
+      .notNull()
+      .default("the-table"),
+    sourceGameId: varchar("source_game_id", { length: 100 }).notNull(),
+    sourceCompletedAt: timestamp("source_completed_at", {
+      withTimezone: true,
+    }).notNull(),
+    exportVersion: varchar("export_version", { length: 128 }).notNull(),
+    partition: varchar("partition", { length: 32 })
+      .$type<DecryptoQuarantinePartition>()
+      .notNull()
+      .default("legacy_unassigned"),
+    canonicalExport: text("canonical_export").notNull(),
+    canonicalExportSha256: varchar("canonical_export_sha256", {
+      length: 64,
+    }).notNull(),
+    decisionCount: integer("decision_count").notNull(),
+    importedAt: timestamp("imported_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => ({
+    sourceGameUnique: uniqueIndex(
+      "decrypto_quarantine_games_source_app_game_id_unique",
+    ).on(table.sourceApp, table.sourceGameId),
+    sourceAppCheck: check(
+      "decrypto_quarantine_games_source_app_check",
+      sql`${table.sourceApp} = 'the-table'`,
+    ),
+    partitionCheck: check(
+      "decrypto_quarantine_games_partition_check",
+      sql`${table.partition} = 'legacy_unassigned'`,
+    ),
+    canonicalHashCheck: check(
+      "decrypto_quarantine_games_canonical_hash_check",
+      sql`${table.canonicalExportSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+    decisionCountCheck: check(
+      "decrypto_quarantine_games_decision_count_check",
+      sql`${table.decisionCount} >= 0`,
+    ),
+  }),
+);
+
+export const insertDecryptoQuarantineGameSchema = createInsertSchema(
+  decryptoQuarantineGames,
+).omit({ id: true, importedAt: true });
+export type InsertDecryptoQuarantineGame = z.infer<
+  typeof insertDecryptoQuarantineGameSchema
+>;
+export type DecryptoQuarantineGame =
+  typeof decryptoQuarantineGames.$inferSelect;
+
+export const decryptoQuarantineDecisions = pgTable(
+  "decrypto_quarantine_decisions",
+  {
+    id: serial("id").primaryKey(),
+    quarantineGameId: integer("quarantine_game_id").notNull(),
+    sourceDecisionId: varchar("source_decision_id", {
+      length: 200,
+    }).notNull(),
+    idempotencyKey: varchar("idempotency_key", { length: 64 }).notNull(),
+    canonicalDecision: text("canonical_decision").notNull(),
+    canonicalDecisionSha256: varchar("canonical_decision_sha256", {
+      length: 64,
+    }).notNull(),
+  },
+  (table) => ({
+    gameForeignKey: foreignKey({
+      name: "decrypto_quarantine_decisions_game_fk",
+      columns: [table.quarantineGameId],
+      foreignColumns: [decryptoQuarantineGames.id],
+    }).onDelete("restrict"),
+    idempotencyUnique: uniqueIndex(
+      "decrypto_quarantine_decisions_idempotency_key_unique",
+    ).on(table.idempotencyKey),
+    gameDecisionUnique: uniqueIndex(
+      "decrypto_quarantine_decisions_game_decision_unique",
+    ).on(table.quarantineGameId, table.sourceDecisionId),
+    idempotencyHashCheck: check(
+      "decrypto_quarantine_decisions_idempotency_hash_check",
+      sql`${table.idempotencyKey} ~ '^[a-f0-9]{64}$'`,
+    ),
+    canonicalHashCheck: check(
+      "decrypto_quarantine_decisions_canonical_hash_check",
+      sql`${table.canonicalDecisionSha256} ~ '^[a-f0-9]{64}$'`,
+    ),
+  }),
+);
+
+export const insertDecryptoQuarantineDecisionSchema = createInsertSchema(
+  decryptoQuarantineDecisions,
+).omit({ id: true });
+export type InsertDecryptoQuarantineDecision = z.infer<
+  typeof insertDecryptoQuarantineDecisionSchema
+>;
+export type DecryptoQuarantineDecision =
+  typeof decryptoQuarantineDecisions.$inferSelect;
 
 // Tournament tables
 
