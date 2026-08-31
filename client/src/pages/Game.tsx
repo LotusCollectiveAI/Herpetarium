@@ -15,14 +15,18 @@ import { Loader2, AlertTriangle } from "lucide-react";
 export default function Game() {
   const params = useParams<{ id: string }>();
   const gameId = params.id || "";
-  const { gameState, isConnected, connect, aiFallback, clueError, phaseAnnouncement, myTeam } = useGame();
+  const { gameState, isConnected, connect, disconnect, aiFallback, clueError, phaseAnnouncement, myTeam } = useGame();
 
   useEffect(() => {
     const playerName = sessionStorage.getItem("playerName") || `Player${Math.random().toString(36).slice(2, 6)}`;
     if (gameId) {
       connect(gameId, playerName);
     }
-  }, [gameId, connect]);
+
+    return () => {
+      disconnect();
+    };
+  }, [gameId, connect, disconnect]);
 
   if (!isConnected || !gameState) {
     return (

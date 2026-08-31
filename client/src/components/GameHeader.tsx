@@ -13,7 +13,7 @@ interface GameHeaderProps {
 }
 
 export function GameHeader({ gameId }: GameHeaderProps) {
-  const { gameState, aiThinking, aiThinkingStartTime } = useGame();
+  const { gameState, playerId, aiThinking, aiThinkingStartTime } = useGame();
   const { toast } = useToast();
   const [, setLocation] = useLocation();
 
@@ -76,9 +76,8 @@ export function GameHeader({ gameId }: GameHeaderProps) {
       {gameState && gameState.phase !== "lobby" && gameState.phase !== "team_setup" && (
         <div className="px-2 pb-2">
           <ScoreBoard
-            amberState={gameState.teams.amber}
-            blueState={gameState.teams.blue}
-            round={gameState.round}
+            gameState={gameState}
+            playerId={playerId}
           />
         </div>
       )}

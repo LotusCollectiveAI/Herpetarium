@@ -6,7 +6,7 @@ import { AIPlayerButton } from "@/components/AIPlayerButton";
 import { Users, Play, X, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import type { AIPlayerConfig } from "@shared/schema";
+import { MIN_GAME_PLAYERS, type AIPlayerConfig } from "@shared/schema";
 
 export function LobbyView() {
   const { gameState, isHost, sendMessage, playerId } = useGame();
@@ -41,7 +41,8 @@ export function LobbyView() {
     }
   };
 
-  const canStart = gameState.players.length >= 2;
+  const playersNeeded = Math.max(0, MIN_GAME_PLAYERS - gameState.players.length);
+  const canStart = playersNeeded === 0;
 
   return (
     <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto">
@@ -143,7 +144,9 @@ export function LobbyView() {
           data-testid="button-start-game"
         >
           <Play className="h-5 w-5 mr-2" />
-          {canStart ? "Start Game" : `Need ${2 - gameState.players.length} more players`}
+          {canStart
+            ? "Start Game"
+            : `Need ${playersNeeded} more player${playersNeeded === 1 ? "" : "s"}`}
         </Button>
       )}
 

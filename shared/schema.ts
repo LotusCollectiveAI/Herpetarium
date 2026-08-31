@@ -267,6 +267,9 @@ export const playerSchema = z.object({
 
 export type Player = z.infer<typeof playerSchema>;
 
+export const MIN_GAME_PLAYERS = 4;
+export const MIN_TEAM_PLAYERS = 2;
+
 export type GamePhase =
   | "lobby"
   | "team_setup"

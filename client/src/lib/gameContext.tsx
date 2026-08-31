@@ -63,6 +63,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     gameIdRef.current = gameId;
 
     ws.onopen = () => {
+      // A newer connection may have replaced this socket while it was opening.
+      // Do not let the obsolete socket join a game and start a reconnect loop.
+      if (wsRef.current !== ws || gameIdRef.current !== gameId) {
+        ws.close();
+        return;
+      }
+
       setIsConnected(true);
       setPlayerName(name);
       reconnectAttemptRef.current = 0;
@@ -76,6 +83,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     };
 
     ws.onmessage = (event) => {
+      // Ignore state arriving from a game/socket that is no longer active.
+      if (wsRef.current !== ws || gameIdRef.current !== gameId) {
+        return;
+      }
+
       try {
         const message = JSON.parse(event.data) as ServerMessage;
         
@@ -173,16 +185,26 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     };
 
     ws.onclose = () => {
+      // Closing a socket that has already been replaced must not mark the new
+      // connection offline or schedule another competing reconnect.
+      if (wsRef.current !== ws) {
+        return;
+      }
+
+      wsRef.current = null;
       setIsConnected(false);
       
-      if (!intentionalCloseRef.current && gameIdRef.current) {
+      if (!intentionalCloseRef.current && gameIdRef.current === gameId) {
         const attempt = reconnectAttemptRef.current;
         if (attempt < MAX_RECONNECT_ATTEMPTS) {
           const delay = BASE_RECONNECT_DELAY * Math.pow(2, attempt);
           reconnectAttemptRef.current = attempt + 1;
           console.log(`WebSocket closed unexpectedly. Reconnecting in ${delay}ms (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
           reconnectTimerRef.current = setTimeout(() => {
-            connectWs(gameIdRef.current!, name, true);
+            reconnectTimerRef.current = null;
+            if (!intentionalCloseRef.current && gameIdRef.current === gameId && !wsRef.current) {
+              connectWs(gameId, name, true);
+            }
           }, delay);
         } else {
           console.error("Max reconnection attempts reached");
@@ -196,8 +218,24 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, [toast]);
 
   const connect = useCallback((gameId: string, name: string) => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    // Invalidate the previous socket before closing it. Its asynchronous
+    // onclose handler will then recognize that it is stale and do nothing.
+    const previousWs = wsRef.current;
+    wsRef.current = null;
+    previousWs?.close();
+
     intentionalCloseRef.current = false;
     reconnectAttemptRef.current = 0;
+    setGameState(null);
+    setPlayerId(null);
+    setIsConnected(false);
+    setMyKeywords(null);
+    setMyCode(null);
     connectWs(gameId, name, false);
   }, [connectWs]);
 
@@ -207,8 +245,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    wsRef.current?.close();
+    const ws = wsRef.current;
     wsRef.current = null;
+    ws?.close();
     gameIdRef.current = null;
     setGameState(null);
     setPlayerId(null);

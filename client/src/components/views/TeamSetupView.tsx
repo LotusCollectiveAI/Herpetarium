@@ -4,6 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { cn } from "@/lib/utils";
 import { Play } from "lucide-react";
+import { MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS } from "@shared/schema";
 
 export function TeamSetupView() {
   const { gameState, playerId, myTeam, isHost, sendMessage } = useGame();
@@ -26,7 +27,7 @@ export function TeamSetupView() {
       <div className="text-center">
         <h2 className="text-xl font-bold">Choose Your Team</h2>
         <p className="text-muted-foreground text-sm">
-          Each team needs at least 1 player to start
+          Each team needs at least {MIN_TEAM_PLAYERS} players to start
         </p>
       </div>
 
@@ -135,11 +136,27 @@ export function TeamSetupView() {
           {(() => {
             const totalPlayers = gameState.players.length;
             const assignedPlayers = amberPlayers.length + bluePlayers.length;
-            // Can start if: at least 2 players total AND at least one player has picked a team
-            // (unassigned AI players will be auto-assigned to balance teams)
-            const canStart = totalPlayers >= 2 && assignedPlayers >= 1;
+            let projectedAmberCount = amberPlayers.length;
+            let projectedBlueCount = bluePlayers.length;
+
+            // Match the server's automatic balancing so the button only enables
+            // when the resulting teams will both have enough players.
+            for (const _player of unassigned) {
+              if (projectedBlueCount < projectedAmberCount) {
+                projectedBlueCount++;
+              } else if (projectedAmberCount < projectedBlueCount) {
+                projectedAmberCount++;
+              } else {
+                projectedBlueCount++;
+              }
+            }
+
             const needsTeamChoice = assignedPlayers === 0;
-            const needsMorePlayers = totalPlayers < 2;
+            const needsMorePlayers = totalPlayers < MIN_GAME_PLAYERS;
+            const teamsHaveEnoughPlayers =
+              projectedAmberCount >= MIN_TEAM_PLAYERS &&
+              projectedBlueCount >= MIN_TEAM_PLAYERS;
+            const canStart = !needsMorePlayers && !needsTeamChoice && teamsHaveEnoughPlayers;
             
             return (
               <>
@@ -156,15 +173,15 @@ export function TeamSetupView() {
                 {!canStart && (
                   <p className="text-center text-sm text-muted-foreground mt-2">
                     {needsMorePlayers
-                      ? "Need at least 2 players"
+                      ? `Need at least ${MIN_GAME_PLAYERS} players`
                       : needsTeamChoice
                       ? "Pick a team to continue"
-                      : "Both teams need at least 1 player"}
+                      : `Each team needs at least ${MIN_TEAM_PLAYERS} players`}
                   </p>
                 )}
                 {canStart && unassigned.length > 0 && (
                   <p className="text-center text-sm text-muted-foreground mt-2">
-                    Unassigned players will join the other team
+                    Unassigned players will be assigned automatically to balance the teams
                   </p>
                 )}
               </>

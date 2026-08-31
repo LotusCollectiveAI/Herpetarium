@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs, MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -675,8 +675,8 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         return;
       }
       
-      if (game.players.length < 2) {
-        sendTo(ws, { type: "error", message: "Need at least 2 players" });
+      if (game.players.length < MIN_GAME_PLAYERS) {
+        sendTo(ws, { type: "error", message: `Need at least ${MIN_GAME_PLAYERS} players` });
         return;
       }
       
@@ -703,16 +703,18 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         return;
       }
       
-      game = autoAssignRemainingPlayers(game);
-      games.set(client.gameId, game);
+      const assignedGame = autoAssignRemainingPlayers(game);
       
-      const amberPlayers = game.players.filter(p => p.team === "amber");
-      const bluePlayers = game.players.filter(p => p.team === "blue");
+      const amberPlayers = assignedGame.players.filter(p => p.team === "amber");
+      const bluePlayers = assignedGame.players.filter(p => p.team === "blue");
       
-      if (amberPlayers.length < 1 || bluePlayers.length < 1) {
-        sendTo(ws, { type: "error", message: "Both teams need at least 1 player" });
+      if (amberPlayers.length < MIN_TEAM_PLAYERS || bluePlayers.length < MIN_TEAM_PLAYERS) {
+        sendTo(ws, { type: "error", message: `Each team needs at least ${MIN_TEAM_PLAYERS} players` });
         return;
       }
+
+      game = assignedGame;
+      games.set(client.gameId, game);
       
       await createMatchRecord(client.gameId, game);
       
