@@ -8,9 +8,10 @@ interface CodeGuessProps {
   disabled?: boolean;
   team: "amber" | "blue";
   label?: string;
+  clues?: string[];
 }
 
-export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Guess" }: CodeGuessProps) {
+export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Guess", clues }: CodeGuessProps) {
   const [guess, setGuess] = useState<(number | null)[]>([null, null, null]);
 
   const handleNumberClick = (position: number, num: number) => {
@@ -35,31 +36,37 @@ export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Gu
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-center gap-3">
+      <div className="flex flex-col gap-2">
         {[0, 1, 2].map((position) => (
           <div
             key={position}
             className={cn(
-              "flex flex-col gap-2 p-2 rounded-lg border",
-              team === "amber" ? "border-amber-500/30" : "border-blue-500/30"
+              "flex flex-col sm:flex-row sm:items-center gap-2 p-2 rounded-lg border",
+              team === "amber" ? "border-amber-500/30 bg-amber-500/5" : "border-blue-500/30 bg-blue-500/5"
             )}
+            data-testid={`guess-clue-row-${position}`}
           >
-            <div className="text-xs text-muted-foreground text-center">
-              Clue {position + 1}
+            <div className="flex-1 min-w-0">
+              <div className="text-xs text-muted-foreground">
+                Clue {position + 1}
+              </div>
+              <span className="font-mono uppercase tracking-wider text-sm block truncate">
+                {clues?.[position] || "..."}
+              </span>
             </div>
-            <div className="grid grid-cols-2 gap-1">
+            <div className="flex gap-1 shrink-0">
               {[1, 2, 3, 4].map((num) => {
                 const isSelected = guess[position] === num;
                 const isUsedElsewhere = usedNumbers.includes(num) && !isSelected;
-                
+
                 return (
                   <button
                     key={num}
                     onClick={() => handleNumberClick(position, num)}
                     disabled={disabled || isUsedElsewhere}
                     className={cn(
-                      "w-10 h-10 rounded-md font-bold text-lg transition-all",
-                      isSelected 
+                      "w-9 h-9 rounded-md font-bold text-base transition-all shrink-0",
+                      isSelected
                         ? team === "amber"
                           ? "bg-amber-500 text-amber-950 shadow-md"
                           : "bg-blue-500 text-white shadow-md"

@@ -114,6 +114,7 @@ export function InterceptingView() {
       <CardContent>
         <CodeGuess
           team={myTeam}
+          clues={opponentClues ?? undefined}
           onSubmit={handleSubmitInterception}
           label="Submit Interception"
         />
@@ -131,10 +132,11 @@ export function InterceptingView() {
       </div>
 
       <div className="hidden sm:flex flex-col gap-4">
-        {cluesContent}
+        {(hasIntercepted || isClueGiver) && cluesContent}
         <DeductionNotes
           gameId={gameState.id}
           opponentTeam={opponentTeam}
+          history={opponentHistory}
           defaultExpanded={true}
         />
         {historyContent}
@@ -166,6 +168,7 @@ export function InterceptingView() {
             <DeductionNotes
               gameId={gameState.id}
               opponentTeam={opponentTeam}
+              history={opponentHistory}
               defaultExpanded={false}
             />
           </TabsContent>

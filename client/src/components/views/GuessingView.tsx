@@ -53,7 +53,7 @@ export function GuessingView() {
         </Card>
       )}
 
-      {myClues && (
+      {myClues && (hasGuessed || isClueGiver) && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Clues from Your Encryptor</CardTitle>
@@ -67,6 +67,7 @@ export function GuessingView() {
       <DeductionNotes
         gameId={gameState.id}
         opponentTeam={opponentTeam}
+        history={gameState.teams[opponentTeam].history}
         defaultExpanded={false}
       />
 
@@ -131,6 +132,7 @@ export function GuessingView() {
           <CardContent>
             <CodeGuess
               team={myTeam}
+              clues={myClues ?? undefined}
               onSubmit={handleSubmitGuess}
               label="Submit Guess"
             />

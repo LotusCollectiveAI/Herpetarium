@@ -3,11 +3,26 @@ import { cn } from "@/lib/utils";
 import { ChevronDown, ChevronUp, NotebookPen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { RoundHistory } from "@shared/schema";
 
 interface DeductionNotesProps {
   gameId: string;
   opponentTeam: "amber" | "blue";
+  history: RoundHistory[];
   defaultExpanded?: boolean;
+}
+
+function getCluesBySlot(history: RoundHistory[]): string[][] {
+  const bySlot: string[][] = [[], [], [], []];
+  history.forEach(round => {
+    round.clues.forEach((clue, clueIndex) => {
+      const slot = round.targetCode[clueIndex] - 1;
+      if (slot >= 0 && slot < bySlot.length) {
+        bySlot[slot].push(clue);
+      }
+    });
+  });
+  return bySlot;
 }
 
 function getStorageKey(gameId: string) {
@@ -31,9 +46,10 @@ function saveNotes(gameId: string, notes: [string, string, string, string]) {
   localStorage.setItem(getStorageKey(gameId), JSON.stringify(notes));
 }
 
-export function DeductionNotes({ gameId, opponentTeam, defaultExpanded = true }: DeductionNotesProps) {
+export function DeductionNotes({ gameId, opponentTeam, history, defaultExpanded = true }: DeductionNotesProps) {
   const [expanded, setExpanded] = useState(defaultExpanded);
   const [notes, setNotes] = useState<[string, string, string, string]>(() => loadNotes(gameId));
+  const cluesBySlot = getCluesBySlot(history);
 
   useEffect(() => {
     setNotes(loadNotes(gameId));
@@ -87,6 +103,20 @@ export function DeductionNotes({ gameId, opponentTeam, defaultExpanded = true }:
               >
                 Keyword {i + 1}
               </label>
+              {cluesBySlot[i].length > 0 ? (
+                <div className="flex flex-wrap gap-1" data-testid={`clue-history-${i + 1}`}>
+                  {cluesBySlot[i].map((clue, ci) => (
+                    <span
+                      key={ci}
+                      className="text-[10px] font-mono uppercase bg-muted px-1.5 py-0.5 rounded"
+                    >
+                      {clue}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <span className="text-[10px] text-muted-foreground">No clues yet</span>
+              )}
               <Input
                 value={notes[i]}
                 onChange={(e) => handleChange(i, e.target.value)}
