@@ -14,6 +14,7 @@ import Series from "@/pages/Series";
 import Evolution from "@/pages/Evolution";
 import Arena from "@/pages/Arena";
 import CoachRuns from "@/pages/CoachRuns";
+import DevPreview from "@/pages/DevPreview";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -28,6 +29,9 @@ function Router() {
       <Route path="/evolution" component={Evolution} />
       <Route path="/arena" component={Arena} />
       <Route path="/coach/:id" component={CoachRuns} />
+      {import.meta.env.DEV && (
+        <Route path="/dev/preview" component={DevPreview} />
+      )}
       <Route component={NotFound} />
     </Switch>
   );
