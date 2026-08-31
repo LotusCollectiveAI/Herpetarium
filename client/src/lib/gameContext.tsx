@@ -21,7 +21,7 @@ interface GameContextType {
   disconnect: () => void;
 }
 
-const GameContext = createContext<GameContextType | null>(null);
+export const GameContext = createContext<GameContextType | null>(null);
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 const BASE_RECONNECT_DELAY = 1000;
@@ -43,6 +43,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gameIdRef = useRef<string | null>(null);
   const intentionalCloseRef = useRef(false);
+  const lastPhaseRef = useRef<GamePhase | null>(null);
   const { toast } = useToast();
 
   const myTeam = gameState?.players.find(p => p.id === playerId)?.team ?? null;
@@ -95,20 +96,21 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           case "game_state": {
             const newState = message.state;
             const currentGameId = gameIdRef.current || gameId;
-            setGameState(prev => {
-              if (prev && prev.phase !== newState.phase) {
-                const phaseToasts: Partial<Record<GamePhase, string>> = {
-                  own_team_guessing: "Clues submitted! Time to decode.",
-                  opponent_intercepting: "All guesses in — interception phase!",
-                  round_results: "Results are in!",
-                };
-                const toastMsg = phaseToasts[newState.phase];
-                if (toastMsg) {
-                  toast({ title: toastMsg });
-                }
+
+            if (lastPhaseRef.current !== null && lastPhaseRef.current !== newState.phase) {
+              const phaseToasts: Partial<Record<GamePhase, string>> = {
+                own_team_guessing: "Clues submitted! Time to decode.",
+                opponent_intercepting: "All guesses in — interception phase!",
+                round_results: "Results are in!",
+              };
+              const toastMsg = phaseToasts[newState.phase];
+              if (toastMsg) {
+                toast({ title: toastMsg });
               }
-              return newState;
-            });
+            }
+            lastPhaseRef.current = newState.phase;
+
+            setGameState(newState);
             if (!isReconnect) {
               const storedId = sessionStorage.getItem(`player_${currentGameId}`);
               const player = newState.players.find(p => p.id === storedId || p.name === name);
@@ -231,6 +233,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
 
     intentionalCloseRef.current = false;
     reconnectAttemptRef.current = 0;
+    lastPhaseRef.current = null;
     setGameState(null);
     setPlayerId(null);
     setIsConnected(false);
@@ -249,6 +252,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     wsRef.current = null;
     ws?.close();
     gameIdRef.current = null;
+    lastPhaseRef.current = null;
     setGameState(null);
     setPlayerId(null);
     setIsConnected(false);

@@ -916,8 +916,22 @@ function handleDisconnect(ws: WebSocket) {
 }
 
 export function setupWebSocket(server: Server) {
-  const wss = new WebSocketServer({ server, path: "/ws" });
-  
+  // Attaching via { server, path } makes `ws` register its own "upgrade"
+  // listener on the shared HTTP server, and that listener destroys the
+  // socket for any request whose path doesn't match — including requests
+  // meant for other upgrade handlers on the same server (e.g. Vite's HMR
+  // WebSocket in dev). Using noServer + a path check here lets non-matching
+  // upgrades fall through untouched.
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on("upgrade", (req, socket, head) => {
+    const pathname = req.url?.split("?")[0];
+    if (pathname !== "/ws") return;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+
   wss.on("connection", (ws) => {
     log("WebSocket client connected", "websocket");
     
