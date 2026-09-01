@@ -19,9 +19,14 @@ function buildSlotClues(
   current: { round: number; clues: string[]; code: [number, number, number] } | null
 ): SlotClue[][] {
   const bySlot: SlotClue[][] = [[], [], [], []];
-  const rounds: { round: number; clues: string[]; targetCode: [number, number, number] }[] = current
-    ? [...history, { round: current.round, clues: current.clues, targetCode: current.code }]
-    : history;
+  // Once a round finishes, its clues live in both `history` and (until
+  // "Next Round" is clicked) `currentClues` — only append `current` if it
+  // isn't already recorded, or it'd get counted twice.
+  const alreadyRecorded = current !== null && history.some(h => h.round === current.round);
+  const rounds: { round: number; clues: string[]; targetCode: [number, number, number] }[] =
+    current && !alreadyRecorded
+      ? [...history, { round: current.round, clues: current.clues, targetCode: current.code }]
+      : history;
 
   for (const r of rounds) {
     r.clues.forEach((clue, i) => {
@@ -124,39 +129,38 @@ export function ClueHistoryPanel() {
 
   return (
     <div className="border-t bg-card shrink-0" data-testid="clue-history-panel">
-      <div className="grid grid-cols-2 divide-x">
-        <div className="p-3 space-y-2" data-testid="clue-history-own">
-          <div className="text-xs font-semibold text-muted-foreground">Your Team's Clues</div>
-          {[0, 1, 2, 3].map(i => (
-            <div key={i}>
-              <div className={cn("text-xs font-medium", teamLabelClass(myTeam))}>
-                {i + 1}. {myKeywords[i]}
-              </div>
-              <ClueChips clues={myClueSlots[i]} />
-            </div>
-          ))}
+      <div className="grid grid-cols-2">
+        <div className="p-3 text-xs font-semibold text-muted-foreground" data-testid="clue-history-own">
+          Your Team's Clues
+        </div>
+        <div className="p-3 border-l text-xs font-semibold text-muted-foreground" data-testid="clue-history-opponent">
+          Opponent's Clues
         </div>
 
-        <div className="p-3 space-y-2" data-testid="clue-history-opponent">
-          <div className="text-xs font-semibold text-muted-foreground">Opponent's Clues</div>
-          {[0, 1, 2, 3].map(i => (
-            <div key={i}>
-              <div className="flex items-center gap-2">
-                <span className={cn("text-xs font-medium shrink-0", teamLabelClass(opponentTeam))}>
-                  Keyword {i + 1}
-                </span>
-                <Input
-                  value={notes[i]}
-                  onChange={(e) => handleNoteChange(i, e.target.value)}
-                  placeholder="Your guess..."
-                  className="h-6 text-xs flex-1 min-w-0"
-                  data-testid={`input-note-${i + 1}`}
-                />
-              </div>
-              <ClueChips clues={opponentClueSlots[i]} />
+        {[0, 1, 2, 3].flatMap(i => [
+          <div key={`own-${i}`} className="px-3 pb-3">
+            <div className={cn("text-xs font-medium", teamLabelClass(myTeam))}>
+              {i + 1}. {myKeywords[i]}
             </div>
-          ))}
-        </div>
+            <ClueChips clues={myClueSlots[i]} />
+          </div>,
+
+          <div key={`opp-${i}`} className="px-3 pb-3 border-l">
+            <div className="flex items-center gap-2">
+              <span className={cn("text-xs font-medium shrink-0", teamLabelClass(opponentTeam))}>
+                Keyword {i + 1}
+              </span>
+              <Input
+                value={notes[i]}
+                onChange={(e) => handleNoteChange(i, e.target.value)}
+                placeholder="Your guess..."
+                className="h-6 text-xs flex-1 min-w-0"
+                data-testid={`input-note-${i + 1}`}
+              />
+            </div>
+            <ClueChips clues={opponentClueSlots[i]} />
+          </div>,
+        ])}
       </div>
     </div>
   );
