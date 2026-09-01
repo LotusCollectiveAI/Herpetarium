@@ -52,9 +52,8 @@ function getPlayerActivity(gameState: GameState, player: Player, team: Team): Pl
         ? { label: "Guess submitted", active: false, complete: true }
         : { label: "Decoding clues", active: true };
     case "opponent_deliberation":
-      return !isClueGiver ? { label: "Planning intercept", active: true } : null;
+      return { label: "Planning intercept", active: true };
     case "opponent_intercepting":
-      if (isClueGiver) return null;
       return gameState.currentGuesses[team].opponent
         ? { label: "Intercept submitted", active: false, complete: true }
         : { label: "Intercepting", active: true };
