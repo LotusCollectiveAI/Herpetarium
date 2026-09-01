@@ -130,43 +130,48 @@ export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
       <div className="text-center text-sm text-muted-foreground font-medium">
         Round {gameState.round}
       </div>
-      
+
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded-full bg-amber-500" />
+          <span className="text-sm font-semibold">Amber</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-semibold">Blue</span>
+          <div className="w-3 h-3 rounded-full bg-blue-500" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
+        <div className="flex justify-end">
+          <Token type="white" count={amberState.whiteTokens} />
+        </div>
+        <span className="text-[10px] sm:text-xs text-muted-foreground text-center leading-tight">
+          Miscommunications
+        </span>
+        <div className="flex justify-start">
+          <Token type="white" count={blueState.whiteTokens} />
+        </div>
+
+        <div className="flex justify-end">
+          <Token type="black" count={amberState.blackTokens} />
+        </div>
+        <span className="text-[10px] sm:text-xs text-muted-foreground text-center leading-tight">
+          Interceptions
+        </span>
+        <div className="flex justify-start">
+          <Token type="black" count={blueState.blackTokens} />
+        </div>
+      </div>
+
       <div className="flex items-stretch justify-between gap-2 sm:gap-4">
         <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-amber-500" />
-            <span className="text-sm font-semibold">Amber</span>
-          </div>
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground w-12">Correct:</span>
-              <Token type="white" count={amberState.whiteTokens} />
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground w-12">Intercept:</span>
-              <Token type="black" count={amberState.blackTokens} />
-            </div>
-          </div>
           <TeamRoster gameState={gameState} team="amber" playerId={playerId} />
         </div>
 
         <div className="w-px bg-border" />
 
         <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
-          <div className="flex items-center gap-2">
-            <div className="w-3 h-3 rounded-full bg-blue-500" />
-            <span className="text-sm font-semibold">Blue</span>
-          </div>
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground w-12">Correct:</span>
-              <Token type="white" count={blueState.whiteTokens} />
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="text-muted-foreground w-12">Intercept:</span>
-              <Token type="black" count={blueState.blackTokens} />
-            </div>
-          </div>
           <TeamRoster gameState={gameState} team="blue" playerId={playerId} />
         </div>
       </div>
