@@ -88,6 +88,12 @@ export function ClueHistoryPanel() {
 
   const opponentTeam = myTeam === "amber" ? "blue" : "amber";
 
+  // Clues aren't "revealed" until both teams have finished giving them —
+  // the phase only advances past giving_clues once that's true. Reading
+  // the opponent's currentClues before then would show them the instant
+  // they're submitted rather than when the round naturally reveals them.
+  const cluesRevealed = gameState.phase !== "giving_clues";
+
   const myClueSlots = buildSlotClues(
     gameState.teams[myTeam].history,
     gameState.currentClues[myTeam]
@@ -96,7 +102,7 @@ export function ClueHistoryPanel() {
   );
   const opponentClueSlots = buildSlotClues(
     gameState.teams[opponentTeam].history,
-    gameState.currentClues[opponentTeam]
+    cluesRevealed && gameState.currentClues[opponentTeam]
       ? { round: gameState.round, clues: gameState.currentClues[opponentTeam]!, code: gameState.currentCode[opponentTeam]! }
       : null
   );
@@ -117,9 +123,9 @@ export function ClueHistoryPanel() {
     team === "amber" ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400";
 
   return (
-    <div className="sticky bottom-0 z-40 border-t bg-card shrink-0" data-testid="clue-history-panel">
+    <div className="border-t bg-card shrink-0" data-testid="clue-history-panel">
       <div className="grid grid-cols-2 divide-x">
-        <div className="p-3 space-y-2 max-h-40 overflow-y-auto" data-testid="clue-history-own">
+        <div className="p-3 space-y-2" data-testid="clue-history-own">
           <div className="text-xs font-semibold text-muted-foreground">Your Team's Clues</div>
           {[0, 1, 2, 3].map(i => (
             <div key={i}>
@@ -131,21 +137,23 @@ export function ClueHistoryPanel() {
           ))}
         </div>
 
-        <div className="p-3 space-y-2 max-h-40 overflow-y-auto" data-testid="clue-history-opponent">
+        <div className="p-3 space-y-2" data-testid="clue-history-opponent">
           <div className="text-xs font-semibold text-muted-foreground">Opponent's Clues</div>
           {[0, 1, 2, 3].map(i => (
             <div key={i}>
-              <div className={cn("text-xs font-medium", teamLabelClass(opponentTeam))}>
-                Keyword {i + 1}
+              <div className="flex items-center gap-2">
+                <span className={cn("text-xs font-medium shrink-0", teamLabelClass(opponentTeam))}>
+                  Keyword {i + 1}
+                </span>
+                <Input
+                  value={notes[i]}
+                  onChange={(e) => handleNoteChange(i, e.target.value)}
+                  placeholder="Your guess..."
+                  className="h-6 text-xs flex-1 min-w-0"
+                  data-testid={`input-note-${i + 1}`}
+                />
               </div>
               <ClueChips clues={opponentClueSlots[i]} />
-              <Input
-                value={notes[i]}
-                onChange={(e) => handleNoteChange(i, e.target.value)}
-                placeholder="Your guess..."
-                className="h-6 text-xs mt-1"
-                data-testid={`input-note-${i + 1}`}
-              />
             </div>
           ))}
         </div>
