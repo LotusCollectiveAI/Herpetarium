@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useParams } from "wouter";
 import { useGame } from "@/lib/gameContext";
 import { GameHeader } from "@/components/GameHeader";
+import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
 import { PhaseAnnouncement } from "@/components/PhaseAnnouncement";
 import { LobbyView } from "@/components/views/LobbyView";
 import { TeamSetupView } from "@/components/views/TeamSetupView";
@@ -89,6 +90,9 @@ export default function Game() {
       <main className="flex-1 flex flex-col overflow-hidden">
         {renderPhaseView()}
       </main>
+      {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && (
+        <ClueHistoryPanel />
+      )}
     </div>
   );
 }

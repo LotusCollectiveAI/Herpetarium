@@ -3,6 +3,7 @@ import { GameContext } from "@/lib/gameContext";
 import type { GameState, GamePhase, Player, RoundHistory, WSMessage } from "@shared/schema";
 import { DEFAULT_GAME_RULES } from "@shared/schema";
 import { GameHeader } from "@/components/GameHeader";
+import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
 import { LobbyView } from "@/components/views/LobbyView";
 import { TeamSetupView } from "@/components/views/TeamSetupView";
 import { GivingCluesView } from "@/components/views/GivingCluesView";
@@ -216,6 +217,7 @@ export default function DevPreview() {
         <main className="flex-1 flex flex-col overflow-hidden">
           {renderPhaseView()}
         </main>
+        {phase !== "lobby" && phase !== "team_setup" && <ClueHistoryPanel />}
       </div>
     </GameContext.Provider>
   );

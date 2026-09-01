@@ -4,9 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
-import { RoundHistory } from "@/components/RoundHistory";
-import { DeductionNotes } from "@/components/DeductionNotes";
-import { Crosshair, Shield, History, Send } from "lucide-react";
+import { Crosshair, Shield, Send } from "lucide-react";
 
 export function InterceptingView() {
   const { gameState, myTeam, sendMessage } = useGame();
@@ -16,7 +14,6 @@ export function InterceptingView() {
 
   const opponentTeam = myTeam === "amber" ? "blue" : "amber";
   const opponentClues = gameState.currentClues[opponentTeam];
-  const opponentHistory = gameState.teams[opponentTeam].history;
   const hasIntercepted = gameState.currentGuesses[myTeam].opponent !== null;
 
   const handleSubmitInterception = (guess: [number, number, number]) => {
@@ -33,20 +30,6 @@ export function InterceptingView() {
       </CardHeader>
       <CardContent>
         <ClueDisplay clues={opponentClues} team={opponentTeam} showNumbers={false} />
-      </CardContent>
-    </Card>
-  );
-
-  const historyContent = opponentHistory.length > 0 && (
-    <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm">Opponent's Clue History</CardTitle>
-        <CardDescription>
-          Clues grouped by keyword slot — spot the patterns
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <RoundHistory history={opponentHistory} team={opponentTeam} columnar={true} />
       </CardContent>
     </Card>
   );
@@ -112,26 +95,15 @@ export function InterceptingView() {
 
       <div className="hidden sm:flex flex-col gap-4">
         {hasIntercepted && cluesContent}
-        <DeductionNotes
-          gameId={gameState.id}
-          opponentTeam={opponentTeam}
-          history={opponentHistory}
-          defaultExpanded={true}
-        />
-        {historyContent}
         {guessContent}
       </div>
 
       <div className="sm:hidden flex-1 flex flex-col">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <TabsList className="w-full grid grid-cols-3" data-testid="tabs-interception">
+          <TabsList className="w-full grid grid-cols-2" data-testid="tabs-interception">
             <TabsTrigger value="clues" data-testid="tab-clues">
               <Crosshair className="h-4 w-4 mr-1" />
               Clues
-            </TabsTrigger>
-            <TabsTrigger value="history" data-testid="tab-history">
-              <History className="h-4 w-4 mr-1" />
-              History
             </TabsTrigger>
             <TabsTrigger value="guess" data-testid="tab-guess">
               <Send className="h-4 w-4 mr-1" />
@@ -142,19 +114,6 @@ export function InterceptingView() {
             {cluesContent || (
               <div className="text-center text-sm text-muted-foreground py-8">
                 No clues available yet
-              </div>
-            )}
-            <DeductionNotes
-              gameId={gameState.id}
-              opponentTeam={opponentTeam}
-              history={opponentHistory}
-              defaultExpanded={false}
-            />
-          </TabsContent>
-          <TabsContent value="history" className="flex-1">
-            {historyContent || (
-              <div className="text-center text-sm text-muted-foreground py-8">
-                No history available yet
               </div>
             )}
           </TabsContent>
