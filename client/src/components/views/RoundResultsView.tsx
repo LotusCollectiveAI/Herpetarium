@@ -195,14 +195,15 @@ export function RoundResultsView() {
       {isGameDecided && (
         <div
           className={cn(
-            "text-center text-sm font-semibold",
-            gameState.winner === "amber" ? "text-amber-500" : gameState.winner === "blue" ? "text-blue-500" : "text-muted-foreground"
+            "flex items-center justify-center gap-2 rounded-lg py-5 px-4 text-2xl font-bold text-white shadow-lg",
+            gameState.winner === "amber" ? "team-amber" : gameState.winner === "blue" ? "team-blue" : "bg-muted text-foreground"
           )}
           data-testid="text-game-decided"
         >
+          {gameState.winner && <Trophy className="h-7 w-7 shrink-0" />}
           {gameState.winner
-            ? `Team ${gameState.winner === "amber" ? "Amber" : "Blue"} wins the game!`
-            : "The game has ended in a tie!"}
+            ? `Team ${gameState.winner === "amber" ? "Amber" : "Blue"} Wins the Game!`
+            : "The Game Has Ended in a Tie!"}
         </div>
       )}
 
