@@ -15,22 +15,28 @@ interface PlayerActivity {
   complete?: boolean;
 }
 
-function Token({ type, count }: { type: "white" | "black"; count: number }) {
+// Tokens normally fill left-to-right (index 0 first). Pass reverseFill for
+// a team whose tokens are right-aligned toward the center, so the bubble
+// nearest the middle (the highest index, drawn last) lights up first.
+function Token({ type, count, reverseFill = false }: { type: "white" | "black"; count: number; reverseFill?: boolean }) {
   return (
     <div className="flex items-center gap-1">
-      {Array.from({ length: 2 }).map((_, i) => (
-        <div
-          key={i}
-          className={cn(
-            "w-5 h-5 rounded-full transition-all",
-            type === "white" 
-              ? "bg-white border-2 border-gray-300 dark:border-gray-500" 
-              : "bg-gray-900 border-2 border-gray-700 dark:bg-gray-800",
-            i < count ? "opacity-100 shadow-md" : "opacity-20"
-          )}
-          data-testid={`token-${type}-${i}`}
-        />
-      ))}
+      {Array.from({ length: 2 }).map((_, i) => {
+        const filled = reverseFill ? i >= 2 - count : i < count;
+        return (
+          <div
+            key={i}
+            className={cn(
+              "w-5 h-5 rounded-full transition-all",
+              type === "white"
+                ? "bg-white border-2 border-gray-300 dark:border-gray-500"
+                : "bg-gray-900 border-2 border-gray-700 dark:bg-gray-800",
+              filled ? "opacity-100 shadow-md" : "opacity-20"
+            )}
+            data-testid={`token-${type}-${i}`}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -144,9 +150,9 @@ export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
         <div className="flex justify-end">
-          <Token type="white" count={amberState.whiteTokens} />
+          <Token type="white" count={amberState.whiteTokens} reverseFill />
         </div>
-        <span className="text-[10px] sm:text-xs text-muted-foreground text-center leading-tight">
+        <span className="text-xs sm:text-sm text-muted-foreground text-center leading-tight">
           Miscommunications
         </span>
         <div className="flex justify-start">
@@ -154,9 +160,9 @@ export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
         </div>
 
         <div className="flex justify-end">
-          <Token type="black" count={amberState.blackTokens} />
+          <Token type="black" count={amberState.blackTokens} reverseFill />
         </div>
-        <span className="text-[10px] sm:text-xs text-muted-foreground text-center leading-tight">
+        <span className="text-xs sm:text-sm text-muted-foreground text-center leading-tight">
           Interceptions
         </span>
         <div className="flex justify-start">
