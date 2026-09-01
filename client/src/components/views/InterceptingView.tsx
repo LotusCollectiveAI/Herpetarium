@@ -1,14 +1,11 @@
-import { useState } from "react";
 import { useGame } from "@/lib/gameContext";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
-import { Crosshair, Shield, Send } from "lucide-react";
+import { Crosshair, Shield } from "lucide-react";
 
 export function InterceptingView() {
   const { gameState, playerId, myTeam, sendMessage } = useGame();
-  const [activeTab, setActiveTab] = useState("clues");
 
   if (!gameState || !myTeam) return null;
 
@@ -109,34 +106,9 @@ export function InterceptingView() {
         </p>
       </div>
 
-      <div className="hidden sm:flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         {hasIntercepted && cluesContent}
         {guessContent}
-      </div>
-
-      <div className="sm:hidden flex-1 flex flex-col">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col">
-          <TabsList className="w-full grid grid-cols-2" data-testid="tabs-interception">
-            <TabsTrigger value="clues" data-testid="tab-clues">
-              <Crosshair className="h-4 w-4 mr-1" />
-              Clues
-            </TabsTrigger>
-            <TabsTrigger value="guess" data-testid="tab-guess">
-              <Send className="h-4 w-4 mr-1" />
-              Guess
-            </TabsTrigger>
-          </TabsList>
-          <TabsContent value="clues" className="flex-1">
-            {cluesContent || (
-              <div className="text-center text-sm text-muted-foreground py-8">
-                No clues available yet
-              </div>
-            )}
-          </TabsContent>
-          <TabsContent value="guess" className="flex-1">
-            {guessContent}
-          </TabsContent>
-        </Tabs>
       </div>
     </div>
   );
