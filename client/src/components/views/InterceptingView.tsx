@@ -16,7 +16,7 @@ export function InterceptingView() {
   const opponentClues = gameState.currentClues[opponentTeam];
   const hasIntercepted = gameState.currentGuesses[myTeam].opponent !== null;
 
-  const designatedSubmitterId = gameState.designatedSubmitter[myTeam];
+  const designatedSubmitterId = gameState.interceptSubmitter[myTeam];
   const canSubmit = designatedSubmitterId === playerId;
   const submitter = gameState.players.find(p => p.id === designatedSubmitterId);
   const teammates = gameState.players

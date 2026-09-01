@@ -41,6 +41,9 @@ const PLAYERS: Player[] = [
 ];
 
 // The one teammate allowed to actually submit each team's guess this round.
+// Decode and intercept can have different submitters (see getDesignatedSubmitters
+// in server/game.ts), but since every fixture player here is human, this
+// simple fixture always lands on the same person for both roles.
 const DESIGNATED_SUBMITTER: Record<"amber" | "blue", string> = {
   amber: "amber-1",
   blue: "blue-1",
@@ -122,7 +125,8 @@ export default function DevPreview() {
         opponent: myTeam === "blue" && interceptSubmitted ? CURRENT_CODE.amber : null,
       },
     },
-    designatedSubmitter: DESIGNATED_SUBMITTER,
+    decodeSubmitter: DESIGNATED_SUBMITTER,
+    interceptSubmitter: DESIGNATED_SUBMITTER,
     currentSelections: (simulateTeammatePicks
       ? { amber: { "amber-3": [2, null, 4] }, blue: { "blue-3": [null, 3, 1] } }
       : { amber: {}, blue: {} }) as GameState["currentSelections"],

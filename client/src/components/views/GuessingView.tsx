@@ -15,7 +15,7 @@ export function GuessingView() {
   const isClueGiver = gameState.currentClueGiver[myTeam] === playerId;
   const hasGuessed = gameState.currentGuesses[myTeam].ownTeam !== null;
 
-  const designatedSubmitterId = gameState.designatedSubmitter[myTeam];
+  const designatedSubmitterId = gameState.decodeSubmitter[myTeam];
   const canSubmit = designatedSubmitterId === playerId;
   const submitter = gameState.players.find(p => p.id === designatedSubmitterId);
   const teammates = gameState.players

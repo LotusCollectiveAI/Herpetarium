@@ -383,11 +383,20 @@ export const gameStateSchema = z.object({
       opponent: z.tuple([z.number(), z.number(), z.number()]).nullable(),
     }),
   }),
-  // The one teammate allowed to actually submit their team's decode/
-  // interception guess this round (see submit_guess/submit_interception).
-  // Everyone on the team can still click numbers to show teammates what
-  // they'd pick — see currentSelections.
-  designatedSubmitter: z.object({
+  // The one teammate allowed to actually submit their team's decode guess
+  // (submit_guess) and, separately, their interception guess
+  // (submit_interception) this round. These can differ: the clue-giver is
+  // excluded from decoding their own code but not from intercepting, so a
+  // team whose only human is the clue-giver still gets a human submitting
+  // the interception even though an AI had to submit the decode. Everyone
+  // on the team can still click numbers to show teammates what they'd
+  // pick regardless of who's the designated submitter — see
+  // currentSelections.
+  decodeSubmitter: z.object({
+    amber: z.string().nullable(),
+    blue: z.string().nullable(),
+  }),
+  interceptSubmitter: z.object({
     amber: z.string().nullable(),
     blue: z.string().nullable(),
   }),

@@ -102,7 +102,8 @@ export function createNewGame(hostId: string, hostName: string, rules: GameRules
       amber: { ownTeam: null, opponent: null },
       blue: { ownTeam: null, opponent: null },
     },
-    designatedSubmitter: { amber: null, blue: null },
+    decodeSubmitter: { amber: null, blue: null },
+    interceptSubmitter: { amber: null, blue: null },
     currentSelections: { amber: {}, blue: {} },
     teams: {
       amber: { keywords: [], whiteTokens: 0, blackTokens: 0, history: [] },
@@ -113,22 +114,45 @@ export function createNewGame(hostId: string, hostName: string, rules: GameRules
 }
 
 // Picks who is allowed to submit this team's decode guess and interception
-// guess for the round. A human always gets the job over an AI teammate if
-// one is available, rotating round-robin by join order so the same person
-// isn't stuck deciding every round. The current round's clue-giver is
-// excluded since they can't be the one deciding their own team's guess.
-function getDesignatedSubmitter(
+// guess for the round. A human always gets the job over an AI teammate
+// whenever one is eligible, rotating round-robin by join order so the same
+// person isn't stuck deciding every round.
+//
+// The two roles have different eligibility: decoding excludes the current
+// round's clue-giver (they already know the code), but intercepting doesn't
+// -- the clue-giver has no more insight into the opponent's code than
+// anyone else. Normally the same person handles both jobs for simplicity.
+// But if the team's only human happens to be this round's clue-giver,
+// decoding is forced to an AI teammate -- and reusing that same AI for
+// interception would leave a human who *could* be in control sitting out
+// for the whole round. So interception falls back to finding its own
+// human instead of blindly mirroring decode's pick.
+function getDesignatedSubmitters(
   players: Player[],
   team: "amber" | "blue",
   round: number,
   clueGiverId: string | null,
-): string | null {
-  const eligible = players.filter(p => p.team === team && p.id !== clueGiverId);
-  if (eligible.length === 0) return null;
+): { decode: string | null; intercept: string | null } {
+  const teamPlayers = players.filter(p => p.team === team);
+  if (teamPlayers.length === 0) return { decode: null, intercept: null };
 
-  const humans = eligible.filter(p => !p.isAI);
-  const pool = humans.length > 0 ? humans : eligible;
-  return pool[(round - 1) % pool.length].id;
+  const decodeEligible = teamPlayers.filter(p => p.id !== clueGiverId);
+  const decodeHumans = decodeEligible.filter(p => !p.isAI);
+  const decodePool = decodeHumans.length > 0 ? decodeHumans : decodeEligible;
+  const decode = decodePool.length > 0 ? decodePool[(round - 1) % decodePool.length].id : null;
+
+  const decodeSubmitterIsHuman = decodeHumans.some(p => p.id === decode);
+  let intercept: string | null;
+  if (decodeSubmitterIsHuman) {
+    intercept = decode;
+  } else {
+    const interceptHumans = teamPlayers.filter(p => !p.isAI);
+    intercept = interceptHumans.length > 0
+      ? interceptHumans[(round - 1) % interceptHumans.length].id
+      : decode;
+  }
+
+  return { decode, intercept };
 }
 
 export function addPlayer(game: GameState, player: Player): GameState {
@@ -223,6 +247,9 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
   const amberCode = generateSecretCode(rng);
   const blueCode = generateSecretCode(rng);
 
+  const amberSubmitters = getDesignatedSubmitters(game.players, "amber", newRound, amberClueGiver);
+  const blueSubmitters = getDesignatedSubmitters(game.players, "blue", newRound, blueClueGiver);
+
   return {
     ...game,
     phase: "giving_clues",
@@ -234,10 +261,8 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
       amber: { ownTeam: null, opponent: null },
       blue: { ownTeam: null, opponent: null },
     },
-    designatedSubmitter: {
-      amber: getDesignatedSubmitter(game.players, "amber", newRound, amberClueGiver),
-      blue: getDesignatedSubmitter(game.players, "blue", newRound, blueClueGiver),
-    },
+    decodeSubmitter: { amber: amberSubmitters.decode, blue: blueSubmitters.decode },
+    interceptSubmitter: { amber: amberSubmitters.intercept, blue: blueSubmitters.intercept },
     currentSelections: { amber: {}, blue: {} },
   };
 }

@@ -375,7 +375,7 @@ async function processAIGuesses(gameId: string) {
     if (game.currentGuesses[team].ownTeam) continue;
     
     const teamPlayers = game.players.filter(p => p.team === team);
-    const aiGuesser = teamPlayers.find(p => p.id === game!.designatedSubmitter[team] && p.isAI);
+    const aiGuesser = teamPlayers.find(p => p.id === game!.decodeSubmitter[team] && p.isAI);
 
     if (!aiGuesser) continue;
 
@@ -440,7 +440,7 @@ async function processAIInterceptions(gameId: string) {
     const opponentTeam = team === "amber" ? "blue" : "amber";
     
     const teamPlayers = game.players.filter(p => p.team === team);
-    const aiInterceptor = teamPlayers.find(p => p.id === game!.designatedSubmitter[team] && p.isAI);
+    const aiInterceptor = teamPlayers.find(p => p.id === game!.interceptSubmitter[team] && p.isAI);
 
     if (!aiInterceptor) continue;
     
@@ -759,7 +759,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const player = game.players.find(p => p.id === client.playerId);
       if (!player?.team) return;
 
-      if (game.designatedSubmitter[player.team] !== client.playerId) {
+      if (game.decodeSubmitter[player.team] !== client.playerId) {
         sendTo(ws, { type: "error", message: "You are not the designated submitter for your team this round" });
         return;
       }
@@ -781,7 +781,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const player = game.players.find(p => p.id === client.playerId);
       if (!player?.team) return;
 
-      if (game.designatedSubmitter[player.team] !== client.playerId) {
+      if (game.interceptSubmitter[player.team] !== client.playerId) {
         sendTo(ws, { type: "error", message: "You are not the designated submitter for your team this round" });
         return;
       }
