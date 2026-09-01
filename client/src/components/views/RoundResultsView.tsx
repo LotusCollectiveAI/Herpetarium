@@ -104,7 +104,7 @@ export function RoundResultsView() {
               "flex items-center justify-between p-2 rounded transition-all duration-300",
               latestRound.ownTeamCorrect ? "bg-emerald-500/10" : "bg-red-500/10"
             )}>
-              <span className="text-sm">Own Team Guess</span>
+              <span className="text-sm">Team {team === "amber" ? "Amber" : "Blue"} Guess</span>
               <div className="flex items-center gap-2">
                 {latestRound.ownTeamGuess?.map((num, i) => (
                   <span
@@ -126,7 +126,7 @@ export function RoundResultsView() {
               "flex items-center justify-between p-2 rounded transition-all duration-300",
               latestRound.intercepted ? "bg-red-500/10" : "bg-muted"
             )}>
-              <span className="text-sm">Opponent Interception</span>
+              <span className="text-sm">Interception Attempt</span>
               <div className="flex items-center gap-2">
                 {latestRound.opponentGuess?.map((num, i) => (
                   <span
