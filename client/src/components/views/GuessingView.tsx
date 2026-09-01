@@ -15,8 +15,19 @@ export function GuessingView() {
   const isClueGiver = gameState.currentClueGiver[myTeam] === playerId;
   const hasGuessed = gameState.currentGuesses[myTeam].ownTeam !== null;
 
+  const designatedSubmitterId = gameState.designatedSubmitter[myTeam];
+  const canSubmit = designatedSubmitterId === playerId;
+  const submitter = gameState.players.find(p => p.id === designatedSubmitterId);
+  const teammates = gameState.players
+    .filter(p => p.team === myTeam && p.id !== playerId)
+    .map(p => ({ id: p.id, name: p.name }));
+
   const handleSubmitGuess = (guess: [number, number, number]) => {
     sendMessage({ type: "submit_guess", guess });
+  };
+
+  const handleSelectionChange = (selection: [number | null, number | null, number | null]) => {
+    sendMessage({ type: "update_selection", selection });
   };
 
   return (
@@ -126,6 +137,11 @@ export function GuessingView() {
               clues={myClues ?? undefined}
               onSubmit={handleSubmitGuess}
               label="Submit Guess"
+              canSubmit={canSubmit}
+              submitterName={submitter?.name}
+              teammates={teammates}
+              teammateSelections={gameState.currentSelections[myTeam]}
+              onSelectionChange={handleSelectionChange}
             />
           </CardContent>
         </Card>

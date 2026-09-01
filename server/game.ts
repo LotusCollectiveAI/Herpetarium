@@ -102,12 +102,33 @@ export function createNewGame(hostId: string, hostName: string, rules: GameRules
       amber: { ownTeam: null, opponent: null },
       blue: { ownTeam: null, opponent: null },
     },
+    designatedSubmitter: { amber: null, blue: null },
+    currentSelections: { amber: {}, blue: {} },
     teams: {
       amber: { keywords: [], whiteTokens: 0, blackTokens: 0, history: [] },
       blue: { keywords: [], whiteTokens: 0, blackTokens: 0, history: [] },
     },
     winner: null,
   };
+}
+
+// Picks who is allowed to submit this team's decode guess and interception
+// guess for the round. A human always gets the job over an AI teammate if
+// one is available, rotating round-robin by join order so the same person
+// isn't stuck deciding every round. The current round's clue-giver is
+// excluded since they can't be the one deciding their own team's guess.
+function getDesignatedSubmitter(
+  players: Player[],
+  team: "amber" | "blue",
+  round: number,
+  clueGiverId: string | null,
+): string | null {
+  const eligible = players.filter(p => p.team === team && p.id !== clueGiverId);
+  if (eligible.length === 0) return null;
+
+  const humans = eligible.filter(p => !p.isAI);
+  const pool = humans.length > 0 ? humans : eligible;
+  return pool[(round - 1) % pool.length].id;
 }
 
 export function addPlayer(game: GameState, player: Player): GameState {
@@ -201,7 +222,7 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
   
   const amberCode = generateSecretCode(rng);
   const blueCode = generateSecretCode(rng);
-  
+
   return {
     ...game,
     phase: "giving_clues",
@@ -212,6 +233,29 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
     currentGuesses: {
       amber: { ownTeam: null, opponent: null },
       blue: { ownTeam: null, opponent: null },
+    },
+    designatedSubmitter: {
+      amber: getDesignatedSubmitter(game.players, "amber", newRound, amberClueGiver),
+      blue: getDesignatedSubmitter(game.players, "blue", newRound, blueClueGiver),
+    },
+    currentSelections: { amber: {}, blue: {} },
+  };
+}
+
+export function updateSelection(
+  game: GameState,
+  team: "amber" | "blue",
+  playerId: string,
+  selection: [number | null, number | null, number | null],
+): GameState {
+  return {
+    ...game,
+    currentSelections: {
+      ...game.currentSelections,
+      [team]: {
+        ...game.currentSelections[team],
+        [playerId]: selection,
+      },
     },
   };
 }
@@ -243,11 +287,14 @@ export function submitOwnTeamGuess(game: GameState, team: "amber" | "blue", gues
   
   // Check if both teams have guessed
   const bothGuessed = updatedGuesses.amber.ownTeam !== null && updatedGuesses.blue.ownTeam !== null;
-  
+
   return {
     ...game,
     currentGuesses: updatedGuesses,
     phase: bothGuessed ? "opponent_intercepting" : game.phase,
+    // Moving from decoding to intercepting is a new guessing task; clear
+    // in-progress picks so decode-phase bubbles don't linger into it.
+    currentSelections: bothGuessed ? { amber: {}, blue: {} } : game.currentSelections,
   };
 }
 

@@ -3,25 +3,45 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Check } from "lucide-react";
 
+type Selection = [number | null, number | null, number | null];
+
+interface Teammate {
+  id: string;
+  name: string;
+}
+
 interface CodeGuessProps {
   onSubmit: (guess: [number, number, number]) => void;
   disabled?: boolean;
   team: "amber" | "blue";
   label?: string;
   clues?: string[];
+  canSubmit?: boolean;
+  submitterName?: string | null;
+  teammates?: Teammate[];
+  teammateSelections?: Record<string, Selection>;
+  onSelectionChange?: (selection: Selection) => void;
 }
 
-export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Guess", clues }: CodeGuessProps) {
-  const [guess, setGuess] = useState<(number | null)[]>([null, null, null]);
+export function CodeGuess({
+  onSubmit,
+  disabled = false,
+  team,
+  label = "Submit Guess",
+  clues,
+  canSubmit = true,
+  submitterName,
+  teammates = [],
+  teammateSelections = {},
+  onSelectionChange,
+}: CodeGuessProps) {
+  const [guess, setGuess] = useState<Selection>([null, null, null]);
 
   const handleNumberClick = (position: number, num: number) => {
-    const newGuess = [...guess];
-    if (newGuess[position] === num) {
-      newGuess[position] = null;
-    } else {
-      newGuess[position] = num;
-    }
+    const newGuess = [...guess] as Selection;
+    newGuess[position] = newGuess[position] === num ? null : num;
     setGuess(newGuess);
+    onSelectionChange?.(newGuess);
   };
 
   const isComplete = guess.every(g => g !== null);
@@ -31,8 +51,12 @@ export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Gu
     if (isComplete) {
       onSubmit(guess as [number, number, number]);
       setGuess([null, null, null]);
+      onSelectionChange?.([null, null, null]);
     }
   };
+
+  const teammatesPicking = (position: number, num: number) =>
+    teammates.filter(t => teammateSelections[t.id]?.[position] === num);
 
   return (
     <div className="flex flex-col gap-4">
@@ -58,26 +82,41 @@ export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Gu
               {[1, 2, 3, 4].map((num) => {
                 const isSelected = guess[position] === num;
                 const isUsedElsewhere = usedNumbers.includes(num) && !isSelected;
+                const picking = teammatesPicking(position, num);
 
                 return (
-                  <button
-                    key={num}
-                    onClick={() => handleNumberClick(position, num)}
-                    disabled={disabled || isUsedElsewhere}
-                    className={cn(
-                      "w-9 h-9 rounded-md font-bold text-base transition-all shrink-0",
-                      isSelected
-                        ? team === "amber"
-                          ? "bg-amber-500 text-amber-950 shadow-md"
-                          : "bg-blue-500 text-white shadow-md"
-                        : "bg-muted hover:bg-muted/80",
-                      isUsedElsewhere && "opacity-30 cursor-not-allowed",
-                      disabled && "opacity-50 cursor-not-allowed"
+                  <div key={num} className="relative">
+                    <button
+                      onClick={() => handleNumberClick(position, num)}
+                      disabled={disabled || isUsedElsewhere}
+                      className={cn(
+                        "w-9 h-9 rounded-md font-bold text-base transition-all shrink-0",
+                        isSelected
+                          ? team === "amber"
+                            ? "bg-amber-500 text-amber-950 shadow-md"
+                            : "bg-blue-500 text-white shadow-md"
+                          : "bg-muted hover:bg-muted/80",
+                        isUsedElsewhere && "opacity-30 cursor-not-allowed",
+                        disabled && "opacity-50 cursor-not-allowed"
+                      )}
+                      data-testid={`guess-${position}-${num}`}
+                    >
+                      {num}
+                    </button>
+                    {picking.length > 0 && (
+                      <div className="absolute -top-1.5 -right-1.5 flex -space-x-1.5">
+                        {picking.map(t => (
+                          <span
+                            key={t.id}
+                            title={t.name}
+                            className="w-4 h-4 rounded-full bg-primary text-primary-foreground text-[9px] font-bold flex items-center justify-center border border-background"
+                          >
+                            {t.name[0]?.toUpperCase() ?? "?"}
+                          </span>
+                        ))}
+                      </div>
                     )}
-                    data-testid={`guess-${position}-${num}`}
-                  >
-                    {num}
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -93,7 +132,7 @@ export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Gu
               key={i}
               className={cn(
                 "w-6 h-6 rounded flex items-center justify-center font-mono font-bold",
-                g !== null 
+                g !== null
                   ? team === "amber" ? "bg-amber-500/20 text-amber-600" : "bg-blue-500/20 text-blue-600"
                   : "bg-muted"
               )}
@@ -104,15 +143,21 @@ export function CodeGuess({ onSubmit, disabled = false, team, label = "Submit Gu
         </div>
       </div>
 
-      <Button
-        onClick={handleSubmit}
-        disabled={disabled || !isComplete}
-        className="w-full"
-        data-testid="button-submit-guess"
-      >
-        <Check className="h-4 w-4 mr-2" />
-        {label}
-      </Button>
+      {canSubmit ? (
+        <Button
+          onClick={handleSubmit}
+          disabled={disabled || !isComplete}
+          className="w-full"
+          data-testid="button-submit-guess"
+        >
+          <Check className="h-4 w-4 mr-2" />
+          {label}
+        </Button>
+      ) : (
+        <p className="text-center text-sm text-muted-foreground" data-testid="text-not-submitter">
+          Click your picks to show your team — only {submitterName ?? "your teammate"} can submit the final answer.
+        </p>
+      )}
     </div>
   );
 }

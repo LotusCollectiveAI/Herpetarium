@@ -34,9 +34,17 @@ const PHASES: { value: GamePhase; label: string }[] = [
 const PLAYERS: Player[] = [
   { id: "amber-1", name: "Alex", isAI: false, team: "amber", isReady: true },
   { id: "amber-2", name: "Ari", isAI: false, team: "amber", isReady: true },
+  { id: "amber-3", name: "Avery", isAI: false, team: "amber", isReady: true },
   { id: "blue-1", name: "Bailey", isAI: false, team: "blue", isReady: true },
   { id: "blue-2", name: "Casey", isAI: false, team: "blue", isReady: true },
+  { id: "blue-3", name: "Devon", isAI: false, team: "blue", isReady: true },
 ];
+
+// The one teammate allowed to actually submit each team's guess this round.
+const DESIGNATED_SUBMITTER: Record<"amber" | "blue", string> = {
+  amber: "amber-1",
+  blue: "blue-1",
+};
 
 const AMBER_KEYWORDS = ["TYPEWRITER", "VOLCANO", "ECLIPSE", "TEMPLE"];
 const BLUE_KEYWORDS = ["SKYLINE", "CORONA", "BOTANY", "ANCHOR"];
@@ -84,6 +92,7 @@ export default function DevPreview() {
   const [ownGuessSubmitted, setOwnGuessSubmitted] = useState(false);
   const [interceptSubmitted, setInterceptSubmitted] = useState(false);
   const [simulateAiThinking, setSimulateAiThinking] = useState(false);
+  const [simulateTeammatePicks, setSimulateTeammatePicks] = useState(true);
 
   const viewer = PLAYERS.find(p => p.id === viewerId) ?? PLAYERS[0];
   const myTeam = viewer.team as "amber" | "blue";
@@ -113,12 +122,16 @@ export default function DevPreview() {
         opponent: myTeam === "blue" && interceptSubmitted ? CURRENT_CODE.amber : null,
       },
     },
+    designatedSubmitter: DESIGNATED_SUBMITTER,
+    currentSelections: (simulateTeammatePicks
+      ? { amber: { "amber-3": [2, null, 4] }, blue: { "blue-3": [null, 3, 1] } }
+      : { amber: {}, blue: {} }) as GameState["currentSelections"],
     teams: {
       amber: { keywords: AMBER_KEYWORDS, whiteTokens: 1, blackTokens: 0, history: [ROUND_1_AMBER_HISTORY] },
       blue: { keywords: BLUE_KEYWORDS, whiteTokens: 0, blackTokens: 1, history: [ROUND_1_BLUE_HISTORY] },
     },
     winner: phase === "game_over" ? "amber" : null,
-  }), [phase, myTeam, ownGuessSubmitted, interceptSubmitted, cluesRevealed]);
+  }), [phase, myTeam, ownGuessSubmitted, interceptSubmitted, cluesRevealed, simulateTeammatePicks]);
 
   const contextValue = useMemo(() => ({
     gameState,
@@ -191,6 +204,7 @@ export default function DevPreview() {
                   <SelectItem key={p.id} value={p.id}>
                     {p.name} — {p.team === "amber" ? "Amber" : "Blue"}
                     {CURRENT_CLUE_GIVER[p.team as "amber" | "blue"] === p.id ? " (Clue Giver)" : ""}
+                    {DESIGNATED_SUBMITTER[p.team as "amber" | "blue"] === p.id ? " (Submitter)" : ""}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -210,6 +224,11 @@ export default function DevPreview() {
           <label className="flex items-center gap-2">
             <Checkbox checked={simulateAiThinking} onCheckedChange={(v) => setSimulateAiThinking(!!v)} />
             Simulate AI thinking
+          </label>
+
+          <label className="flex items-center gap-2">
+            <Checkbox checked={simulateTeammatePicks} onCheckedChange={(v) => setSimulateTeammatePicks(!!v)} />
+            Simulate teammate picks
           </label>
         </div>
 

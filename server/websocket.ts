@@ -12,6 +12,7 @@ import {
   submitClues,
   submitOwnTeamGuess,
   submitInterception,
+  updateSelection,
   generatePlayerId,
   getAIProviderName,
   shuffleArray,
@@ -374,17 +375,10 @@ async function processAIGuesses(gameId: string) {
     if (game.currentGuesses[team].ownTeam) continue;
     
     const teamPlayers = game.players.filter(p => p.team === team);
-    const nonClueGivers = teamPlayers.filter(p => p.id !== game!.currentClueGiver[team]);
-    const aiGuesser = nonClueGivers.find(p => p.isAI);
-    
-    if (!aiGuesser) {
-      const humanGuessers = nonClueGivers.filter(p => !p.isAI);
-      if (humanGuessers.length === 0 && teamPlayers.length === 1) {
-        continue;
-      }
-      continue;
-    }
-    
+    const aiGuesser = teamPlayers.find(p => p.id === game!.designatedSubmitter[team] && p.isAI);
+
+    if (!aiGuesser) continue;
+
     const aiName = getAIProviderName(aiGuesser.aiProvider!);
     const config = getPlayerConfig(aiGuesser);
     const timeoutMs = getPlayerTimeout(aiGuesser);
@@ -446,8 +440,8 @@ async function processAIInterceptions(gameId: string) {
     const opponentTeam = team === "amber" ? "blue" : "amber";
     
     const teamPlayers = game.players.filter(p => p.team === team);
-    const aiInterceptor = teamPlayers.find(p => p.isAI);
-    
+    const aiInterceptor = teamPlayers.find(p => p.id === game!.designatedSubmitter[team] && p.isAI);
+
     if (!aiInterceptor) continue;
     
     const aiName = getAIProviderName(aiInterceptor.aiProvider!);
@@ -764,7 +758,12 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       
       const player = game.players.find(p => p.id === client.playerId);
       if (!player?.team) return;
-      
+
+      if (game.designatedSubmitter[player.team] !== client.playerId) {
+        sendTo(ws, { type: "error", message: "You are not the designated submitter for your team this round" });
+        return;
+      }
+
       const updated = submitOwnTeamGuess(game, player.team, message.guess);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
@@ -781,7 +780,12 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       
       const player = game.players.find(p => p.id === client.playerId);
       if (!player?.team) return;
-      
+
+      if (game.designatedSubmitter[player.team] !== client.playerId) {
+        sendTo(ws, { type: "error", message: "You are not the designated submitter for your team this round" });
+        return;
+      }
+
       const updated = submitInterception(game, player.team, message.guess);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
@@ -796,7 +800,22 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
-    
+
+    case "update_selection": {
+      if (!client) return;
+
+      const game = games.get(client.gameId);
+      if (!game || (game.phase !== "own_team_guessing" && game.phase !== "opponent_intercepting")) return;
+
+      const player = game.players.find(p => p.id === client.playerId);
+      if (!player?.team) return;
+
+      const updated = updateSelection(game, player.team, player.id, message.selection);
+      games.set(client.gameId, updated);
+      sendGameState(client.gameId);
+      break;
+    }
+
     case "next_round": {
       if (!client) return;
       

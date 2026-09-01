@@ -383,6 +383,22 @@ export const gameStateSchema = z.object({
       opponent: z.tuple([z.number(), z.number(), z.number()]).nullable(),
     }),
   }),
+  // The one teammate allowed to actually submit their team's decode/
+  // interception guess this round (see submit_guess/submit_interception).
+  // Everyone on the team can still click numbers to show teammates what
+  // they'd pick — see currentSelections.
+  designatedSubmitter: z.object({
+    amber: z.string().nullable(),
+    blue: z.string().nullable(),
+  }),
+  // Live, in-progress picks per player, keyed by player id, so teammates
+  // can see each other's guesses forming in real time before the
+  // designated submitter locks one in. Reset whenever the team moves on
+  // to a new guessing task (new round, or decode -> intercept).
+  currentSelections: z.object({
+    amber: z.record(z.string(), z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()])),
+    blue: z.record(z.string(), z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()])),
+  }),
   teams: z.object({
     amber: teamStateSchema,
     blue: teamStateSchema,
@@ -406,6 +422,7 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("submit_clues"), clues: z.array(z.string()) }),
   z.object({ type: z.literal("submit_guess"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
   z.object({ type: z.literal("submit_interception"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
+  z.object({ type: z.literal("update_selection"), selection: z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()]) }),
   z.object({ type: z.literal("next_round") }),
   z.object({ type: z.literal("request_state") }),
   z.object({ type: z.literal("new_game_same_players") }),

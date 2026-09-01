@@ -7,7 +7,7 @@ import { CodeGuess } from "@/components/CodeGuess";
 import { Crosshair, Shield, Send } from "lucide-react";
 
 export function InterceptingView() {
-  const { gameState, myTeam, sendMessage } = useGame();
+  const { gameState, playerId, myTeam, sendMessage } = useGame();
   const [activeTab, setActiveTab] = useState("clues");
 
   if (!gameState || !myTeam) return null;
@@ -16,8 +16,19 @@ export function InterceptingView() {
   const opponentClues = gameState.currentClues[opponentTeam];
   const hasIntercepted = gameState.currentGuesses[myTeam].opponent !== null;
 
+  const designatedSubmitterId = gameState.designatedSubmitter[myTeam];
+  const canSubmit = designatedSubmitterId === playerId;
+  const submitter = gameState.players.find(p => p.id === designatedSubmitterId);
+  const teammates = gameState.players
+    .filter(p => p.team === myTeam && p.id !== playerId)
+    .map(p => ({ id: p.id, name: p.name }));
+
   const handleSubmitInterception = (guess: [number, number, number]) => {
     sendMessage({ type: "submit_interception", guess });
+  };
+
+  const handleSelectionChange = (selection: [number | null, number | null, number | null]) => {
+    sendMessage({ type: "update_selection", selection });
   };
 
   const cluesContent = opponentClues && (
@@ -79,6 +90,11 @@ export function InterceptingView() {
           clues={opponentClues ?? undefined}
           onSubmit={handleSubmitInterception}
           label="Submit Interception"
+          canSubmit={canSubmit}
+          submitterName={submitter?.name}
+          teammates={teammates}
+          teammateSelections={gameState.currentSelections[myTeam]}
+          onSelectionChange={handleSelectionChange}
         />
       </CardContent>
     </Card>
