@@ -1,4 +1,4 @@
-import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, type GameRules } from "@shared/schema";
+import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
 import { getRandomKeywords } from "./wordPacks";
 
 export function createSeededRng(seed: string): () => number {
@@ -156,7 +156,7 @@ function getDesignatedSubmitters(
 }
 
 export function addPlayer(game: GameState, player: Player): GameState {
-  if (game.players.length >= 6) {
+  if (game.players.length >= MAX_GAME_PLAYERS) {
     throw new Error("Game is full");
   }
   if (game.phase !== "lobby") {
@@ -176,9 +176,13 @@ export function removePlayer(game: GameState, playerId: string): GameState {
 }
 
 export function assignTeam(game: GameState, playerId: string, team: "amber" | "blue"): GameState {
+  const currentTeamSize = game.players.filter(p => p.team === team && p.id !== playerId).length;
+  if (currentTeamSize >= MAX_TEAM_PLAYERS) {
+    return game;
+  }
   return {
     ...game,
-    players: game.players.map(p => 
+    players: game.players.map(p =>
       p.id === playerId ? { ...p, team } : p
     ),
   };
@@ -213,8 +217,20 @@ export function autoAssignRemainingPlayers(game: GameState): GameState {
   // Build assignment map
   const assignments = new Map<string, "amber" | "blue">();
   for (const player of unassigned) {
-    // Assign to smaller team, prefer blue if equal (humans typically pick amber first)
-    const team: "amber" | "blue" = blueCount < amberCount ? "blue" : (amberCount < blueCount ? "amber" : "blue");
+    const amberOpen = amberCount < MAX_TEAM_PLAYERS;
+    const blueOpen = blueCount < MAX_TEAM_PLAYERS;
+
+    // Assign to smaller team, prefer blue if equal (humans typically pick
+    // amber first), but never push a team past its cap.
+    let team: "amber" | "blue";
+    if (amberOpen && blueOpen) {
+      team = blueCount < amberCount ? "blue" : (amberCount < blueCount ? "amber" : "blue");
+    } else if (amberOpen) {
+      team = "amber";
+    } else {
+      team = "blue";
+    }
+
     assignments.set(player.id, team);
     if (team === "amber") {
       amberCount++;

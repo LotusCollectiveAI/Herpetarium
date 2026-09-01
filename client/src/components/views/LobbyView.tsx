@@ -6,7 +6,7 @@ import { AIPlayerButton } from "@/components/AIPlayerButton";
 import { Users, Play, X, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import { MIN_GAME_PLAYERS, type AIPlayerConfig } from "@shared/schema";
+import { MIN_GAME_PLAYERS, MAX_GAME_PLAYERS, type AIPlayerConfig } from "@shared/schema";
 
 export function LobbyView() {
   const { gameState, isHost, sendMessage, playerId } = useGame();
@@ -74,7 +74,7 @@ export function LobbyView() {
 
           <div className="space-y-2">
             <p className="text-sm font-medium">
-              Players ({gameState.players.length}/4)
+              Players ({gameState.players.length}/{MAX_GAME_PLAYERS})
             </p>
             <div className="space-y-2">
               {gameState.players.map((player) => (
@@ -117,7 +117,7 @@ export function LobbyView() {
         </CardContent>
       </Card>
 
-      {isHost && gameState.players.length < 4 && (
+      {isHost && gameState.players.length < MAX_GAME_PLAYERS && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">Add AI Players</CardTitle>

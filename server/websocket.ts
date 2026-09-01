@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs, MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs, MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS, MAX_TEAM_PLAYERS } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -714,10 +714,16 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
     
     case "join_team": {
       if (!client) return;
-      
+
       const game = games.get(client.gameId);
       if (!game) return;
-      
+
+      const targetTeamSize = game.players.filter(p => p.team === message.team && p.id !== client.playerId).length;
+      if (targetTeamSize >= MAX_TEAM_PLAYERS) {
+        sendTo(ws, { type: "error", message: `Team ${message.team === "amber" ? "Amber" : "Blue"} is full (max ${MAX_TEAM_PLAYERS} players)` });
+        return;
+      }
+
       const updated = assignTeam(game, client.playerId, message.team);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);

@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { cn } from "@/lib/utils";
 import { Play } from "lucide-react";
-import { MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS } from "@shared/schema";
+import { MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS, MAX_TEAM_PLAYERS } from "@shared/schema";
 
 export function TeamSetupView() {
   const { gameState, playerId, myTeam, isHost, sendMessage } = useGame();
@@ -27,7 +27,7 @@ export function TeamSetupView() {
       <div className="text-center">
         <h2 className="text-xl font-bold">Choose Your Team</h2>
         <p className="text-muted-foreground text-sm">
-          Each team needs at least {MIN_TEAM_PLAYERS} players to start
+          Each team needs {MIN_TEAM_PLAYERS}-{MAX_TEAM_PLAYERS} players to start
         </p>
       </div>
 
@@ -40,6 +40,7 @@ export function TeamSetupView() {
             </div>
             <CardDescription>
               {amberPlayers.length} player{amberPlayers.length !== 1 && "s"}
+              {amberPlayers.length >= MAX_TEAM_PLAYERS && " (Full)"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -58,7 +59,7 @@ export function TeamSetupView() {
                 </p>
               )}
             </div>
-            {isHuman && myTeam !== "amber" && (
+            {isHuman && myTeam !== "amber" && amberPlayers.length < MAX_TEAM_PLAYERS && (
               <Button
                 variant="outline"
                 className="w-full border-amber-500/50 hover:bg-amber-500/10"
@@ -79,6 +80,7 @@ export function TeamSetupView() {
             </div>
             <CardDescription>
               {bluePlayers.length} player{bluePlayers.length !== 1 && "s"}
+              {bluePlayers.length >= MAX_TEAM_PLAYERS && " (Full)"}
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -97,7 +99,7 @@ export function TeamSetupView() {
                 </p>
               )}
             </div>
-            {isHuman && myTeam !== "blue" && (
+            {isHuman && myTeam !== "blue" && bluePlayers.length < MAX_TEAM_PLAYERS && (
               <Button
                 variant="outline"
                 className="w-full border-blue-500/50 hover:bg-blue-500/10"
