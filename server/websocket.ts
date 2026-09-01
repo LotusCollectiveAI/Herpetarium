@@ -365,125 +365,182 @@ async function processAIClues(gameId: string) {
   }
 }
 
+async function runAIGuessCall(
+  gameId: string,
+  game: GameState,
+  team: "amber" | "blue",
+  aiPlayer: Player,
+  fallbackGuess: [number, number, number],
+): Promise<[number, number, number]> {
+  const aiName = getAIProviderName(aiPlayer.aiProvider!);
+  const config = getPlayerConfig(aiPlayer);
+  const timeoutMs = getPlayerTimeout(aiPlayer);
+
+  broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
+
+  const clues = game.currentClues[team]!;
+  const keywords = game.teams[team].keywords;
+  const history = game.teams[team].history.map(h => ({
+    clues: h.clues,
+    targetCode: h.targetCode,
+  }));
+
+  const { result: callResult, timedOut } = await withTimeout(
+    generateGuess(config, { keywords, clues, history }),
+    timeoutMs,
+    fallbackGuess,
+    config.model
+  );
+
+  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_guess", callResult, timedOut);
+
+  if (timedOut) {
+    log(`AI guess timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
+  } else if (callResult.error) {
+    log(`AI guess failed for ${aiName} (${config.model})`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+  }
+
+  if (callResult.reasoningTrace) {
+    log(`[Reasoning Trace] ${aiName} (${config.model}) guess:\n${callResult.reasoningTrace}`, "websocket");
+  }
+
+  broadcast(gameId, { type: "ai_done", aiName });
+
+  return callResult.result;
+}
+
 async function processAIGuesses(gameId: string) {
   let game = games.get(gameId);
   if (!game || game.phase !== "own_team_guessing") return;
-  
+
   const fallbackGuess: [number, number, number] = [1, 2, 3];
-  
+
   for (const team of ["amber", "blue"] as const) {
     if (game.currentGuesses[team].ownTeam) continue;
-    
-    const teamPlayers = game.players.filter(p => p.team === team);
-    const aiGuesser = teamPlayers.find(p => p.id === game!.decodeSubmitter[team] && p.isAI);
 
+    const teamPlayers = game.players.filter(p => p.team === team);
+    const clueGiverId = game!.currentClueGiver[team];
+    const decodeSubmitterId = game!.decodeSubmitter[team];
+
+    // AI teammates who aren't the designated submitter still weigh in with
+    // a suggested pick — shown to the team as a live selection, same as a
+    // human clicking numbers — so a human submitter isn't guessing blind
+    // to what their AI teammates would have picked. The clue-giver is
+    // excluded since they already know the code and never decode it.
+    const opinionGivers = teamPlayers.filter(p =>
+      p.isAI && p.id !== clueGiverId && p.id !== decodeSubmitterId && !game!.currentSelections[team][p.id]
+    );
+
+    for (const aiPlayer of opinionGivers) {
+      const guess = await runAIGuessCall(gameId, game, team, aiPlayer, fallbackGuess);
+      game = games.get(gameId)!;
+      game = updateSelection(game, team, aiPlayer.id, guess);
+      games.set(gameId, game);
+      sendGameState(gameId);
+    }
+
+    const aiGuesser = teamPlayers.find(p => p.id === decodeSubmitterId && p.isAI);
     if (!aiGuesser) continue;
 
-    const aiName = getAIProviderName(aiGuesser.aiProvider!);
-    const config = getPlayerConfig(aiGuesser);
-    const timeoutMs = getPlayerTimeout(aiGuesser);
-    
-    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
-    
-    const clues = game.currentClues[team]!;
-    const keywords = game.teams[team].keywords;
-    const history = game.teams[team].history.map(h => ({
-      clues: h.clues,
-      targetCode: h.targetCode,
-    }));
-    
-    const { result: callResult, timedOut } = await withTimeout(
-      generateGuess(config, { keywords, clues, history }),
-      timeoutMs,
-      fallbackGuess,
-      config.model
-    );
-    
-    await logAiCall(gameId, game.round, aiGuesser.aiProvider!, "generate_guess", callResult, timedOut);
-    
-    if (timedOut) {
-      log(`AI guess timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
-    } else if (callResult.error) {
-      log(`AI guess failed for ${aiName} (${config.model})`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
-    }
-    
-    if (callResult.reasoningTrace) {
-      log(`[Reasoning Trace] ${aiName} (${config.model}) guess:\n${callResult.reasoningTrace}`, "websocket");
-    }
-    
+    const guess = await runAIGuessCall(gameId, game, team, aiGuesser, fallbackGuess);
     game = games.get(gameId)!;
-    game = submitOwnTeamGuess(game, team, callResult.result);
+    game = submitOwnTeamGuess(game, team, guess);
     games.set(gameId, game);
-    
-    broadcast(gameId, { type: "ai_done", aiName });
   }
-  
+
   sendGameState(gameId);
-  
+
   game = games.get(gameId)!;
   if (game.phase === "opponent_intercepting") {
     setTimeout(() => processAITurn(gameId), 500);
   }
 }
 
+async function runAIInterceptionCall(
+  gameId: string,
+  game: GameState,
+  opponentTeam: "amber" | "blue",
+  aiPlayer: Player,
+  fallbackGuess: [number, number, number],
+): Promise<[number, number, number]> {
+  const aiName = getAIProviderName(aiPlayer.aiProvider!);
+  const config = getPlayerConfig(aiPlayer);
+  const timeoutMs = getPlayerTimeout(aiPlayer);
+
+  broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
+
+  const clues = game.currentClues[opponentTeam]!;
+  const history = game.teams[opponentTeam].history.map(h => ({
+    clues: h.clues,
+    targetCode: h.targetCode,
+  }));
+
+  const { result: callResult, timedOut } = await withTimeout(
+    generateInterception(config, { clues, history }),
+    timeoutMs,
+    fallbackGuess,
+    config.model
+  );
+
+  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_interception", callResult, timedOut);
+
+  if (timedOut) {
+    log(`AI interception timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
+  } else if (callResult.error) {
+    log(`AI interception failed for ${aiName} (${config.model})`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+  }
+
+  if (callResult.reasoningTrace) {
+    log(`[Reasoning Trace] ${aiName} (${config.model}) interception:\n${callResult.reasoningTrace}`, "websocket");
+  }
+
+  broadcast(gameId, { type: "ai_done", aiName });
+
+  return callResult.result;
+}
+
 async function processAIInterceptions(gameId: string) {
   let game = games.get(gameId);
   if (!game || game.phase !== "opponent_intercepting") return;
-  
+
   const fallbackGuess: [number, number, number] = [1, 2, 3];
-  
+
   for (const team of ["amber", "blue"] as const) {
     if (game.currentGuesses[team].opponent) continue;
-    
-    const opponentTeam = team === "amber" ? "blue" : "amber";
-    
-    const teamPlayers = game.players.filter(p => p.team === team);
-    const aiInterceptor = teamPlayers.find(p => p.id === game!.interceptSubmitter[team] && p.isAI);
 
-    if (!aiInterceptor) continue;
-    
-    const aiName = getAIProviderName(aiInterceptor.aiProvider!);
-    const config = getPlayerConfig(aiInterceptor);
-    const timeoutMs = getPlayerTimeout(aiInterceptor);
-    
-    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
-    
-    const clues = game.currentClues[opponentTeam]!;
-    const history = game.teams[opponentTeam].history.map(h => ({
-      clues: h.clues,
-      targetCode: h.targetCode,
-    }));
-    
-    const { result: callResult, timedOut } = await withTimeout(
-      generateInterception(config, { clues, history }),
-      timeoutMs,
-      fallbackGuess,
-      config.model
+    const opponentTeam = team === "amber" ? "blue" : "amber";
+    const teamPlayers = game.players.filter(p => p.team === team);
+    const interceptSubmitterId = game!.interceptSubmitter[team];
+
+    // AI teammates who aren't the designated submitter still weigh in
+    // with a suggested pick, same as during decoding. Unlike decoding,
+    // the clue-giver isn't excluded here — they know as little about the
+    // opponent's code as anyone else.
+    const opinionGivers = teamPlayers.filter(p =>
+      p.isAI && p.id !== interceptSubmitterId && !game!.currentSelections[team][p.id]
     );
-    
-    await logAiCall(gameId, game.round, aiInterceptor.aiProvider!, "generate_interception", callResult, timedOut);
-    
-    if (timedOut) {
-      log(`AI interception timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
-    } else if (callResult.error) {
-      log(`AI interception failed for ${aiName} (${config.model})`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+
+    for (const aiPlayer of opinionGivers) {
+      const guess = await runAIInterceptionCall(gameId, game, opponentTeam, aiPlayer, fallbackGuess);
+      game = games.get(gameId)!;
+      game = updateSelection(game, team, aiPlayer.id, guess);
+      games.set(gameId, game);
+      sendGameState(gameId);
     }
-    
-    if (callResult.reasoningTrace) {
-      log(`[Reasoning Trace] ${aiName} (${config.model}) interception:\n${callResult.reasoningTrace}`, "websocket");
-    }
-    
+
+    const aiInterceptor = teamPlayers.find(p => p.id === interceptSubmitterId && p.isAI);
+    if (!aiInterceptor) continue;
+
+    const guess = await runAIInterceptionCall(gameId, game, opponentTeam, aiInterceptor, fallbackGuess);
     game = games.get(gameId)!;
-    game = submitInterception(game, team, callResult.result);
+    game = submitInterception(game, team, guess);
     games.set(gameId, game);
-    
-    broadcast(gameId, { type: "ai_done", aiName });
   }
-  
+
   sendGameState(gameId);
   
   game = games.get(gameId)!;
