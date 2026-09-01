@@ -6,11 +6,10 @@ import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { RoundHistory } from "@/components/RoundHistory";
 import { DeductionNotes } from "@/components/DeductionNotes";
-import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
 import { Crosshair, Shield, History, Send } from "lucide-react";
 
 export function InterceptingView() {
-  const { gameState, playerId, myTeam, sendMessage, aiThinking, aiThinkingStartTime } = useGame();
+  const { gameState, myTeam, sendMessage } = useGame();
   const [activeTab, setActiveTab] = useState("clues");
 
   if (!gameState || !myTeam) return null;
@@ -19,7 +18,6 @@ export function InterceptingView() {
   const opponentClues = gameState.currentClues[opponentTeam];
   const opponentHistory = gameState.teams[opponentTeam].history;
   const hasIntercepted = gameState.currentGuesses[myTeam].opponent !== null;
-  const isClueGiver = gameState.currentClueGiver[myTeam] === playerId;
 
   const handleSubmitInterception = (guess: [number, number, number]) => {
     sendMessage({ type: "submit_interception", guess });
@@ -81,25 +79,6 @@ export function InterceptingView() {
         </div>
       </CardContent>
     </Card>
-  ) : isClueGiver ? (
-    <Card>
-      <CardContent className="py-8">
-        <div className="flex flex-col items-center gap-4 text-center">
-          {aiThinking ? (
-            <AIThinkingIndicator aiName={aiThinking} context="intercept" startTime={aiThinkingStartTime} />
-          ) : (
-            <>
-              <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center">
-                <Crosshair className="h-6 w-6 text-muted-foreground" />
-              </div>
-              <p className="text-muted-foreground">
-                Your team is attempting to intercept...
-              </p>
-            </>
-          )}
-        </div>
-      </CardContent>
-    </Card>
   ) : (
     <Card>
       <CardHeader className="pb-2">
@@ -132,7 +111,7 @@ export function InterceptingView() {
       </div>
 
       <div className="hidden sm:flex flex-col gap-4">
-        {(hasIntercepted || isClueGiver) && cluesContent}
+        {hasIntercepted && cluesContent}
         <DeductionNotes
           gameId={gameState.id}
           opponentTeam={opponentTeam}
