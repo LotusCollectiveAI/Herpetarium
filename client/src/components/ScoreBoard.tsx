@@ -27,11 +27,12 @@ function Token({ type, count, reverseFill = false }: { type: "white" | "black"; 
           <div
             key={i}
             className={cn(
-              "w-5 h-5 rounded-full transition-all",
-              type === "white"
-                ? "bg-white border-2 border-gray-300 dark:border-gray-500"
-                : "bg-gray-900 border-2 border-gray-700 dark:bg-gray-800",
-              filled ? "opacity-100 shadow-md" : "opacity-20"
+              "w-5 h-5 rounded-full border-2 transition-all",
+              filled
+                ? type === "white"
+                  ? "bg-white border-white shadow-[0_0_6px_rgba(255,255,255,0.6)]"
+                  : "bg-gray-950 border-gray-400 shadow-[0_0_6px_rgba(0,0,0,0.8)] dark:bg-black"
+                : "bg-transparent border-muted-foreground/30"
             )}
             data-testid={`token-${type}-${i}`}
           />
