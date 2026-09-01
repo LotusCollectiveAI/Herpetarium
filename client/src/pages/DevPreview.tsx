@@ -96,6 +96,7 @@ export default function DevPreview() {
   const [interceptSubmitted, setInterceptSubmitted] = useState(false);
   const [simulateAiThinking, setSimulateAiThinking] = useState(false);
   const [simulateTeammatePicks, setSimulateTeammatePicks] = useState(true);
+  const [simulateGameDecided, setSimulateGameDecided] = useState(false);
 
   const viewer = PLAYERS.find(p => p.id === viewerId) ?? PLAYERS[0];
   const myTeam = viewer.team as "amber" | "blue";
@@ -134,8 +135,8 @@ export default function DevPreview() {
       amber: { keywords: AMBER_KEYWORDS, whiteTokens: 1, blackTokens: 0, history: [ROUND_1_AMBER_HISTORY] },
       blue: { keywords: BLUE_KEYWORDS, whiteTokens: 0, blackTokens: 1, history: [ROUND_1_BLUE_HISTORY] },
     },
-    winner: phase === "game_over" ? "amber" : null,
-  }), [phase, myTeam, ownGuessSubmitted, interceptSubmitted, cluesRevealed, simulateTeammatePicks]);
+    winner: phase === "game_over" || simulateGameDecided ? "amber" : null,
+  }), [phase, myTeam, ownGuessSubmitted, interceptSubmitted, cluesRevealed, simulateTeammatePicks, simulateGameDecided]);
 
   const contextValue = useMemo(() => ({
     gameState,
@@ -233,6 +234,11 @@ export default function DevPreview() {
           <label className="flex items-center gap-2">
             <Checkbox checked={simulateTeammatePicks} onCheckedChange={(v) => setSimulateTeammatePicks(!!v)} />
             Simulate teammate picks
+          </label>
+
+          <label className="flex items-center gap-2">
+            <Checkbox checked={simulateGameDecided} onCheckedChange={(v) => setSimulateGameDecided(!!v)} />
+            Simulate game decided (test Round Results phase leading into game over)
           </label>
         </div>
 

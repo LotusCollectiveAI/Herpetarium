@@ -267,6 +267,20 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
   };
 }
 
+// Whether the round that was just evaluated actually decided the game --
+// either a winner was determined, or the round limit was hit (which forces
+// a decision, win or tie, via evaluateRound's comparePenaltyBurden call).
+export function isGameDecided(game: GameState): boolean {
+  return game.winner !== null || game.round >= game.rules.maxRounds;
+}
+
+// Called when the host (or, for all-AI games, the server itself) continues
+// past round_results: moves on to the next round, or -- if this round
+// decided the game -- finalizes the phase to game_over.
+export function advanceFromRoundResults(game: GameState): GameState {
+  return isGameDecided(game) ? { ...game, phase: "game_over" } : startNewRound(game);
+}
+
 export function updateSelection(
   game: GameState,
   team: "amber" | "blue",
@@ -419,7 +433,11 @@ export function evaluateRound(game: GameState): GameState {
 
   return {
     ...game,
-    phase: winner || maxRoundsReached ? "game_over" : "round_results",
+    // Always land on round_results first, even when this round decided
+    // the game, so the final round's outcome is shown before the win
+    // screen instead of being skipped straight past. advanceFromRoundResults
+    // is what actually moves on to game_over, once someone continues.
+    phase: "round_results",
     winner,
     teams: {
       amber: {

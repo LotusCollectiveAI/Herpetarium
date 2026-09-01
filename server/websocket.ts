@@ -8,6 +8,8 @@ import {
   assignTeam,
   startGame,
   startNewRound,
+  advanceFromRoundResults,
+  isGameDecided,
   autoAssignRemainingPlayers,
   submitClues,
   submitOwnTeamGuess,
@@ -542,17 +544,17 @@ async function processAIInterceptions(gameId: string) {
   }
 
   sendGameState(gameId);
-  
+
   game = games.get(gameId)!;
-  if (game.phase === "round_results" || game.phase === "game_over") {
+  if (game.phase === "round_results") {
     await persistRoundResults(gameId, game);
-    if (game.phase === "game_over") {
+    if (isGameDecided(game)) {
       await persistGameCompletion(gameId, game);
-    } else if (game.phase === "round_results") {
-      const allAI = game.players.every(p => p.isAI);
-      if (allAI) {
-        setTimeout(() => autoAdvanceRound(gameId), 1000);
-      }
+    }
+
+    const allAI = game.players.every(p => p.isAI);
+    if (allAI) {
+      setTimeout(() => autoAdvanceRound(gameId), 1000);
     }
   }
 }
@@ -561,11 +563,16 @@ async function autoAdvanceRound(gameId: string) {
   const game = games.get(gameId);
   if (!game || game.phase !== "round_results") return;
 
-  const updated = startNewRound(game);
+  const updated = advanceFromRoundResults(game);
   games.set(gameId, updated);
   sendGameState(gameId);
-  log(`Auto-advancing all-AI game ${gameId} to round ${updated.round}`, "websocket");
 
+  if (updated.phase === "game_over") {
+    log(`Auto-advancing all-AI game ${gameId} to game over`, "websocket");
+    return;
+  }
+
+  log(`Auto-advancing all-AI game ${gameId} to round ${updated.round}`, "websocket");
   setTimeout(() => processAITurn(gameId), 500);
 }
 
@@ -846,14 +853,14 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const updated = submitInterception(game, player.team, message.guess);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
-      if (updated.phase === "round_results" || updated.phase === "game_over") {
+
+      if (updated.phase === "round_results") {
         persistRoundResults(client.gameId, updated);
-        if (updated.phase === "game_over") {
+        if (isGameDecided(updated)) {
           persistGameCompletion(client.gameId, updated);
         }
       }
-      
+
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
@@ -875,18 +882,21 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
 
     case "next_round": {
       if (!client) return;
-      
+
       const game = games.get(client.gameId);
       if (!game || game.hostId !== client.playerId) {
         sendTo(ws, { type: "error", message: "Only host can advance rounds" });
         return;
       }
-      
-      const updated = startNewRound(game);
+      if (game.phase !== "round_results") return;
+
+      const updated = advanceFromRoundResults(game);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
-      setTimeout(() => processAITurn(client.gameId), 500);
+
+      if (updated.phase !== "game_over") {
+        setTimeout(() => processAITurn(client.gameId), 500);
+      }
       break;
     }
     

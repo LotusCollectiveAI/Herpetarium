@@ -16,7 +16,9 @@ export function RoundResultsView() {
 
   if (!gameState || !myTeam) return null;
 
-  const handleNextRound = () => {
+  const isGameDecided = gameState.winner !== null || gameState.round >= gameState.rules.maxRounds;
+
+  const handleContinue = () => {
     sendMessage({ type: "next_round" });
   };
 
@@ -190,21 +192,35 @@ export function RoundResultsView() {
         {renderTeamResult("blue", latestBlue)}
       </div>
 
+      {isGameDecided && (
+        <div
+          className={cn(
+            "text-center text-sm font-semibold",
+            gameState.winner === "amber" ? "text-amber-500" : gameState.winner === "blue" ? "text-blue-500" : "text-muted-foreground"
+          )}
+          data-testid="text-game-decided"
+        >
+          {gameState.winner
+            ? `Team ${gameState.winner === "amber" ? "Amber" : "Blue"} wins the game!`
+            : "The game has ended in a tie!"}
+        </div>
+      )}
+
       {isHost && (
         <Button
           size="lg"
-          onClick={handleNextRound}
+          onClick={handleContinue}
           className="w-full"
           data-testid="button-next-round"
         >
-          <ArrowRight className="h-5 w-5 mr-2" />
-          Next Round
+          {isGameDecided ? <Trophy className="h-5 w-5 mr-2" /> : <ArrowRight className="h-5 w-5 mr-2" />}
+          {isGameDecided ? "See Final Results" : "Next Round"}
         </Button>
       )}
 
       {!isHost && (
         <div className="text-center text-sm text-muted-foreground">
-          Waiting for host to start the next round...
+          {isGameDecided ? "Waiting for host to continue..." : "Waiting for host to start the next round..."}
         </div>
       )}
     </div>
