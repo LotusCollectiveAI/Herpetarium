@@ -12,6 +12,7 @@ import { GuessingView } from "@/components/views/GuessingView";
 import { InterceptingView } from "@/components/views/InterceptingView";
 import { RoundResultsView } from "@/components/views/RoundResultsView";
 import { GameOverView } from "@/components/views/GameOverView";
+import { MatchSummaryView } from "@/components/MatchSummaryView";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -20,6 +21,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import {
   ArrowLeft, Play, Pause, SkipBack, SkipForward, FileDown,
   Bot, AlertTriangle, Clock, DollarSign, Loader2, ChevronDown, ChevronRight,
+  List, ListTree,
 } from "lucide-react";
 import { buildGameStateAtStep, buildSubmitterMap, REPLAY_SPECTATOR_ID } from "@/lib/replayEngine";
 
@@ -130,6 +132,7 @@ export default function Replay() {
   const [stepIndex, setStepIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewTeam, setViewTeam] = useState<"amber" | "blue">("amber");
+  const [viewMode, setViewMode] = useState<"detailed" | "summary">("detailed");
   const hasInitializedStep = useRef(false);
 
   const { data, isLoading, error } = useQuery<MatchEventsResponse>({
@@ -161,9 +164,20 @@ export default function Replay() {
     () => buildGameStateAtStep(gameId, events, stepIndex, submitterMap),
     [gameId, events, stepIndex, submitterMap],
   );
+  // Summary mode always shows the whole game so far, independent of the
+  // step-through scrubber -- it's a quick-glance overview, not a step.
+  const finalGameState: GameState = useMemo(
+    () => buildGameStateAtStep(gameId, events, events.length - 1, submitterMap),
+    [gameId, events, submitterMap],
+  );
+
+  // Summary mode shows the whole match, so its header/score should reflect
+  // the final state rather than wherever the (unused, in that mode) step
+  // scrubber happens to be parked.
+  const headerGameState = viewMode === "summary" ? finalGameState : gameState;
 
   const contextValue = useMemo(() => ({
-    gameState,
+    gameState: headerGameState,
     playerId: REPLAY_SPECTATOR_ID,
     playerName: "Spectator",
     myTeam: viewTeam,
@@ -173,13 +187,13 @@ export default function Replay() {
     aiThinkingStartTime: null,
     aiFallback: null,
     clueError: null,
-    myKeywords: gameState.teams[viewTeam].keywords,
+    myKeywords: headerGameState.teams[viewTeam].keywords,
     myCode: null,
     phaseAnnouncement: null,
     sendMessage: (_message: WSMessage) => {},
     connect: () => {},
     disconnect: () => {},
-  }), [gameState, viewTeam]);
+  }), [headerGameState, viewTeam]);
 
   if (isLoading) {
     return (
@@ -241,14 +255,25 @@ export default function Replay() {
           )}
 
           <div className="flex items-center gap-1 ml-auto">
-            <span className="text-xs text-muted-foreground mr-1">View as</span>
-            <Button size="sm" variant={viewTeam === "amber" ? "default" : "outline"} onClick={() => setViewTeam("amber")} data-testid="button-view-amber">
-              Amber
+            <Button size="sm" variant={viewMode === "detailed" ? "default" : "outline"} onClick={() => setViewMode("detailed")} data-testid="button-mode-detailed">
+              <ListTree className="h-4 w-4 mr-1" />Detailed
             </Button>
-            <Button size="sm" variant={viewTeam === "blue" ? "default" : "outline"} onClick={() => setViewTeam("blue")} data-testid="button-view-blue">
-              Blue
+            <Button size="sm" variant={viewMode === "summary" ? "default" : "outline"} onClick={() => setViewMode("summary")} data-testid="button-mode-summary">
+              <List className="h-4 w-4 mr-1" />Summary
             </Button>
           </div>
+
+          {viewMode === "detailed" && (
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-muted-foreground mr-1">View as</span>
+              <Button size="sm" variant={viewTeam === "amber" ? "default" : "outline"} onClick={() => setViewTeam("amber")} data-testid="button-view-amber">
+                Amber
+              </Button>
+              <Button size="sm" variant={viewTeam === "blue" ? "default" : "outline"} onClick={() => setViewTeam("blue")} data-testid="button-view-blue">
+                Blue
+              </Button>
+            </div>
+          )}
 
           <Button
             size="sm"
@@ -262,39 +287,45 @@ export default function Replay() {
 
         <GameHeader gameId={gameId} />
 
-        <main className="flex-1 flex flex-col overflow-y-auto">
-          {renderPhaseView()}
-        </main>
+        {viewMode === "summary" ? (
+          <MatchSummaryView gameState={finalGameState} />
+        ) : (
+          <>
+            <main className="flex-1 flex flex-col overflow-y-auto">
+              {renderPhaseView()}
+            </main>
 
-        {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && <ClueHistoryPanel />}
+            {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && <ClueHistoryPanel />}
 
-        <div className="p-4 border-t">
-          <EventDetailPanel event={currentEvent} />
-        </div>
+            <div className="p-4 border-t">
+              <EventDetailPanel event={currentEvent} />
+            </div>
 
-        <div className="border-t bg-muted/50 p-3 flex items-center gap-3 sticky bottom-0">
-          <Button size="icon" variant="outline" onClick={() => { setIsPlaying(false); setStepIndex(i => Math.max(0, i - 1)); }} disabled={stepIndex === 0} data-testid="button-replay-prev">
-            <SkipBack className="h-4 w-4" />
-          </Button>
-          <Button size="icon" onClick={() => setIsPlaying(p => !p)} disabled={stepIndex >= events.length - 1 && !isPlaying} data-testid="button-replay-play-pause">
-            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-          </Button>
-          <Button size="icon" variant="outline" onClick={() => { setIsPlaying(false); setStepIndex(i => Math.min(events.length - 1, i + 1)); }} disabled={stepIndex >= events.length - 1} data-testid="button-replay-next">
-            <SkipForward className="h-4 w-4" />
-          </Button>
-          <Slider
-            value={[stepIndex]}
-            min={0}
-            max={events.length - 1}
-            step={1}
-            onValueChange={([v]) => { setIsPlaying(false); setStepIndex(v); }}
-            className="flex-1"
-            data-testid="slider-replay-scrubber"
-          />
-          <span className="text-xs text-muted-foreground shrink-0 w-16 text-right">
-            {stepIndex + 1} / {events.length}
-          </span>
-        </div>
+            <div className="border-t bg-muted/50 p-3 flex items-center gap-3 sticky bottom-0">
+              <Button size="icon" variant="outline" onClick={() => { setIsPlaying(false); setStepIndex(i => Math.max(0, i - 1)); }} disabled={stepIndex === 0} data-testid="button-replay-prev">
+                <SkipBack className="h-4 w-4" />
+              </Button>
+              <Button size="icon" onClick={() => setIsPlaying(p => !p)} disabled={stepIndex >= events.length - 1 && !isPlaying} data-testid="button-replay-play-pause">
+                {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+              </Button>
+              <Button size="icon" variant="outline" onClick={() => { setIsPlaying(false); setStepIndex(i => Math.min(events.length - 1, i + 1)); }} disabled={stepIndex >= events.length - 1} data-testid="button-replay-next">
+                <SkipForward className="h-4 w-4" />
+              </Button>
+              <Slider
+                value={[stepIndex]}
+                min={0}
+                max={events.length - 1}
+                step={1}
+                onValueChange={([v]) => { setIsPlaying(false); setStepIndex(v); }}
+                className="flex-1"
+                data-testid="slider-replay-scrubber"
+              />
+              <span className="text-xs text-muted-foreground shrink-0 w-16 text-right">
+                {stepIndex + 1} / {events.length}
+              </span>
+            </div>
+          </>
+        )}
       </div>
     </GameContext.Provider>
   );
