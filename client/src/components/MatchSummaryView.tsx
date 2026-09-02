@@ -31,6 +31,32 @@ function CodeDots({ code, team }: { code: readonly [number, number, number]; tea
   );
 }
 
+function KeywordList({ team, keywords }: { team: "amber" | "blue"; keywords: string[] }) {
+  const teamLabel = team === "amber" ? "Amber" : "Blue";
+  const teamTextClass = team === "amber" ? "text-amber-600 dark:text-amber-400" : "text-blue-600 dark:text-blue-400";
+
+  return (
+    <div className="flex-1 min-w-0">
+      <div className={cn("text-xs font-semibold mb-1.5", teamTextClass)}>{teamLabel}'s Keywords</div>
+      <div className="grid grid-cols-2 gap-1.5">
+        {keywords.map((word, i) => (
+          <div key={i} className="flex items-center gap-1.5 text-xs bg-muted px-2 py-1 rounded">
+            <span
+              className={cn(
+                "w-4 h-4 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0",
+                team === "amber" ? "bg-amber-500 text-amber-950" : "bg-blue-500 text-white"
+              )}
+            >
+              {i + 1}
+            </span>
+            <span className="font-mono uppercase truncate">{word}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function GuessDots({ guess }: { guess: readonly [number, number, number] | null }) {
   if (!guess) return <span className="text-xs text-muted-foreground">—</span>;
   return (
@@ -143,6 +169,13 @@ export function MatchSummaryView({ gameState }: MatchSummaryViewProps) {
 
   return (
     <div className="flex-1 overflow-y-auto p-4 space-y-3">
+      <Card>
+        <CardContent className="flex flex-col sm:flex-row gap-4 pt-4">
+          <KeywordList team="amber" keywords={gameState.teams.amber.keywords} />
+          <KeywordList team="blue" keywords={gameState.teams.blue.keywords} />
+        </CardContent>
+      </Card>
+
       {rounds.length === 0 && (
         <p className="text-center text-muted-foreground text-sm py-8">No rounds have completed yet.</p>
       )}
