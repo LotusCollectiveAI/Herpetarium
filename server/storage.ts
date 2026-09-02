@@ -7,6 +7,8 @@ import {
   type InsertMatchRound,
   type AiCallLog,
   type InsertAiCallLog,
+  type MatchEvent,
+  type InsertMatchEvent,
   type Tournament,
   type InsertTournament,
   type TournamentMatch,
@@ -43,6 +45,7 @@ import {
   matches,
   matchRounds,
   aiCallLogs,
+  matchEvents,
   tournaments,
   tournamentMatches,
   experiments,
@@ -84,6 +87,10 @@ export interface IStorage {
   createAiCallLog(log: InsertAiCallLog): Promise<AiCallLog>;
   getAiCallLogs(matchId: number): Promise<AiCallLog[]>;
   getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]>;
+
+  createMatchEvent(event: InsertMatchEvent): Promise<MatchEvent>;
+  getMatchEvents(matchId: number): Promise<MatchEvent[]>;
+  getMatchEventsByGameId(gameId: string): Promise<MatchEvent[]>;
 
   createTournament(data: InsertTournament): Promise<Tournament>;
   updateTournament(id: number, data: Partial<InsertTournament>): Promise<Tournament | undefined>;
@@ -257,6 +264,19 @@ export class DatabaseStorage implements IStorage {
     if (matchIds && matchIds.length === 0) return [];
     const where = matchIds ? inArray(aiCallLogs.matchId, matchIds) : undefined;
     return db.select().from(aiCallLogs).where(where).orderBy(aiCallLogs.createdAt);
+  }
+
+  async createMatchEvent(event: InsertMatchEvent): Promise<MatchEvent> {
+    const [created] = await db.insert(matchEvents).values(event).returning();
+    return created;
+  }
+
+  async getMatchEvents(matchId: number): Promise<MatchEvent[]> {
+    return db.select().from(matchEvents).where(eq(matchEvents.matchId, matchId)).orderBy(matchEvents.sequence);
+  }
+
+  async getMatchEventsByGameId(gameId: string): Promise<MatchEvent[]> {
+    return db.select().from(matchEvents).where(eq(matchEvents.gameId, gameId)).orderBy(matchEvents.sequence);
   }
 
   async getMatchIdsWithTraces(matchIds: number[]): Promise<Set<number>> {

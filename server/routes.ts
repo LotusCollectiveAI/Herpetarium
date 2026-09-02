@@ -281,6 +281,21 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/matches/:gameId/events", async (req, res) => {
+    try {
+      const { gameId } = req.params;
+      const match = await storage.getMatchByGameId(gameId);
+      if (!match) {
+        return res.status(404).json({ error: "Match not found" });
+      }
+
+      const events = await storage.getMatchEvents(match.id);
+      res.json({ matchId: match.id, gameId, events });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch match events" });
+    }
+  });
+
   app.get("/api/matches/:id/transcript-analysis", async (req, res) => {
     try {
       const id = parseInt(req.params.id);

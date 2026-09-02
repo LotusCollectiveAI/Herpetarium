@@ -22,6 +22,7 @@ import {
 import { generateClues, generateGuess, generateInterception, AICallResult } from "./ai";
 import { storage } from "./storage";
 import { log } from "./index";
+import { emitMatchEvent, clearMatchEventSequence } from "./matchEvents";
 
 interface ClientConnection {
   ws: WebSocket;
@@ -168,7 +169,18 @@ function sendGameState(gameId: string) {
   });
 }
 
-async function logAiCall(gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean) {
+async function logAiCall(
+  gameId: string,
+  roundNumber: number,
+  provider: string,
+  actionType: string,
+  callResult: AICallResult<any>,
+  timedOut: boolean,
+  team: "amber" | "blue" | null = null,
+  playerId: string | null = null,
+) {
+  const usedFallback = timedOut || !!callResult.error;
+
   try {
     const matchId = gameMatchIds.get(gameId);
     await storage.createAiCallLog({
@@ -185,6 +197,7 @@ async function logAiCall(gameId: string, roundNumber: number, provider: string, 
       timedOut,
       error: callResult.error || null,
       parseQuality: callResult.parseQuality || null,
+      usedFallback,
       promptTokens: callResult.promptTokens || null,
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
@@ -194,6 +207,25 @@ async function logAiCall(gameId: string, roundNumber: number, provider: string, 
   } catch (err) {
     log(`Failed to log AI call: ${err}`, "websocket");
   }
+
+  await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+    eventType: "ai_call",
+    team,
+    playerId,
+    provider,
+    model: callResult.model,
+    actionType,
+    latencyMs: callResult.latencyMs ?? null,
+    timedOut,
+    usedFallback,
+    error: callResult.error ?? null,
+    parseQuality: callResult.parseQuality ?? null,
+    promptTokens: callResult.promptTokens ?? null,
+    completionTokens: callResult.completionTokens ?? null,
+    totalTokens: callResult.totalTokens ?? null,
+    estimatedCostUsd: callResult.estimatedCostUsd ?? null,
+    reasoningTrace: callResult.reasoningTrace ?? null,
+  }, { round: roundNumber, team, playerId });
 }
 
 async function persistRoundResults(gameId: string, game: GameState) {
@@ -281,6 +313,61 @@ async function createMatchRecord(gameId: string, game: GameState) {
   }
 }
 
+async function emitRoundEvaluationEvents(gameId: string, game: GameState) {
+  const matchId = gameMatchIds.get(gameId) ?? null;
+  const amberLatest = game.teams.amber.history[game.teams.amber.history.length - 1];
+  const blueLatest = game.teams.blue.history[game.teams.blue.history.length - 1];
+
+  if (amberLatest && blueLatest) {
+    await emitMatchEvent(gameId, matchId, {
+      eventType: "round_completed",
+      round: game.round,
+      teams: {
+        amber: {
+          ownTeamCorrect: amberLatest.ownTeamCorrect,
+          intercepted: amberLatest.intercepted,
+          whiteTokensAwarded: amberLatest.ownTeamCorrect ? 0 : 1,
+          blackTokensAwarded: amberLatest.intercepted ? 1 : 0,
+        },
+        blue: {
+          ownTeamCorrect: blueLatest.ownTeamCorrect,
+          intercepted: blueLatest.intercepted,
+          whiteTokensAwarded: blueLatest.ownTeamCorrect ? 0 : 1,
+          blackTokensAwarded: blueLatest.intercepted ? 1 : 0,
+        },
+      },
+    }, { round: game.round });
+  }
+
+  if (isGameDecided(game)) {
+    await emitMatchEvent(gameId, matchId, {
+      eventType: "game_completed",
+      winner: game.winner,
+      finalTokens: {
+        amber: { whiteTokens: game.teams.amber.whiteTokens, blackTokens: game.teams.amber.blackTokens },
+        blue: { whiteTokens: game.teams.blue.whiteTokens, blackTokens: game.teams.blue.blackTokens },
+      },
+    }, { round: game.round });
+  }
+}
+
+async function emitRoundStartedEvent(gameId: string, game: GameState) {
+  const matchId = gameMatchIds.get(gameId) ?? null;
+  await emitMatchEvent(gameId, matchId, {
+    eventType: "round_started",
+    round: game.round,
+    clueGiver: game.currentClueGiver,
+    code: {
+      amber: game.currentCode.amber!,
+      blue: game.currentCode.blue!,
+    },
+    keywords: {
+      amber: game.teams.amber.keywords,
+      blue: game.teams.blue.keywords,
+    },
+  }, { round: game.round });
+}
+
 async function processAITurn(gameId: string) {
   const game = games.get(gameId);
   if (!game) return;
@@ -338,7 +425,7 @@ async function processAIClues(gameId: string) {
       config.model
     );
     
-    await logAiCall(gameId, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut);
+    await logAiCall(gameId, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut, team, clueGiver.id);
     
     if (timedOut) {
       log(`AI clue generation timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
@@ -355,7 +442,14 @@ async function processAIClues(gameId: string) {
     game = games.get(gameId)!;
     game = submitClues(game, team, callResult.result);
     games.set(gameId, game);
-    
+
+    await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+      eventType: "clue_submitted",
+      team,
+      playerId: clueGiver.id,
+      clues: callResult.result,
+    }, { round: game.round, team, playerId: clueGiver.id });
+
     broadcast(gameId, { type: "ai_done", aiName });
   }
   
@@ -394,7 +488,7 @@ async function runAIGuessCall(
     config.model
   );
 
-  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_guess", callResult, timedOut);
+  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_guess", callResult, timedOut, aiPlayer.team, aiPlayer.id);
 
   if (timedOut) {
     log(`AI guess timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
@@ -441,15 +535,32 @@ async function processAIGuesses(gameId: string) {
       game = updateSelection(game, team, aiPlayer.id, guess);
       games.set(gameId, game);
       sendGameState(gameId);
+
+      await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+        eventType: "selection_updated",
+        team,
+        playerId: aiPlayer.id,
+        phase: "decode",
+        selection: guess,
+      }, { round: game.round, team, playerId: aiPlayer.id });
     }
 
     const aiGuesser = teamPlayers.find(p => p.id === decodeSubmitterId && p.isAI);
     if (!aiGuesser) continue;
 
     const guess = await runAIGuessCall(gameId, game, team, aiGuesser, fallbackGuess);
+    const ownCode = game.currentCode[team]!;
     game = games.get(gameId)!;
     game = submitOwnTeamGuess(game, team, guess);
     games.set(gameId, game);
+
+    await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+      eventType: "guess_submitted",
+      team,
+      playerId: aiGuesser.id,
+      guess,
+      correct: guess.every((n, i) => n === ownCode[i]),
+    }, { round: game.round, team, playerId: aiGuesser.id });
   }
 
   sendGameState(gameId);
@@ -486,7 +597,7 @@ async function runAIInterceptionCall(
     config.model
   );
 
-  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_interception", callResult, timedOut);
+  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_interception", callResult, timedOut, aiPlayer.team, aiPlayer.id);
 
   if (timedOut) {
     log(`AI interception timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
@@ -532,15 +643,32 @@ async function processAIInterceptions(gameId: string) {
       game = updateSelection(game, team, aiPlayer.id, guess);
       games.set(gameId, game);
       sendGameState(gameId);
+
+      await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+        eventType: "selection_updated",
+        team,
+        playerId: aiPlayer.id,
+        phase: "intercept",
+        selection: guess,
+      }, { round: game.round, team, playerId: aiPlayer.id });
     }
 
     const aiInterceptor = teamPlayers.find(p => p.id === interceptSubmitterId && p.isAI);
     if (!aiInterceptor) continue;
 
     const guess = await runAIInterceptionCall(gameId, game, opponentTeam, aiInterceptor, fallbackGuess);
+    const preSubmitCode = game.currentCode[opponentTeam]!;
     game = games.get(gameId)!;
     game = submitInterception(game, team, guess);
     games.set(gameId, game);
+
+    await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+      eventType: "interception_submitted",
+      team,
+      playerId: aiInterceptor.id,
+      guess,
+      success: guess.every((n, i) => n === preSubmitCode[i]),
+    }, { round: game.round, team, playerId: aiInterceptor.id });
   }
 
   sendGameState(gameId);
@@ -551,6 +679,7 @@ async function processAIInterceptions(gameId: string) {
     if (isGameDecided(game)) {
       await persistGameCompletion(gameId, game);
     }
+    await emitRoundEvaluationEvents(gameId, game);
 
     const allAI = game.players.every(p => p.isAI);
     if (allAI) {
@@ -573,6 +702,7 @@ async function autoAdvanceRound(gameId: string) {
   }
 
   log(`Auto-advancing all-AI game ${gameId} to round ${updated.round}`, "websocket");
+  await emitRoundStartedEvent(gameId, updated);
   setTimeout(() => processAITurn(gameId), 500);
 }
 
@@ -779,14 +909,24 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
 
       game = assignedGame;
       games.set(client.gameId, game);
-      
+
       await createMatchRecord(client.gameId, game);
-      
+
+      const createdMatchId = gameMatchIds.get(client.gameId) ?? null;
+      await emitMatchEvent(client.gameId, createdMatchId, {
+        eventType: "game_created",
+        rules: game.rules,
+        players: game.players,
+        teamSize: Math.max(amberPlayers.length, bluePlayers.length),
+      });
+
       let updated = startNewRound(game);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
       log(`Teams confirmed, Round 1 started for game ${client.gameId}`, "websocket");
-      
+
+      await emitRoundStartedEvent(client.gameId, updated);
+
       setTimeout(() => processAITurn(client.gameId), 500);
       break;
     }
@@ -815,11 +955,18 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const updated = submitClues(game, player.team, message.clues);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
+
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "clue_submitted",
+        team: player.team,
+        playerId: player.id,
+        clues: message.clues,
+      }, { round: game.round, team: player.team, playerId: player.id });
+
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
-    
+
     case "submit_guess": {
       if (!client) return;
       
@@ -837,11 +984,20 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const updated = submitOwnTeamGuess(game, player.team, message.guess);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
+
+      const ownCode = game.currentCode[player.team]!;
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "guess_submitted",
+        team: player.team,
+        playerId: player.id,
+        guess: message.guess,
+        correct: message.guess.every((n, i) => n === ownCode[i]),
+      }, { round: game.round, team: player.team, playerId: player.id });
+
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
-    
+
     case "submit_interception": {
       if (!client) return;
       
@@ -860,11 +1016,22 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
 
+      const opponentTeam = player.team === "amber" ? "blue" : "amber";
+      const opponentCode = game.currentCode[opponentTeam]!;
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "interception_submitted",
+        team: player.team,
+        playerId: player.id,
+        guess: message.guess,
+        success: message.guess.every((n, i) => n === opponentCode[i]),
+      }, { round: game.round, team: player.team, playerId: player.id });
+
       if (updated.phase === "round_results") {
         persistRoundResults(client.gameId, updated);
         if (isGameDecided(updated)) {
           persistGameCompletion(client.gameId, updated);
         }
+        await emitRoundEvaluationEvents(client.gameId, updated);
       }
 
       setTimeout(() => processAITurn(client.gameId), 100);
@@ -883,6 +1050,14 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const updated = updateSelection(game, player.team, player.id, message.selection);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
+
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "selection_updated",
+        team: player.team,
+        playerId: player.id,
+        phase: game.phase === "own_team_guessing" ? "decode" : "intercept",
+        selection: message.selection,
+      }, { round: game.round, team: player.team, playerId: player.id });
       break;
     }
 
@@ -901,6 +1076,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       sendGameState(client.gameId);
 
       if (updated.phase !== "game_over") {
+        await emitRoundStartedEvent(client.gameId, updated);
         setTimeout(() => processAITurn(client.gameId), 500);
       }
       break;
@@ -970,6 +1146,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       
       games.delete(client.gameId);
       gameMatchIds.delete(client.gameId);
+      clearMatchEventSequence(client.gameId);
       cleanupPersistedRounds(client.gameId);
       
       broadcast(newGameId, { type: "new_game_created", gameId: newGameId });
@@ -995,6 +1172,7 @@ function handleDisconnect(ws: WebSocket) {
         if (!gameClients.has(gameId) || gameClients.get(gameId)!.size === 0) {
           games.delete(gameId);
           gameMatchIds.delete(gameId);
+          clearMatchEventSequence(gameId);
           cleanupPersistedRounds(gameId);
           log(`Game ${gameId} cleaned up`, "websocket");
         }

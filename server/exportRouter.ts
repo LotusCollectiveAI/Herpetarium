@@ -235,6 +235,29 @@ export function registerExportRoutes(app: Express): void {
     }
   });
 
+  // --- Match replay export (versioned, machine-readable) ---
+  app.get("/api/export/v2/matches/:gameId/replay", async (req: Request, res: Response) => {
+    try {
+      const gameId = req.params.gameId as string;
+      const match = await storage.getMatchByGameId(gameId);
+      if (!match) {
+        return res.status(404).json({ error: "Match not found" });
+      }
+
+      const [rounds, aiLogs, events] = await Promise.all([
+        storage.getMatchRounds(match.id),
+        storage.getAiCallLogs(match.id),
+        storage.getMatchEvents(match.id),
+      ]);
+
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="replay-${gameId}.json"`);
+      res.json({ schemaVersion: "1.0", match, rounds, aiLogs, events });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to export replay" });
+    }
+  });
+
   // --- Experiment config JSON endpoint for reproducibility ---
   app.get("/api/export/experiment-config/:id", async (req: Request, res: Response) => {
     try {

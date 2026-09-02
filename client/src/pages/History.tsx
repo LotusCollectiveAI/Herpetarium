@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ChevronDown, ChevronRight, ArrowLeft, Trophy, Clock, Users, Bot, Brain, FileDown, Lightbulb, DollarSign } from "lucide-react";
+import { Lock, ChevronDown, ChevronRight, ArrowLeft, Trophy, Clock, Users, Bot, Brain, FileDown, Lightbulb, DollarSign, History as HistoryIcon } from "lucide-react";
 
 interface PlayerConfig {
   id: string;
@@ -187,6 +187,7 @@ function getCallOutcome(aiLog: AiCallLog, rounds: MatchRound[], players: PlayerC
 
 function MatchRow({ match, hasTraces }: { match: Match; hasTraces: boolean }) {
   const [expanded, setExpanded] = useState(false);
+  const [, setLocation] = useLocation();
 
   const { data: detail, isLoading: detailLoading } = useQuery<MatchDetailResponse>({
     queryKey: ["/api/matches", match.id],
@@ -261,6 +262,16 @@ function MatchRow({ match, hasTraces }: { match: Match; hasTraces: boolean }) {
 
         <CollapsibleContent>
           <div className="border-t px-6 py-4 space-y-4 bg-muted/30">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setLocation(`/replay/${match.gameId}`)}
+              data-testid={`button-replay-${match.id}`}
+            >
+              <HistoryIcon className="h-3.5 w-3.5 mr-1" />
+              Watch Replay
+            </Button>
+
             {detailLoading ? (
               <div className="space-y-2">
                 <Skeleton className="h-4 w-full" />

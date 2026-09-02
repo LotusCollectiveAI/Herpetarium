@@ -627,6 +627,113 @@ export const insertAiCallLogSchema = createInsertSchema(aiCallLogs).omit({ id: t
 export type InsertAiCallLog = z.infer<typeof insertAiCallLogSchema>;
 export type AiCallLog = typeof aiCallLogs.$inferSelect;
 
+// Match event log — an ordered, typed record of everything that happens
+// during a match, purpose-built for replay and export. This is additive:
+// matches/matchRounds/aiCallLogs above keep being written exactly as
+// before for the existing History/EvalDashboard/export tooling. `sequence`
+// (not createdAt) is the source of truth for ordering, since it's assigned
+// by a monotonic per-game counter rather than relying on timestamp
+// resolution/clock skew.
+
+export const matchEvents = pgTable("match_events", {
+  id: serial("id").primaryKey(),
+  matchId: integer("match_id"),
+  gameId: varchar("game_id", { length: 100 }).notNull(),
+  sequence: integer("sequence").notNull(),
+  round: integer("round"),
+  team: varchar("team", { length: 10 }),
+  playerId: varchar("player_id", { length: 100 }),
+  eventType: varchar("event_type", { length: 40 }).notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertMatchEventSchema = createInsertSchema(matchEvents).omit({ id: true, createdAt: true });
+export type InsertMatchEvent = z.infer<typeof insertMatchEventSchema>;
+export type MatchEvent = typeof matchEvents.$inferSelect;
+
+const matchEventTeamCodeSchema = z.tuple([z.number(), z.number(), z.number()]);
+
+export const matchEventPayloadSchema = z.discriminatedUnion("eventType", [
+  z.object({
+    eventType: z.literal("game_created"),
+    rules: gameRulesSchema,
+    players: z.array(playerSchema),
+    teamSize: z.number(),
+  }),
+  z.object({
+    eventType: z.literal("round_started"),
+    round: z.number(),
+    clueGiver: z.object({ amber: z.string().nullable(), blue: z.string().nullable() }),
+    code: z.object({ amber: matchEventTeamCodeSchema, blue: matchEventTeamCodeSchema }),
+    keywords: z.object({ amber: z.array(z.string()), blue: z.array(z.string()) }),
+  }),
+  z.object({
+    eventType: z.literal("clue_submitted"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    clues: z.array(z.string()),
+  }),
+  z.object({
+    eventType: z.literal("selection_updated"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    phase: z.enum(["decode", "intercept"]),
+    selection: z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()]),
+  }),
+  z.object({
+    eventType: z.literal("guess_submitted"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    guess: matchEventTeamCodeSchema,
+    correct: z.boolean(),
+  }),
+  z.object({
+    eventType: z.literal("interception_submitted"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    guess: matchEventTeamCodeSchema,
+    success: z.boolean(),
+  }),
+  z.object({
+    eventType: z.literal("ai_call"),
+    team: z.enum(["amber", "blue"]).nullable(),
+    playerId: z.string().nullable(),
+    provider: z.string(),
+    model: z.string(),
+    actionType: z.string(),
+    latencyMs: z.number().nullable(),
+    timedOut: z.boolean(),
+    usedFallback: z.boolean(),
+    error: z.string().nullable(),
+    parseQuality: z.string().nullable(),
+    promptTokens: z.number().nullable(),
+    completionTokens: z.number().nullable(),
+    totalTokens: z.number().nullable(),
+    estimatedCostUsd: z.string().nullable(),
+    reasoningTrace: z.string().nullable(),
+  }),
+  z.object({
+    eventType: z.literal("round_completed"),
+    round: z.number(),
+    teams: z.object({
+      amber: z.object({ ownTeamCorrect: z.boolean(), intercepted: z.boolean(), whiteTokensAwarded: z.number(), blackTokensAwarded: z.number() }),
+      blue: z.object({ ownTeamCorrect: z.boolean(), intercepted: z.boolean(), whiteTokensAwarded: z.number(), blackTokensAwarded: z.number() }),
+    }),
+  }),
+  z.object({
+    eventType: z.literal("game_completed"),
+    winner: z.enum(["amber", "blue"]).nullable(),
+    finalTokens: z.object({
+      amber: z.object({ whiteTokens: z.number(), blackTokens: z.number() }),
+      blue: z.object({ whiteTokens: z.number(), blackTokens: z.number() }),
+    }),
+  }),
+]);
+
+export type MatchEventPayload = z.infer<typeof matchEventPayloadSchema>;
+export type MatchEventType = MatchEventPayload["eventType"];
+
 // Tournament tables
 
 export const tournaments = pgTable("tournaments", {

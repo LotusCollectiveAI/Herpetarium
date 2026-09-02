@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useGame } from "@/lib/gameContext";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Trophy, Home, RotateCcw, Loader2 } from "lucide-react";
+import { Trophy, Home, RotateCcw, Loader2, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 
@@ -167,6 +167,17 @@ export function GameOverView() {
             Waiting for host to start a new game...
           </div>
         )}
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={() => setLocation(`/replay/${gameState.id}`)}
+          className="w-full"
+          data-testid="button-view-replay"
+        >
+          <History className="h-5 w-5 mr-2" />
+          Watch Replay
+        </Button>
+
         <Button
           variant="outline"
           size="lg"

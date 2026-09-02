@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/lib/themeProvider";
 import { GameProvider } from "@/lib/gameContext";
 import Home from "@/pages/Home";
 import Game from "@/pages/Game";
+import Replay from "@/pages/Replay";
 import History from "@/pages/History";
 import Tournaments from "@/pages/Tournaments";
 import EvalDashboard from "@/pages/EvalDashboard";
@@ -22,6 +23,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/game/:id" component={Game} />
+      <Route path="/replay/:gameId" component={Replay} />
       <Route path="/history" component={History} />
       <Route path="/tournaments" component={Tournaments} />
       <Route path="/eval" component={EvalDashboard} />
