@@ -132,7 +132,7 @@ export default function Replay() {
   const [stepIndex, setStepIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [viewTeam, setViewTeam] = useState<"amber" | "blue">("amber");
-  const [viewMode, setViewMode] = useState<"detailed" | "summary">("detailed");
+  const [viewMode, setViewMode] = useState<"detailed" | "summary">("summary");
   const hasInitializedStep = useRef(false);
 
   const { data, isLoading, error } = useQuery<MatchEventsResponse>({
