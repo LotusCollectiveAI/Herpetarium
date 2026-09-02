@@ -16,9 +16,10 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   ArrowLeft, Play, Pause, SkipBack, SkipForward, FileDown,
-  Bot, AlertTriangle, Clock, DollarSign, Loader2,
+  Bot, AlertTriangle, Clock, DollarSign, Loader2, ChevronDown, ChevronRight,
 } from "lucide-react";
 import { buildGameStateAtStep, buildSubmitterMap, REPLAY_SPECTATOR_ID } from "@/lib/replayEngine";
 
@@ -43,24 +44,30 @@ const EVENT_LABELS: Record<MatchEventPayload["eventType"], string> = {
 };
 
 function EventDetailPanel({ event }: { event: MatchEvent | undefined }) {
+  const [isOpen, setIsOpen] = useState(true);
   if (!event) return null;
   const payload = event.payload as MatchEventPayload;
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-sm flex items-center justify-between gap-2">
-          <span className="flex items-center gap-2">
-            <Badge variant="outline">{EVENT_LABELS[payload.eventType] ?? payload.eventType}</Badge>
-            {event.round != null && <span className="text-muted-foreground font-normal">Round {event.round}</span>}
-          </span>
-          {event.team && (
-            <Badge className={event.team === "amber" ? "bg-amber-500 text-amber-950" : "bg-blue-500 text-white"}>
-              {event.team}
-            </Badge>
-          )}
-        </CardTitle>
-      </CardHeader>
+      <Collapsible open={isOpen} onOpenChange={setIsOpen}>
+        <CollapsibleTrigger className="w-full text-left" data-testid="button-toggle-event-panel">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                {isOpen ? <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                <Badge variant="outline">{EVENT_LABELS[payload.eventType] ?? payload.eventType}</Badge>
+                {event.round != null && <span className="text-muted-foreground font-normal">Round {event.round}</span>}
+              </span>
+              {event.team && (
+                <Badge className={event.team === "amber" ? "bg-amber-500 text-amber-950" : "bg-blue-500 text-white"}>
+                  {event.team}
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+        </CollapsibleTrigger>
+        <CollapsibleContent>
       <CardContent className="space-y-3">
         {payload.eventType === "ai_call" ? (
           <div className="space-y-2 text-xs">
@@ -109,6 +116,8 @@ function EventDetailPanel({ event }: { event: MatchEvent | undefined }) {
           </pre>
         )}
       </CardContent>
+        </CollapsibleContent>
+      </Collapsible>
     </Card>
   );
 }
@@ -253,16 +262,15 @@ export default function Replay() {
 
         <GameHeader gameId={gameId} />
 
-        <main className="flex-1 flex flex-col md:flex-row overflow-hidden">
-          <div className="flex-1 flex flex-col overflow-y-auto">
-            {renderPhaseView()}
-          </div>
-          <div className="md:w-96 shrink-0 border-t md:border-t-0 md:border-l p-4 overflow-y-auto">
-            <EventDetailPanel event={currentEvent} />
-          </div>
+        <main className="flex-1 flex flex-col overflow-y-auto">
+          {renderPhaseView()}
         </main>
 
         {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && <ClueHistoryPanel />}
+
+        <div className="p-4 border-t">
+          <EventDetailPanel event={currentEvent} />
+        </div>
 
         <div className="border-t bg-muted/50 p-3 flex items-center gap-3 sticky bottom-0">
           <Button size="icon" variant="outline" onClick={() => { setIsPlaying(false); setStepIndex(i => Math.max(0, i - 1)); }} disabled={stepIndex === 0} data-testid="button-replay-prev">
