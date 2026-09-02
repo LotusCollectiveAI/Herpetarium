@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy, Square } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy, Ban } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -94,7 +94,7 @@ function getStatusBadge(status: string) {
     case "budget_exceeded":
       return <Badge className="bg-red-500 hover:bg-red-600 text-white" data-testid="badge-series-budget-exceeded"><DollarSign className="h-3 w-3 mr-1" />Budget Exceeded</Badge>;
     case "stopped":
-      return <Badge variant="secondary" data-testid="badge-series-stopped"><Square className="h-3 w-3 mr-1" />Stopped</Badge>;
+      return <Badge variant="secondary" data-testid="badge-series-stopped"><Ban className="h-3 w-3 mr-1" />Stopped</Badge>;
     case "failed":
       return <Badge variant="destructive" data-testid="badge-series-failed">Failed</Badge>;
     default:
@@ -734,7 +734,7 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
             disabled={stopMutation.isPending}
             data-testid="button-stop-series"
           >
-            <Square className="h-3.5 w-3.5 mr-1" />
+            <Ban className="h-3.5 w-3.5 mr-1" />
             {stopMutation.isPending ? "Stopping..." : "Stop"}
           </Button>
         )}

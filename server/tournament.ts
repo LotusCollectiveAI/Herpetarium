@@ -353,6 +353,8 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
             winner: result.winner,
             totalRounds: result.totalRounds,
             matchId: result.matchId,
+            amber: { white: result.teams.amber.whiteTokens, black: result.teams.amber.blackTokens },
+            blue: { white: result.teams.blue.whiteTokens, black: result.teams.blue.blackTokens },
           } as any,
           completedAt: new Date(),
         });
@@ -461,6 +463,15 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
 
           launchable.push(tm);
         }
+
+        // The scan above walks the queue back-to-front so splice(idx, 1)
+        // above is safe (removing while iterating forward would skip the
+        // element right after any removed one). That leaves launchable in
+        // reverse order, which flows through as the tie-break / no-other-
+        // signal fallback below (candidates[0], and pickNextCandidate's
+        // first-seen-wins tie-break) -- undoing it here keeps matches
+        // launching in queue order by default.
+        launchable.reverse();
 
         if (launchable.length === 0) {
           if (earliestPausedUntil !== null) {

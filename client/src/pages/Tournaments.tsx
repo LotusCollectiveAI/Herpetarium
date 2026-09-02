@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers, Square } from "lucide-react";
+import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers, Ban } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { TournamentConfig } from "@shared/schema";
@@ -110,7 +110,7 @@ function getStatusBadge(status: string) {
     case "budget_exceeded":
       return <Badge className="bg-red-500 hover:bg-red-600 text-white" data-testid="badge-status-budget-exceeded"><DollarSign className="h-3 w-3 mr-1" />Budget Exceeded</Badge>;
     case "stopped":
-      return <Badge variant="secondary" data-testid="badge-status-stopped"><Square className="h-3 w-3 mr-1" />Stopped</Badge>;
+      return <Badge variant="secondary" data-testid="badge-status-stopped"><Ban className="h-3 w-3 mr-1" />Stopped</Badge>;
     case "failed":
       return <Badge variant="destructive" data-testid="badge-status-failed">Failed</Badge>;
     default:
@@ -226,7 +226,7 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
                 disabled={stopMutation.isPending}
                 data-testid={`button-stop-tournament-${tournament.id}`}
               >
-                <Square className="h-3.5 w-3.5 mr-1" />
+                <Ban className="h-3.5 w-3.5 mr-1" />
                 {stopMutation.isPending ? "Stopping..." : "Stop Tournament"}
               </Button>
             )}
@@ -338,9 +338,18 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
                               </span>
                             )}
                             {tm.status === "completed" && tm.result ? (
-                              <Badge className={`text-xs ${tm.result.winner === "amber" ? "bg-amber-500" : "bg-blue-500"} text-white`}>
-                                {tm.result.winner} wins ({tm.result.totalRounds}R)
-                              </Badge>
+                              <>
+                                {tm.result.amber && tm.result.blue && (
+                                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                                    <span className="text-amber-600 dark:text-amber-400">{tm.result.amber.white}W/{tm.result.amber.black}B</span>
+                                    {" vs "}
+                                    <span className="text-blue-600 dark:text-blue-400">{tm.result.blue.white}W/{tm.result.blue.black}B</span>
+                                  </span>
+                                )}
+                                <Badge className={`text-xs ${tm.result.winner === "amber" ? "bg-amber-500" : "bg-blue-500"} text-white`}>
+                                  {tm.result.winner} wins ({tm.result.totalRounds}R)
+                                </Badge>
+                              </>
                             ) : (
                               getStatusBadge(tm.status)
                             )}
