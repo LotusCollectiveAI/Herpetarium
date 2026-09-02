@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers, Ban } from "lucide-react";
+import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers, Ban, History } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { TournamentConfig } from "@shared/schema";
@@ -138,6 +138,7 @@ interface ThrottleState {
 function TournamentRow({ tournament }: { tournament: Tournament }) {
   const [expanded, setExpanded] = useState(false);
   const isRunning = tournament.status === "running";
+  const [, setLocation] = useLocation();
 
   const { data: detail, isLoading: detailLoading } = useQuery<TournamentDetail>({
     queryKey: ["/api/tournaments", tournament.id],
@@ -339,16 +340,34 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
                             )}
                             {tm.status === "completed" && tm.result ? (
                               <>
-                                {tm.result.amber && tm.result.blue && (
-                                  <span className="text-[11px] text-muted-foreground whitespace-nowrap">
-                                    <span className="text-amber-600 dark:text-amber-400">{tm.result.amber.white}W/{tm.result.amber.black}B</span>
-                                    {" vs "}
-                                    <span className="text-blue-600 dark:text-blue-400">{tm.result.blue.white}W/{tm.result.blue.black}B</span>
-                                  </span>
-                                )}
+                                <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+                                  Round {tm.result.totalRounds}
+                                  {tm.result.amber && tm.result.blue && (
+                                    <>
+                                      {" · "}
+                                      <span className="text-amber-600 dark:text-amber-400">{tm.result.amber.white}W/{tm.result.amber.black}B</span>
+                                      {" vs "}
+                                      <span className="text-blue-600 dark:text-blue-400">{tm.result.blue.white}W/{tm.result.blue.black}B</span>
+                                    </>
+                                  )}
+                                </span>
                                 <Badge className={`text-xs ${tm.result.winner === "amber" ? "bg-amber-500" : "bg-blue-500"} text-white`}>
-                                  {tm.result.winner} wins ({tm.result.totalRounds}R)
+                                  {tm.result.winner} wins
                                 </Badge>
+                                {(() => {
+                                  const gameId = detail.matchDetails.find((m: any) => m.id === tm.matchId)?.gameId;
+                                  return gameId ? (
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      className="h-6 w-6"
+                                      onClick={() => setLocation(`/replay/${gameId}`)}
+                                      data-testid={`button-replay-${tm.id}`}
+                                    >
+                                      <History className="h-3.5 w-3.5" />
+                                    </Button>
+                                  ) : null;
+                                })()}
                               </>
                             ) : (
                               getStatusBadge(tm.status)

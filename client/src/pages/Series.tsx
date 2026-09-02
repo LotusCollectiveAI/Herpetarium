@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy, Ban } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy, Ban, History } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -818,6 +818,17 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
                       </Badge>
                     ) : (
                       <Badge variant="outline">No winner</Badge>
+                    )}
+                    {match.gameId && (
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6"
+                        onClick={() => setLocation(`/replay/${match.gameId}`)}
+                        data-testid={`button-replay-${idx}`}
+                      >
+                        <History className="h-3.5 w-3.5" />
+                      </Button>
                     )}
                   </div>
                 </div>

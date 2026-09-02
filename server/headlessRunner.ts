@@ -56,6 +56,7 @@ import {
 import type { DeliberationOwnTemplateParams, DeliberationInterceptTemplateParams } from "./promptStrategies";
 import { storage } from "./storage";
 import { log } from "./index";
+import { emitMatchEvent, clearMatchEventSequence } from "./matchEvents";
 import type { ModelHealthTracker } from "./modelHealth";
 
 // Timeout is now controlled per-player via config.timeoutMs (validated by schema: min 10s, max 1hr)
@@ -153,7 +154,18 @@ function normalizePromptOverrides(
   return Object.keys(overrides).length > 0 ? overrides : undefined;
 }
 
-async function logAiCall(matchId: number, gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean, usedFallback: boolean = false) {
+async function logAiCall(
+  matchId: number,
+  gameId: string,
+  roundNumber: number,
+  provider: string,
+  actionType: string,
+  callResult: AICallResult<any>,
+  timedOut: boolean,
+  usedFallback: boolean = false,
+  team: "amber" | "blue" | null = null,
+  playerId: string | null = null,
+) {
   try {
     await storage.createAiCallLog({
       matchId,
@@ -179,6 +191,25 @@ async function logAiCall(matchId: number, gameId: string, roundNumber: number, p
   } catch (err) {
     log(`[headless] Failed to log AI call: ${err}`, "headless");
   }
+
+  await emitMatchEvent(gameId, matchId, {
+    eventType: "ai_call",
+    team,
+    playerId,
+    provider,
+    model: callResult.model,
+    actionType,
+    latencyMs: callResult.latencyMs,
+    timedOut,
+    usedFallback,
+    error: callResult.error || null,
+    parseQuality: callResult.parseQuality || null,
+    promptTokens: callResult.promptTokens || null,
+    completionTokens: callResult.completionTokens || null,
+    totalTokens: callResult.totalTokens || null,
+    estimatedCostUsd: callResult.estimatedCostUsd || null,
+    reasoningTrace: callResult.reasoningTrace || null,
+  }, { round: roundNumber, team, playerId });
 }
 
 interface MatchQualityRuntimeState {
@@ -318,8 +349,15 @@ async function processClues(
       });
     }
     maybeRecordApiError(qualityState, game.round, "generate_clues", team, clueGiver, config, callResult, timedOut);
-    await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut, usedFallback);
+    await logAiCall(matchId, game.id, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut, usedFallback, team, clueGiver.id);
     game = submitClues(game, team, callResult.result);
+
+    await emitMatchEvent(game.id, matchId, {
+      eventType: "clue_submitted",
+      team,
+      playerId: clueGiver.id,
+      clues: callResult.result,
+    }, { round: game.round, team, playerId: clueGiver.id });
   }
   return game;
 }
@@ -375,8 +413,16 @@ async function processGuesses(
     }
     const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
     maybeRecordApiError(qualityState, game.round, "generate_guess", team, aiGuesser, config, callResult, timedOut);
-    await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, "generate_guess", callResult, timedOut, usedFallback);
+    await logAiCall(matchId, game.id, game.round, aiGuesser.aiProvider, "generate_guess", callResult, timedOut, usedFallback, team, aiGuesser.id);
     game = submitOwnTeamGuess(game, team, callResult.result);
+
+    await emitMatchEvent(game.id, matchId, {
+      eventType: "guess_submitted",
+      team,
+      playerId: aiGuesser.id,
+      guess: callResult.result,
+      correct: arraysEqual(callResult.result, game.currentCode[team]!),
+    }, { round: game.round, team, playerId: aiGuesser.id });
   }
   return game;
 }
@@ -427,8 +473,16 @@ async function processInterceptions(
     }
     const usedFallback = timedOut || callResult.parseQuality === "error" || callResult.parseQuality === "fallback_used";
     maybeRecordApiError(qualityState, game.round, "generate_interception", team, aiInterceptor, config, callResult, timedOut);
-    await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, "generate_interception", callResult, timedOut, usedFallback);
+    await logAiCall(matchId, game.id, game.round, aiInterceptor.aiProvider, "generate_interception", callResult, timedOut, usedFallback, team, aiInterceptor.id);
     game = submitInterception(game, team, callResult.result);
+
+    await emitMatchEvent(game.id, matchId, {
+      eventType: "interception_submitted",
+      team,
+      playerId: aiInterceptor.id,
+      guess: callResult.result,
+      success: arraysEqual(callResult.result, game.currentCode[opponentTeam]!),
+    }, { round: game.round, team, playerId: aiInterceptor.id });
   }
   return game;
 }
@@ -664,7 +718,7 @@ async function processDeliberation(
         ? "deliberation_own"
         : "deliberation_intercept";
       maybeRecordApiError(qualityState, roundNumber, actionType, context.team, currentPlayer, config, callResult, timedOut);
-      await logAiCall(matchId, gameId, roundNumber, currentPlayer.aiProvider!, actionType, callResult, timedOut, usedFallback);
+      await logAiCall(matchId, gameId, roundNumber, currentPlayer.aiProvider!, actionType, callResult, timedOut, usedFallback, context.team, currentPlayer.id);
 
       if (timedOut || callResult.error || !callResult.result.trim()) {
         recordMatchQualityEvent(qualityState, {
@@ -948,11 +1002,26 @@ export async function runHeadlessMatch(
   log(`[headless] Match ${matchId} started (game ${game.id})`, "headless");
   onMatchCreated?.(matchId);
 
+  await emitMatchEvent(game.id, matchId, {
+    eventType: "game_created",
+    rules: game.rules,
+    players: game.players,
+    teamSize,
+  });
+
   const ablations = config.ablations?.flags;
 
   while (game.phase !== "game_over") {
     game = startNewRound(game, rng);
     log(`[headless] Match ${matchId} - Round ${game.round}`, "headless");
+
+    await emitMatchEvent(game.id, matchId, {
+      eventType: "round_started",
+      round: game.round,
+      clueGiver: game.currentClueGiver,
+      code: { amber: game.currentCode.amber!, blue: game.currentCode.blue! },
+      keywords: { amber: game.teams.amber.keywords, blue: game.teams.blue.keywords },
+    }, { round: game.round });
 
     game = await processClues(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker, config);
 
@@ -1022,6 +1091,15 @@ export async function runHeadlessMatch(
             finalAnswer: result.answer,
           });
           game = submitOwnTeamGuess(game, team, result.answer);
+
+          const lastSpeaker = result.messages[result.messages.length - 1]?.playerId ?? "";
+          await emitMatchEvent(game.id, matchId, {
+            eventType: "guess_submitted",
+            team,
+            playerId: lastSpeaker,
+            guess: result.answer,
+            correct: arraysEqual(result.answer, game.currentCode[team]!),
+          }, { round: game.round, team, playerId: lastSpeaker });
         }
       }
 
@@ -1070,6 +1148,15 @@ export async function runHeadlessMatch(
         });
 
         game = submitInterception(game, team, result.answer);
+
+        const lastSpeaker = result.messages[result.messages.length - 1]?.playerId ?? guessers[0].id;
+        await emitMatchEvent(game.id, matchId, {
+          eventType: "interception_submitted",
+          team,
+          playerId: lastSpeaker,
+          guess: result.answer,
+          success: arraysEqual(result.answer, game.currentCode[opponentTeam]!),
+        }, { round: game.round, team, playerId: lastSpeaker });
       }
 
     } else {
@@ -1091,6 +1178,29 @@ export async function runHeadlessMatch(
 
     if (game.phase === "round_results" || game.phase === "game_over") {
       await persistRoundResults(matchId, game);
+
+      const amberLatest = game.teams.amber.history[game.teams.amber.history.length - 1];
+      const blueLatest = game.teams.blue.history[game.teams.blue.history.length - 1];
+      if (amberLatest && blueLatest) {
+        await emitMatchEvent(game.id, matchId, {
+          eventType: "round_completed",
+          round: game.round,
+          teams: {
+            amber: {
+              ownTeamCorrect: amberLatest.ownTeamCorrect,
+              intercepted: amberLatest.intercepted,
+              whiteTokensAwarded: amberLatest.ownTeamCorrect ? 0 : 1,
+              blackTokensAwarded: amberLatest.intercepted ? 1 : 0,
+            },
+            blue: {
+              ownTeamCorrect: blueLatest.ownTeamCorrect,
+              intercepted: blueLatest.intercepted,
+              whiteTokensAwarded: blueLatest.ownTeamCorrect ? 0 : 1,
+              blackTokensAwarded: blueLatest.intercepted ? 1 : 0,
+            },
+          },
+        }, { round: game.round });
+      }
     }
 
     // startNewRound doesn't check whether the round it just followed already
@@ -1126,6 +1236,16 @@ export async function runHeadlessMatch(
   });
 
   log(`[headless] Match ${matchId} completed - Winner: ${game.winner || "none"} in ${game.round} rounds`, "headless");
+
+  await emitMatchEvent(game.id, matchId, {
+    eventType: "game_completed",
+    winner: game.winner,
+    finalTokens: {
+      amber: { whiteTokens: game.teams.amber.whiteTokens, blackTokens: game.teams.amber.blackTokens },
+      blue: { whiteTokens: game.teams.blue.whiteTokens, blackTokens: game.teams.blue.blackTokens },
+    },
+  });
+  clearMatchEventSequence(game.id);
 
   // Post-match reflection for scratch notes
   const updatedScratchNotes = await buildUpdatedScratchNotes(game, matchId, game.id, config);
