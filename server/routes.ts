@@ -2,12 +2,12 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, MatchRound, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
 import { MODEL_REGISTRY, getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
-import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, getActiveTournamentHealthTracker, getTournamentModelKeys, interleaveByProvider } from "./tournament";
-import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
+import { createTournament, runTournament, isTournamentRunning, stopTournament, generateRoundRobinConfigs, getActiveTournamentHealthTracker, getTournamentModelKeys, interleaveByProvider } from "./tournament";
+import { createSeries, runSeries, isSeriesRunning, stopSeries, getPlayerConfigHash } from "./seriesRunner";
 import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun } from "./evolution";
 import { z } from "zod";
 import { experimentConfigSchema } from "@shared/schema";
@@ -20,6 +20,33 @@ import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
 import { analyzeMatchTranscripts, analyzeTournamentTranscripts } from "./transcriptAnalyzer";
+
+// Rounds are only written to match_rounds once fully evaluated, so the
+// highest roundNumber seen plus the running token tally reconstructs
+// where an in-progress headless match currently stands without needing
+// any separate live-state tracking.
+function computeLiveMatchProgress(rounds: MatchRound[]): {
+  round: number;
+  amber: { white: number; black: number };
+  blue: { white: number; black: number };
+} | null {
+  if (rounds.length === 0) return null;
+
+  let round = 0;
+  const tokens = {
+    amber: { white: 0, black: 0 },
+    blue: { white: 0, black: 0 },
+  };
+
+  for (const r of rounds) {
+    round = Math.max(round, r.roundNumber);
+    const team = r.team as "amber" | "blue";
+    if (!r.ownCorrect) tokens[team].white += 1;
+    if (r.intercepted) tokens[team].black += 1;
+  }
+
+  return { round, amber: tokens.amber, blue: tokens.blue };
+}
 
 function resolvePlayerConfig(player: { aiProvider?: string; aiConfig?: Partial<AIPlayerConfig> }): AIPlayerConfig | null {
   if (!player.aiProvider) return null;
@@ -580,10 +607,38 @@ export async function registerRoutes(
 
       const includeTainted = parseBooleanQuery(req.query.includeTainted);
       const tournamentMatchesData = await storage.getTournamentMatches(id);
+      // matchId is now also backfilled onto still-running tournament matches
+      // (see runSingleMatch's onMatchCreated callback) so the UI can show
+      // live progress -- so completed-match stats must filter on status,
+      // not merely on matchId being set.
       const completedMatchIds = tournamentMatchesData
+        .filter((tournamentMatch) => tournamentMatch.status === "completed")
         .map((tournamentMatch) => tournamentMatch.matchId)
         .filter((matchId): matchId is number => typeof matchId === "number");
       const uniqueCompletedMatchIds = Array.from(new Set(completedMatchIds));
+
+      const runningMatchIds = Array.from(new Set(
+        tournamentMatchesData
+          .filter((tournamentMatch) => tournamentMatch.status === "running")
+          .map((tournamentMatch) => tournamentMatch.matchId)
+          .filter((matchId): matchId is number => typeof matchId === "number")
+      ));
+      const liveRounds = runningMatchIds.length > 0
+        ? await storage.getMatchRoundsForMatches(runningMatchIds)
+        : [];
+      const liveRoundsByMatchId = new Map<number, MatchRound[]>();
+      for (const round of liveRounds) {
+        const list = liveRoundsByMatchId.get(round.matchId) ?? [];
+        list.push(round);
+        liveRoundsByMatchId.set(round.matchId, list);
+      }
+      const tournamentMatchesWithProgress = tournamentMatchesData.map((tournamentMatch) => {
+        if (tournamentMatch.status !== "running" || tournamentMatch.matchId == null) {
+          return tournamentMatch;
+        }
+        const liveProgress = computeLiveMatchProgress(liveRoundsByMatchId.get(tournamentMatch.matchId) ?? []);
+        return liveProgress ? { ...tournamentMatch, liveProgress } : tournamentMatch;
+      });
       const fetchedMatchDetails = uniqueCompletedMatchIds.length > 0
         ? await storage.getMatchesByIds(uniqueCompletedMatchIds)
         : [];
@@ -606,7 +661,7 @@ export async function registerRoutes(
 
       res.json({
         tournament,
-        matches: tournamentMatchesData,
+        matches: tournamentMatchesWithProgress,
         matchDetails,
         stats,
         btRatings,
@@ -616,6 +671,20 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch tournament" });
+    }
+  });
+
+  app.post("/api/tournaments/:id/stop", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid tournament ID" });
+      }
+      stopTournament(id);
+      await storage.updateTournament(id, { status: "stopped" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop tournament" });
     }
   });
 
@@ -944,6 +1013,20 @@ export async function registerRoutes(
       res.json(allSeries);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch series" });
+    }
+  });
+
+  app.post("/api/series/:id/stop", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid series ID" });
+      }
+      stopSeries(id);
+      await storage.updateSeries(id, { status: "stopped" });
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop series" });
     }
   });
 

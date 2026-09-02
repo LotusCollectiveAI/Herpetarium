@@ -33,6 +33,7 @@ import {
   createSeededRng,
   generateSecretCode,
   validateGameState,
+  isGameDecided,
 } from "./game";
 import { getRandomKeywords } from "./wordPacks";
 import {
@@ -861,6 +862,7 @@ export async function runHeadlessMatch(
   scratchNotesMap?: Record<string, string>,
   legacyTeamSystemPrompts?: Record<string, string>,
   healthTracker?: ModelHealthTracker,
+  onMatchCreated?: (matchId: number) => void,
 ): Promise<HeadlessResult> {
   config = normalizeHeadlessMatchConfig(config);
   const promptOverrides = normalizePromptOverrides(config, legacyTeamSystemPrompts);
@@ -944,6 +946,7 @@ export async function runHeadlessMatch(
 
   const matchId = match.id;
   log(`[headless] Match ${matchId} started (game ${game.id})`, "headless");
+  onMatchCreated?.(matchId);
 
   const ablations = config.ablations?.flags;
 
@@ -1088,6 +1091,15 @@ export async function runHeadlessMatch(
 
     if (game.phase === "round_results" || game.phase === "game_over") {
       await persistRoundResults(matchId, game);
+    }
+
+    // startNewRound doesn't check whether the round it just followed already
+    // decided the game -- only advanceFromRoundResults does that, and this
+    // loop calls startNewRound directly (to keep seeded rng threading through
+    // it) rather than that helper. So a decided game must be finalized here,
+    // or the loop would keep playing rounds past the token limits forever.
+    if (game.phase === "round_results" && isGameDecided(game)) {
+      game = { ...game, phase: "game_over" };
     }
 
     const validationErrors = validateGameState(game);

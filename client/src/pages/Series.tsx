@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, Play, Bot, Loader2, BookOpen, Brain, TrendingUp, FileText, DollarSign, AlertTriangle, Trophy, Square } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
@@ -93,6 +93,8 @@ function getStatusBadge(status: string) {
       return <Badge className="bg-green-500 hover:bg-green-600 text-white" data-testid="badge-series-completed">Completed</Badge>;
     case "budget_exceeded":
       return <Badge className="bg-red-500 hover:bg-red-600 text-white" data-testid="badge-series-budget-exceeded"><DollarSign className="h-3 w-3 mr-1" />Budget Exceeded</Badge>;
+    case "stopped":
+      return <Badge variant="secondary" data-testid="badge-series-stopped"><Square className="h-3 w-3 mr-1" />Stopped</Badge>;
     case "failed":
       return <Badge variant="destructive" data-testid="badge-series-failed">Failed</Badge>;
     default:
@@ -692,6 +694,16 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
     },
   });
 
+  const stopMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/series/${seriesId}/stop`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/series"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/series", seriesId] });
+    },
+  });
+
   if (isLoading) {
     return <Skeleton className="h-64 w-full" />;
   }
@@ -714,6 +726,18 @@ function SeriesDetailView({ seriesId }: { seriesId: number }) {
         </Button>
         <h2 className="text-xl font-bold" data-testid="text-series-name">{series.name}</h2>
         {getStatusBadge(series.status)}
+        {series.status === "running" && (
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={() => stopMutation.mutate()}
+            disabled={stopMutation.isPending}
+            data-testid="button-stop-series"
+          >
+            <Square className="h-3.5 w-3.5 mr-1" />
+            {stopMutation.isPending ? "Stopping..." : "Stop"}
+          </Button>
+        )}
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

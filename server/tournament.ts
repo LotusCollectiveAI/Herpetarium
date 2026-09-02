@@ -201,6 +201,14 @@ export function isTournamentRunning(id: number): boolean {
   return activeTournaments.get(id) === true;
 }
 
+// The scheduler's launchNext() already checks activeTournaments before
+// launching each new match (see "was stopped" below) -- flipping it false
+// is all a caller needs to do to make it stop gracefully after any
+// already-running matches finish, same as stopEvolutionRun.
+export function stopTournament(id: number): void {
+  activeTournaments.set(id, false);
+}
+
 export async function createTournament(config: TournamentConfig, estimatedCostUsd?: string | null) {
   const gamesPerMatchup = config.gamesPerMatchup || 1;
   const allMatchConfigs: HeadlessMatchConfig[] = [];
@@ -332,7 +340,11 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
 
       try {
         const matchConfig = tm.config as HeadlessMatchConfig;
-        const result = await runHeadlessMatch(matchConfig, undefined, undefined, healthTracker);
+        const result = await runHeadlessMatch(matchConfig, undefined, undefined, healthTracker, (matchId) => {
+          storage.updateTournamentMatch(tm.id, { matchId }).catch((err) => {
+            log(`[tournament] Failed to record live matchId for tournament match ${tm.id}: ${err}`, "tournament");
+          });
+        });
 
         await storage.updateTournamentMatch(tm.id, {
           status: "completed",
@@ -540,8 +552,14 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
         ? "completed_with_errors"
         : "completed";
 
+    // The stop endpoint sets status to "stopped" directly (mirroring
+    // stopEvolutionRun's endpoint) -- don't clobber that back to
+    // "completed" just because the in-flight matches wound down cleanly.
+    const currentTournament = await storage.getTournament(tournamentId);
+    const wasStoppedByUser = currentTournament?.status === "stopped";
+
     await storage.updateTournament(tournamentId, {
-      status: finalStatus,
+      status: wasStoppedByUser ? "stopped" : finalStatus,
       completedMatches: finalSnapshot.terminalCount,
       actualCostUsd: finalCost.toFixed(6),
       completedAt: new Date(),

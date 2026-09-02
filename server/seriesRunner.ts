@@ -13,6 +13,13 @@ export function isSeriesRunning(id: number): boolean {
   return activeSeries.get(id) === true;
 }
 
+// runSeries already checks activeSeries before starting each game (see "was
+// stopped" below) -- flipping it false is all a caller needs to do to make
+// it stop gracefully after the in-flight game finishes.
+export function stopSeries(id: number): void {
+  activeSeries.set(id, false);
+}
+
 export function getPlayerConfigHash(provider: string, team: string, name: string): string {
   return createHash("md5").update(`${provider}-${team}-${name}`).digest("hex").slice(0, 16);
 }
@@ -217,8 +224,14 @@ export async function runSeries(seriesId: number) {
     const budgetExceeded = budgetCap && completedMatchIds.length > 0 &&
       (await storage.getCumulativeCost(completedMatchIds)) >= budgetCap;
     const finalStatus = budgetExceeded ? "budget_exceeded" : failedCount > 0 ? (failedCount === config.totalGames ? "failed" : "completed_with_errors") : "completed";
+
+    // The stop endpoint sets status to "stopped" directly -- don't clobber
+    // that back to "completed" just because the loop wound down cleanly.
+    const currentSeries = await storage.getSeries(seriesId);
+    const wasStoppedByUser = currentSeries?.status === "stopped";
+
     await storage.updateSeries(seriesId, {
-      status: finalStatus,
+      status: wasStoppedByUser ? "stopped" : finalStatus,
       completedAt: new Date(),
     });
 

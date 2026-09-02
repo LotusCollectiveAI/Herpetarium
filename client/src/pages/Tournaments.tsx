@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers } from "lucide-react";
+import { Lock, ArrowLeft, Trophy, ChevronDown, ChevronRight, Plus, Play, Bot, BarChart3, Swords, Loader2, Zap, Users, Repeat, Grid3X3, DollarSign, AlertTriangle, Layers, Square } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import type { TournamentConfig } from "@shared/schema";
@@ -53,6 +53,11 @@ interface TournamentMatchEntry {
   result: any;
   createdAt: string;
   completedAt: string | null;
+  liveProgress?: {
+    round: number;
+    amber: { white: number; black: number };
+    blue: { white: number; black: number };
+  };
 }
 
 interface ModelStats {
@@ -104,6 +109,8 @@ function getStatusBadge(status: string) {
       return <Badge className="bg-orange-500 hover:bg-orange-600 text-white" data-testid="badge-status-completed-errors">Completed (errors)</Badge>;
     case "budget_exceeded":
       return <Badge className="bg-red-500 hover:bg-red-600 text-white" data-testid="badge-status-budget-exceeded"><DollarSign className="h-3 w-3 mr-1" />Budget Exceeded</Badge>;
+    case "stopped":
+      return <Badge variant="secondary" data-testid="badge-status-stopped"><Square className="h-3 w-3 mr-1" />Stopped</Badge>;
     case "failed":
       return <Badge variant="destructive" data-testid="badge-status-failed">Failed</Badge>;
     default:
@@ -136,6 +143,16 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
     queryKey: ["/api/tournaments", tournament.id],
     enabled: expanded,
     refetchInterval: isRunning ? 5000 : false,
+  });
+
+  const stopMutation = useMutation({
+    mutationFn: async () => {
+      await apiRequest("POST", `/api/tournaments/${tournament.id}/stop`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/tournaments"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/tournaments", tournament.id] });
+    },
   });
 
   const { data: throttleState } = useQuery<Record<string, ThrottleState>>({
@@ -201,6 +218,18 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
 
         <CollapsibleContent>
           <div className="border-t px-6 py-4 space-y-4 bg-muted/30">
+            {isRunning && (
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => stopMutation.mutate()}
+                disabled={stopMutation.isPending}
+                data-testid={`button-stop-tournament-${tournament.id}`}
+              >
+                <Square className="h-3.5 w-3.5 mr-1" />
+                {stopMutation.isPending ? "Stopping..." : "Stop Tournament"}
+              </Button>
+            )}
             {detailLoading ? (
               <div className="space-y-2">
                 <Skeleton className="h-4 w-full" />
@@ -299,7 +328,15 @@ function TournamentRow({ tournament }: { tournament: Tournament }) {
                               {bluePlayers.map((p: any) => getProviderLabel(p.aiProvider)).join("+")}
                             </span>
                           </div>
-                          <div>
+                          <div className="flex items-center gap-2">
+                            {tm.status === "running" && tm.liveProgress && (
+                              <span className="text-[11px] text-muted-foreground whitespace-nowrap" data-testid={`tournament-match-progress-${tm.id}`}>
+                                Round {tm.liveProgress.round} ·{" "}
+                                <span className="text-amber-600 dark:text-amber-400">{tm.liveProgress.amber.white}W/{tm.liveProgress.amber.black}B</span>
+                                {" vs "}
+                                <span className="text-blue-600 dark:text-blue-400">{tm.liveProgress.blue.white}W/{tm.liveProgress.blue.black}B</span>
+                              </span>
+                            )}
                             {tm.status === "completed" && tm.result ? (
                               <Badge className={`text-xs ${tm.result.winner === "amber" ? "bg-amber-500" : "bg-blue-500"} text-white`}>
                                 {tm.result.winner} wins ({tm.result.totalRounds}R)
