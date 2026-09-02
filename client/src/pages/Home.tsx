@@ -203,33 +203,35 @@ export default function Home() {
           </Card>
 
           <div className="text-center text-sm text-muted-foreground">
-            <p>2-4 players per team. Best played on mobile!</p>
+            <p>2-4 players per team.</p>
           </div>
         </div>
       </main>
 
-      <footer className="p-4 text-center text-sm text-muted-foreground border-t flex items-center justify-center gap-4">
+      <footer className="p-4 text-center text-sm text-muted-foreground border-t space-y-3">
         <p>Decrypto is a word deduction game by Thomas Dagenais-Lespérance</p>
-        <Button variant="ghost" size="sm" onClick={() => setLocation("/history")} data-testid="link-match-history">
-          <History className="h-4 w-4 mr-1" />
-          Match History
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setLocation("/tournaments")} data-testid="link-tournaments">
-          <Trophy className="h-4 w-4 mr-1" />
-          Tournaments
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setLocation("/eval")} data-testid="link-eval-dashboard">
-          <BarChart3 className="h-4 w-4 mr-1" />
-          Eval Dashboard
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setLocation("/series")} data-testid="link-series">
-          <Brain className="h-4 w-4 mr-1" />
-          Series
-        </Button>
-        <Button variant="ghost" size="sm" onClick={() => setLocation("/evolution")} data-testid="link-evolution">
-          <Dna className="h-4 w-4 mr-1" />
-          Evolution
-        </Button>
+        <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-2">
+          <Button variant="ghost" size="sm" onClick={() => setLocation("/history")} data-testid="link-match-history">
+            <History className="h-4 w-4 mr-1" />
+            Match History
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setLocation("/tournaments")} data-testid="link-tournaments">
+            <Trophy className="h-4 w-4 mr-1" />
+            Tournaments
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setLocation("/eval")} data-testid="link-eval-dashboard">
+            <BarChart3 className="h-4 w-4 mr-1" />
+            Eval Dashboard
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setLocation("/series")} data-testid="link-series">
+            <Brain className="h-4 w-4 mr-1" />
+            Series
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setLocation("/evolution")} data-testid="link-evolution">
+            <Dna className="h-4 w-4 mr-1" />
+            Evolution
+          </Button>
+        </div>
       </footer>
     </div>
   );
