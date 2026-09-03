@@ -84,6 +84,20 @@ function inferTeamSize(players: Array<{ team?: string }>): number {
   return amberCount >= 3 && blueCount >= 3 ? 3 : 2;
 }
 
+// headlessRunner defaults an unset teamSize to 3 (deliberation mode), which hardcodes
+// exactly 2 non-clue-giver "guessers" per team. A roster that doesn't exactly match
+// teamSize either silently strands extra players out of deliberation forever (>teamSize)
+// or can't reach the minimum of 2 guessers at all (<teamSize).
+function validateTeamRosterSizes(players: Array<{ team?: string }>, teamSize?: number): string | null {
+  const amberCount = players.filter((player) => player.team === "amber").length;
+  const blueCount = players.filter((player) => player.team === "blue").length;
+  const effectiveTeamSize = teamSize || 3;
+  if (amberCount !== effectiveTeamSize || blueCount !== effectiveTeamSize) {
+    return `Each team must have exactly ${effectiveTeamSize} players (teamSize=${effectiveTeamSize}); got amber=${amberCount}, blue=${blueCount}`;
+  }
+  return null;
+}
+
 function computeEstimatedCost(
   players: Array<{ aiProvider?: string; aiConfig?: Partial<AIPlayerConfig>; team?: string }>,
   totalGames: number,
@@ -358,10 +372,9 @@ export async function registerRoutes(
 
       const config = normalizeHeadlessMatchConfig(parsed.data as HeadlessMatchConfig);
 
-      const amberCount = config.players.filter(p => p.team === "amber").length;
-      const blueCount = config.players.filter(p => p.team === "blue").length;
-      if (amberCount < 2 || blueCount < 2) {
-        return res.status(400).json({ error: "Each team must have at least 2 players" });
+      const rosterError = validateTeamRosterSizes(config.players, config.teamSize);
+      if (rosterError) {
+        return res.status(400).json({ error: rosterError });
       }
 
       res.json({ status: "started", message: "Match is running. Check /api/matches for results." });
@@ -383,10 +396,9 @@ export async function registerRoutes(
 
       const config = normalizeHeadlessMatchConfig(parsed.data as HeadlessMatchConfig);
 
-      const amberCount = config.players.filter(p => p.team === "amber").length;
-      const blueCount = config.players.filter(p => p.team === "blue").length;
-      if (amberCount < 2 || blueCount < 2) {
-        return res.status(400).json({ error: "Each team must have at least 2 players" });
+      const rosterError = validateTeamRosterSizes(config.players, config.teamSize);
+      if (rosterError) {
+        return res.status(400).json({ error: rosterError });
       }
 
       const result = await runHeadlessMatch(config);
@@ -410,10 +422,9 @@ export async function registerRoutes(
       } satisfies TournamentConfig;
 
       for (const mc of tournamentConfig.matchConfigs) {
-        const amberCount = mc.players.filter(p => p.team === "amber").length;
-        const blueCount = mc.players.filter(p => p.team === "blue").length;
-        if (amberCount < 2 || blueCount < 2) {
-          return res.status(400).json({ error: "Each team in every matchup must have at least 2 players" });
+        const rosterError = validateTeamRosterSizes(mc.players, mc.teamSize);
+        if (rosterError) {
+          return res.status(400).json({ error: `Invalid matchup: ${rosterError}` });
         }
       }
 
@@ -687,8 +698,14 @@ export async function registerRoutes(
       if (isNaN(id)) {
         return res.status(400).json({ error: "Invalid tournament ID" });
       }
+      const tournament = await storage.getTournament(id);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
       stopTournament(id);
-      await storage.updateTournament(id, { status: "stopped" });
+      if (tournament.status === "running") {
+        await storage.updateTournament(id, { status: "stopped" });
+      }
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to stop tournament" });
@@ -988,10 +1005,9 @@ export async function registerRoutes(
       const config = parsed.data;
       const matchConfig = config.matchConfig as HeadlessMatchConfig;
 
-      const amberCount = matchConfig.players.filter(p => p.team === "amber").length;
-      const blueCount = matchConfig.players.filter(p => p.team === "blue").length;
-      if (amberCount < 2 || blueCount < 2) {
-        return res.status(400).json({ error: "Each team must have at least 2 players" });
+      const rosterError = validateTeamRosterSizes(matchConfig.players, matchConfig.teamSize);
+      if (rosterError) {
+        return res.status(400).json({ error: rosterError });
       }
 
       const estimatedCost = computeEstimatedCost(matchConfig.players, config.totalGames, true);
@@ -1029,8 +1045,14 @@ export async function registerRoutes(
       if (isNaN(id)) {
         return res.status(400).json({ error: "Invalid series ID" });
       }
+      const series = await storage.getSeries(id);
+      if (!series) {
+        return res.status(404).json({ error: "Series not found" });
+      }
       stopSeries(id);
-      await storage.updateSeries(id, { status: "stopped" });
+      if (series.status === "running") {
+        await storage.updateSeries(id, { status: "stopped" });
+      }
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to stop series" });
@@ -1432,8 +1454,12 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: "Invalid run ID" });
+      const run = await storage.getEvolutionRun(id);
+      if (!run) return res.status(404).json({ error: "Evolution run not found" });
       stopEvolutionRun(id);
-      await storage.updateEvolutionRun(id, { status: "stopped" });
+      if (run.status === "running") {
+        await storage.updateEvolutionRun(id, { status: "stopped" });
+      }
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to stop evolution run" });
@@ -1495,6 +1521,26 @@ export async function registerRoutes(
       res.json({ arenaId });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to start arena" });
+    }
+  });
+
+  app.post("/api/arena/:id/stop", async (req, res) => {
+    try {
+      const arenaId = req.params.id;
+      const runs = await storage.getCoachRunsByArenaId(arenaId);
+      if (runs.length === 0) {
+        return res.status(404).json({ error: "Arena not found" });
+      }
+      const { stopArena } = await import("./arena");
+      stopArena(arenaId);
+      await Promise.all(
+        runs
+          .filter((run) => run.status === "running")
+          .map((run) => storage.updateCoachRun(run.id, { status: "stopped" }))
+      );
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop arena" });
     }
   });
 
