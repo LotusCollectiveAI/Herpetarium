@@ -32,7 +32,7 @@ export function Token({ type, count, reverseFill = false }: { type: "white" | "b
                 ? type === "white"
                   ? "bg-white border-white shadow-[0_0_6px_rgba(255,255,255,0.6)]"
                   : "bg-gray-950 border-gray-400 shadow-[0_0_6px_rgba(0,0,0,0.8)] dark:bg-black"
-                : "bg-transparent border-muted-foreground/30"
+                : "bg-transparent border-dashed border-muted-foreground/40"
             )}
             data-testid={`token-${type}-${i}`}
           />
