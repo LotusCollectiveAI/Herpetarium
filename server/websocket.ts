@@ -368,23 +368,39 @@ async function emitRoundStartedEvent(gameId: string, game: GameState) {
   }, { round: game.round });
 }
 
+// processAITurn is scheduled via setTimeout from many independent call sites
+// (WS message handlers, internal transitions). More than one of those can
+// land while a game is still in the same phase, and each phase handler below
+// loops over teams with real (slow) AI calls in between checking and acting
+// on shared state -- without this guard, two overlapping invocations can
+// both generate and submit an AI turn for the same team, wasting a real,
+// billed AI call. (submitClues/submitOwnTeamGuess/submitInterception also
+// guard against the redundant submission itself, independently of this.)
+const aiTurnInProgress = new Set<string>();
+
 async function processAITurn(gameId: string) {
-  const game = games.get(gameId);
-  if (!game) return;
-  
-  switch (game.phase) {
-    case "team_setup":
-      await handleTeamSetupPhase(gameId);
-      break;
-    case "giving_clues":
-      await processAIClues(gameId);
-      break;
-    case "own_team_guessing":
-      await processAIGuesses(gameId);
-      break;
-    case "opponent_intercepting":
-      await processAIInterceptions(gameId);
-      break;
+  if (aiTurnInProgress.has(gameId)) return;
+  aiTurnInProgress.add(gameId);
+  try {
+    const game = games.get(gameId);
+    if (!game) return;
+
+    switch (game.phase) {
+      case "team_setup":
+        await handleTeamSetupPhase(gameId);
+        break;
+      case "giving_clues":
+        await processAIClues(gameId);
+        break;
+      case "own_team_guessing":
+        await processAIGuesses(gameId);
+        break;
+      case "opponent_intercepting":
+        await processAIInterceptions(gameId);
+        break;
+    }
+  } finally {
+    aiTurnInProgress.delete(gameId);
   }
 }
 

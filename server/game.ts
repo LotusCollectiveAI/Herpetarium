@@ -321,6 +321,13 @@ export function updateSelection(
 }
 
 export function submitClues(game: GameState, team: "amber" | "blue", clues: string[]): GameState {
+  // Idempotency guard: a redundant call for a team that's already submitted
+  // (e.g. two overlapping AI-turn dispatches racing each other) must not
+  // silently swap out the clues teammates may already be decoding.
+  if (game.currentClues[team] !== null) {
+    return game;
+  }
+
   const updatedClues = {
     ...game.currentClues,
     [team]: clues,
@@ -337,6 +344,14 @@ export function submitClues(game: GameState, team: "amber" | "blue", clues: stri
 }
 
 export function submitOwnTeamGuess(game: GameState, team: "amber" | "blue", guess: [number, number, number]): GameState {
+  // Idempotency guard: a redundant call for a team that's already submitted
+  // (e.g. two overlapping AI-turn dispatches racing each other) must not
+  // re-run the phase transition, which would wipe out live interception
+  // picks teammates had already started making in the meantime.
+  if (game.currentGuesses[team].ownTeam !== null) {
+    return game;
+  }
+
   const updatedGuesses = {
     ...game.currentGuesses,
     [team]: {
@@ -359,6 +374,14 @@ export function submitOwnTeamGuess(game: GameState, team: "amber" | "blue", gues
 }
 
 export function submitInterception(game: GameState, team: "amber" | "blue", guess: [number, number, number]): GameState {
+  // Idempotency guard: a redundant call for a team that's already submitted
+  // (e.g. two overlapping AI-turn dispatches racing each other) must not
+  // re-run evaluateRound -- that would double-count tokens and history for
+  // the same round, and could end the game a round earlier than it should.
+  if (game.currentGuesses[team].opponent !== null) {
+    return game;
+  }
+
   const updatedGuesses = {
     ...game.currentGuesses,
     [team]: {
