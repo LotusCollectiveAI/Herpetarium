@@ -415,6 +415,17 @@ export async function runEvolution(runId: number) {
       for (const [idxA, idxB] of matchPairs) {
         if (!activeRuns.get(runId)) break;
 
+        if (budgetCap && allMatchIds.length > 0) {
+          const currentCost = await storage.getCumulativeCost(allMatchIds);
+          await storage.updateEvolutionRun(runId, { actualCostUsd: currentCost.toFixed(6) });
+          if (currentCost >= budgetCap) {
+            log(`[evolution] Run ${runId} budget exceeded mid-generation ${gen}`, "evolution");
+            await storage.updateEvolutionRun(runId, { status: "budget_exceeded" });
+            activeRuns.set(runId, false);
+            break;
+          }
+        }
+
         try {
           const genomeA = population[idxA];
           const genomeB = population[idxB];
