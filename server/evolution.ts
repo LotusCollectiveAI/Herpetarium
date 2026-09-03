@@ -5,6 +5,20 @@ import { callAI } from "./ai";
 import { log } from "./index";
 
 const activeRuns = new Map<number, boolean>();
+
+export interface EvolutionLiveMatch {
+  matchId: number;
+  generation: number;
+  matchIndex: number;
+  totalMatches: number;
+  labelA: string;
+  labelB: string;
+}
+const activeMatchInfo = new Map<number, EvolutionLiveMatch>();
+
+export function getEvolutionLiveMatch(runId: number): EvolutionLiveMatch | null {
+  return activeMatchInfo.get(runId) ?? null;
+}
 const DEFAULT_EXECUTION_GUIDANCE = "Focus on clear, unambiguous clues that your teammates can decode reliably. When uncertain, prefer simpler associations over clever ones.";
 const DEFAULT_DELIBERATION_SCAFFOLD = "Discuss openly with your teammates. Share your reasoning, consider alternatives, and reach consensus before committing to an answer.";
 const DEFAULT_GENOME_EXTENSION_FIELDS: Pick<GenomeModules, "executionGuidance" | "deliberationScaffold"> = {
@@ -26,6 +40,7 @@ export function isEvolutionRunning(id: number): boolean {
 
 export function stopEvolutionRun(id: number) {
   activeRuns.set(id, false);
+  activeMatchInfo.delete(id);
 }
 
 const SEED_GENOME_TEMPLATES: GenomeModules[] = [
@@ -405,17 +420,29 @@ export async function runEvolution(runId: number) {
           const genomeB = population[idxB];
           const modulesA = genomeA.modules as GenomeModules;
           const modulesB = genomeB.modules as GenomeModules;
+          const labelA = `G${gen}-${idxA}`;
+          const labelB = `G${gen}-${idxB}`;
+          const matchIndex = matchIds.length;
 
           const result = await runHeadlessMatch({
             players: [
-              { name: `G${gen}-${idxA}`, aiProvider: config.baseProvider, team: "amber", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const, reasoningEffort: "high" as const } },
-              { name: `G${gen}-${idxB}`, aiProvider: config.baseProvider, team: "blue", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const, reasoningEffort: "high" as const } },
+              { name: labelA, aiProvider: config.baseProvider, team: "amber", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const, reasoningEffort: "high" as const } },
+              { name: labelB, aiProvider: config.baseProvider, team: "blue", aiConfig: { provider: config.baseProvider, model: config.baseModel, timeoutMs: 120000, temperature: 0.7, promptStrategy: "default" as const, reasoningEffort: "high" as const } },
             ],
             fastMode: true,
-            seed: `evo-${runId}-g${gen}-${idxA}v${idxB}-m${matchIds.length}`,
+            seed: `evo-${runId}-g${gen}-${idxA}v${idxB}-m${matchIndex}`,
           }, undefined, {
             amber: buildGenomeSystemPrompt(modulesA),
             blue: buildGenomeSystemPrompt(modulesB),
+          }, undefined, (matchId) => {
+            activeMatchInfo.set(runId, {
+              matchId,
+              generation: gen,
+              matchIndex,
+              totalMatches: matchPairs.length,
+              labelA,
+              labelB,
+            });
           });
 
           matchIds.push(result.matchId);
@@ -549,6 +576,7 @@ export async function runEvolution(runId: number) {
     await storage.updateEvolutionRun(runId, { status: "failed" });
   } finally {
     activeRuns.delete(runId);
+    activeMatchInfo.delete(runId);
   }
 }
 

@@ -67,10 +67,23 @@ interface StrategyGenome {
   mutationLog: string | null;
 }
 
+interface EvolutionLiveMatch {
+  matchId: number;
+  generation: number;
+  matchIndex: number;
+  totalMatches: number;
+  labelA: string;
+  labelB: string;
+  round?: number;
+  amber?: { white: number; black: number };
+  blue?: { white: number; black: number };
+}
+
 interface RunDetail extends EvolutionRun {
   generations: Generation[];
   currentPopulation: StrategyGenome[];
   isRunning: boolean;
+  liveMatch: EvolutionLiveMatch | null;
 }
 
 const MODEL_MAP: Record<string, Array<{ value: string; label: string }>> = {
@@ -524,6 +537,26 @@ function RunDetail({ runId }: { runId: number }) {
           </Button>
         )}
       </div>
+
+      {run.isRunning && run.liveMatch && (
+        <div className="flex items-center gap-3 p-2 border rounded text-xs bg-background" data-testid="evolution-live-match">
+          <Loader2 className="w-3 h-3 animate-spin text-amber-400 shrink-0" />
+          <div className="flex-1 flex items-center gap-1">
+            <span className="text-muted-foreground">Gen {run.liveMatch.generation} · match {run.liveMatch.matchIndex + 1}/{run.liveMatch.totalMatches} ·</span>
+            <span className="text-amber-600 dark:text-amber-400">{run.liveMatch.labelA}</span>
+            <span className="text-muted-foreground">vs</span>
+            <span className="text-blue-600 dark:text-blue-400">{run.liveMatch.labelB}</span>
+          </div>
+          {run.liveMatch.round !== undefined && run.liveMatch.amber && run.liveMatch.blue && (
+            <span className="text-[11px] text-muted-foreground whitespace-nowrap" data-testid="evolution-live-match-progress">
+              Round {run.liveMatch.round} ·{" "}
+              <span className="text-amber-600 dark:text-amber-400">{run.liveMatch.amber.white}W/{run.liveMatch.amber.black}B</span>
+              {" vs "}
+              <span className="text-blue-600 dark:text-blue-400">{run.liveMatch.blue.white}W/{run.liveMatch.blue.black}B</span>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Card className="border-border/50">

@@ -8,7 +8,7 @@ import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { createTournament, runTournament, isTournamentRunning, stopTournament, generateRoundRobinConfigs, getActiveTournamentHealthTracker, getTournamentModelKeys, interleaveByProvider } from "./tournament";
 import { createSeries, runSeries, isSeriesRunning, stopSeries, getPlayerConfigHash } from "./seriesRunner";
-import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun } from "./evolution";
+import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun, getEvolutionLiveMatch } from "./evolution";
 import { z } from "zod";
 import { experimentConfigSchema } from "@shared/schema";
 import { runExperiment } from "./experimentRunner";
@@ -1344,11 +1344,19 @@ export async function registerRoutes(
         ? await storage.getStrategyGenomes(id, run.currentGeneration - 1)
         : await storage.getStrategyGenomes(id, 0);
 
+      const liveMatch = getEvolutionLiveMatch(id);
+      let liveProgress = null;
+      if (liveMatch) {
+        const liveMatchRounds = await storage.getMatchRoundsForMatches([liveMatch.matchId]);
+        liveProgress = { ...liveMatch, ...(computeLiveMatchProgress(liveMatchRounds) ?? {}) };
+      }
+
       res.json({
         ...run,
         generations: gens,
         currentPopulation: currentGenGenomes,
         isRunning: isEvolutionRunning(id),
+        liveMatch: liveProgress,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch evolution run" });
