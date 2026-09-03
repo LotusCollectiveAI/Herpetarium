@@ -14,21 +14,16 @@ interface SlotClue {
   clue: string;
 }
 
-function buildSlotClues(
-  history: RoundHistory[],
-  current: { round: number; clues: string[]; code: [number, number, number] } | null
-): SlotClue[][] {
+// Only ever slots clues from finished rounds. Which keyword position a clue
+// maps to is exactly what players are supposed to deduce during the current
+// round -- for their own team's guess as much as for interception -- so
+// slotting the in-progress round's clue by its (still-secret-in-spirit)
+// target code would hand out the answer before anyone guesses anything.
+// The raw clue words for the current round are already shown, un-slotted,
+// by the guessing/interception views themselves.
+function buildSlotClues(history: RoundHistory[]): SlotClue[][] {
   const bySlot: SlotClue[][] = [[], [], [], []];
-  // Once a round finishes, its clues live in both `history` and (until
-  // "Next Round" is clicked) `currentClues` — only append `current` if it
-  // isn't already recorded, or it'd get counted twice.
-  const alreadyRecorded = current !== null && history.some(h => h.round === current.round);
-  const rounds: { round: number; clues: string[]; targetCode: [number, number, number] }[] =
-    current && !alreadyRecorded
-      ? [...history, { round: current.round, clues: current.clues, targetCode: current.code }]
-      : history;
-
-  for (const r of rounds) {
+  for (const r of history) {
     r.clues.forEach((clue, i) => {
       const slot = r.targetCode[i] - 1;
       if (slot >= 0 && slot < bySlot.length) {
@@ -93,24 +88,8 @@ export function ClueHistoryPanel() {
 
   const opponentTeam = myTeam === "amber" ? "blue" : "amber";
 
-  // Clues aren't "revealed" until both teams have finished giving them —
-  // the phase only advances past giving_clues once that's true. Reading
-  // the opponent's currentClues before then would show them the instant
-  // they're submitted rather than when the round naturally reveals them.
-  const cluesRevealed = gameState.phase !== "giving_clues";
-
-  const myClueSlots = buildSlotClues(
-    gameState.teams[myTeam].history,
-    gameState.currentClues[myTeam]
-      ? { round: gameState.round, clues: gameState.currentClues[myTeam]!, code: gameState.currentCode[myTeam]! }
-      : null
-  );
-  const opponentClueSlots = buildSlotClues(
-    gameState.teams[opponentTeam].history,
-    cluesRevealed && gameState.currentClues[opponentTeam]
-      ? { round: gameState.round, clues: gameState.currentClues[opponentTeam]!, code: gameState.currentCode[opponentTeam]! }
-      : null
-  );
+  const myClueSlots = buildSlotClues(gameState.teams[myTeam].history);
+  const opponentClueSlots = buildSlotClues(gameState.teams[opponentTeam].history);
 
   const myKeywords = gameState.teams[myTeam].keywords;
 
