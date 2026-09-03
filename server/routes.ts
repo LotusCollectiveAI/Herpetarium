@@ -263,6 +263,13 @@ export async function registerRoutes(
 
   app.get("/api/matches", async (req, res) => {
     try {
+      const idsParam = req.query.ids as string | undefined;
+      if (idsParam) {
+        const ids = idsParam.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+        const matches = await storage.getMatchesByIds(ids);
+        return res.json({ matches, total: matches.length, page: 1, limit: matches.length, totalPages: 1, matchIdsWithTraces: [] });
+      }
+
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
       const model = req.query.model as string | undefined;

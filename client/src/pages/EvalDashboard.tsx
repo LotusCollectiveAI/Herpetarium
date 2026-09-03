@@ -16,13 +16,14 @@ import { getModelEntry } from "@shared/modelRegistry";
 import {
   Lock, ArrowLeft, BarChart3, FlaskConical, FileDown, Eye,
   TrendingUp, Shield, AlertTriangle, Target, Shuffle, BookOpen,
-  ChevronDown, ChevronRight, Check, X, ShieldCheck, Brain
+  ChevronDown, ChevronRight, Check, X, ShieldCheck, Brain, History,
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Cell, ErrorBar
 } from "recharts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 
 interface ConfidenceInterval {
   lower: number;
@@ -53,6 +54,15 @@ interface MatchupMetrics {
   totalGames: number;
   modelAWinRate: number;
   modelBWinRate: number;
+  matchIds: number[];
+}
+
+interface MatchSummaryRow {
+  id: number;
+  gameId: string;
+  winner: string | null;
+  totalRounds: number;
+  createdAt: string;
 }
 
 interface TeamCompositionMetrics {
@@ -395,44 +405,111 @@ function ModelDetailsTable({ metrics }: { metrics: ModelMetrics[] }) {
   );
 }
 
+function MatchupGamesDialog({
+  matchup,
+  onOpenChange,
+}: {
+  matchup: MatchupMetrics | null;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [, setLocation] = useLocation();
+  const matchIds = matchup?.matchIds ?? [];
+
+  const { data, isLoading } = useQuery<{ matches: MatchSummaryRow[] }>({
+    queryKey: ["/api/matches", { ids: matchIds.join(",") }],
+    queryFn: async () => {
+      const res = await fetch(`/api/matches?ids=${matchIds.join(",")}`, { credentials: "include" });
+      return res.json();
+    },
+    enabled: !!matchup && matchIds.length > 0,
+  });
+
+  return (
+    <Dialog open={!!matchup} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-lg max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>{matchup?.modelA} vs {matchup?.modelB}</DialogTitle>
+          <DialogDescription>{matchIds.length} game{matchIds.length !== 1 ? "s" : ""}</DialogDescription>
+        </DialogHeader>
+        {isLoading ? (
+          <Skeleton className="h-32 w-full" />
+        ) : (
+          <div className="space-y-2">
+            {(data?.matches ?? []).map((m) => (
+              <div key={m.id} className="flex items-center justify-between p-2 border rounded text-sm" data-testid={`row-matchup-game-${m.id}`}>
+                <div className="space-y-1">
+                  <div className="text-xs text-muted-foreground">{new Date(m.createdAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}</div>
+                  <div className="flex items-center gap-2">
+                    {m.winner ? (
+                      <Badge className={m.winner === "amber" ? "bg-amber-500 text-white" : "bg-blue-500 text-white"}>{m.winner} wins</Badge>
+                    ) : (
+                      <Badge variant="outline">No winner</Badge>
+                    )}
+                    <span className="text-xs text-muted-foreground">{m.totalRounds} rounds</span>
+                  </div>
+                </div>
+                <Button size="sm" variant="ghost" onClick={() => setLocation(`/replay/${m.gameId}`)} data-testid={`button-replay-matchup-game-${m.id}`}>
+                  <History className="h-4 w-4 mr-1" />Replay
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function MatchupTable({ matchups }: { matchups: MatchupMetrics[] }) {
+  const [selectedMatchup, setSelectedMatchup] = useState<MatchupMetrics | null>(null);
+
   if (matchups.length === 0) return null;
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-lg flex items-center gap-2">
-          <Shuffle className="h-5 w-5" />
-          Head-to-Head Matchups
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <div className="space-y-3">
-          {matchups.map((mu, i) => (
-            <div key={i} className="border rounded-lg p-3" data-testid={`matchup-${mu.modelA}-vs-${mu.modelB}`}>
-              <div className="flex items-center justify-between mb-2">
-                <span className="font-medium text-sm">{mu.modelA} vs {mu.modelB}</span>
-                <Badge variant="outline">{mu.totalGames} games</Badge>
+    <>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg flex items-center gap-2">
+            <Shuffle className="h-5 w-5" />
+            Head-to-Head Matchups
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {matchups.map((mu, i) => (
+              <div key={i} className="border rounded-lg p-3" data-testid={`matchup-${mu.modelA}-vs-${mu.modelB}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <span className="font-medium text-sm">{mu.modelA} vs {mu.modelB}</span>
+                  <Badge
+                    variant="outline"
+                    className="cursor-pointer"
+                    onClick={() => setSelectedMatchup(mu)}
+                    data-testid={`button-matchup-games-${i}`}
+                  >
+                    {mu.totalGames} games
+                  </Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div
+                    className="h-3 rounded-l bg-amber-500"
+                    style={{ width: `${mu.modelAWinRate * 100}%`, minWidth: mu.modelAWins > 0 ? '20px' : '0' }}
+                  />
+                  <div
+                    className="h-3 rounded-r bg-blue-500"
+                    style={{ width: `${mu.modelBWinRate * 100}%`, minWidth: mu.modelBWins > 0 ? '20px' : '0' }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground mt-1">
+                  <span>{mu.modelA}: {mu.modelAWins}W ({pct(mu.modelAWinRate)})</span>
+                  <span>{mu.modelB}: {mu.modelBWins}W ({pct(mu.modelBWinRate)})</span>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <div
-                  className="h-3 rounded-l bg-amber-500"
-                  style={{ width: `${mu.modelAWinRate * 100}%`, minWidth: mu.modelAWins > 0 ? '20px' : '0' }}
-                />
-                <div
-                  className="h-3 rounded-r bg-blue-500"
-                  style={{ width: `${mu.modelBWinRate * 100}%`, minWidth: mu.modelBWins > 0 ? '20px' : '0' }}
-                />
-              </div>
-              <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                <span>{mu.modelA}: {mu.modelAWins}W ({pct(mu.modelAWinRate)})</span>
-                <span>{mu.modelB}: {mu.modelBWins}W ({pct(mu.modelBWinRate)})</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </CardContent>
-    </Card>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+      <MatchupGamesDialog matchup={selectedMatchup} onOpenChange={(open) => { if (!open) setSelectedMatchup(null); }} />
+    </>
   );
 }
 
