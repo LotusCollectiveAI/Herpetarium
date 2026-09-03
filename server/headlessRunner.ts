@@ -1103,8 +1103,20 @@ export async function runHeadlessMatch(
         }
       }
 
+      // A team with <2 eligible guessers (e.g. a 1-player-per-team evolution
+      // match) gets a null context above and is silently skipped -- despite
+      // the log claiming a single-shot fallback, nothing actually submitted
+      // a guess for it, so it would never leave this phase. processGuesses
+      // already tolerates (and skips) a team that already has a guess in,
+      // so this call only affects the team(s) that fell through above.
+      if (!amberCtx || !blueCtx) {
+        game = await processGuesses(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker, config);
+      }
+
       // Phase: opponent_deliberation
       game = { ...game, phase: "opponent_deliberation" as GamePhase };
+
+      let interceptionNeedsFallback = false;
 
       for (const team of ["amber", "blue"] as const) {
         const opponentTeam: "amber" | "blue" = team === "amber" ? "blue" : "amber";
@@ -1113,6 +1125,7 @@ export async function runHeadlessMatch(
         const guessers = teamPlayers.filter(p => p.id !== clueGiverId);
 
         if (guessers.length < 2) {
+          interceptionNeedsFallback = true;
           continue;
         }
 
@@ -1157,6 +1170,12 @@ export async function runHeadlessMatch(
           guess: result.answer,
           success: arraysEqual(result.answer, game.currentCode[opponentTeam]!),
         }, { round: game.round, team, playerId: lastSpeaker });
+      }
+
+      // Same single-shot fallback as the own-guess phase above, for
+      // whichever team(s) had <2 eligible guessers for interception.
+      if (interceptionNeedsFallback) {
+        game = await processInterceptions(game, matchId, qualityState, scratchNotesMap, ablations, promptOverrides, healthTracker, config);
       }
 
     } else {
