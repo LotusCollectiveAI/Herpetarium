@@ -1,4 +1,4 @@
-import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
+import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, CLASSIC_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
 import { getRandomKeywords } from "./wordPacks";
 
 export function createSeededRng(seed: string): () => number {
@@ -86,7 +86,13 @@ function comparePenaltyBurden(
   return null;
 }
 
-export function createNewGame(hostId: string, hostName: string, rules: GameRules = DEFAULT_GAME_RULES): GameState {
+// Live human games default to CLASSIC_GAME_RULES (2 intercepts, no minimum
+// round count) so they play out the way anyone who knows the real Decrypto
+// board game would expect. DEFAULT_GAME_RULES (3 intercepts, min 3 rounds)
+// exists for the AI-research paths (Tournament/Series/Evolution/Coach/Arena),
+// which explicitly pass config.gameRules || DEFAULT_GAME_RULES themselves --
+// they don't rely on this default, so this only affects live games.
+export function createNewGame(hostId: string, hostName: string, rules: GameRules = CLASSIC_GAME_RULES): GameState {
   return {
     id: generateGameId(),
     phase: "lobby",
