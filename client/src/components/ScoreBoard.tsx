@@ -18,7 +18,7 @@ interface PlayerActivity {
 // Tokens normally fill left-to-right (index 0 first). Pass reverseFill for
 // a team whose tokens are right-aligned toward the center, so the bubble
 // nearest the middle (the highest index, drawn last) lights up first.
-function Token({ type, count, reverseFill = false }: { type: "white" | "black"; count: number; reverseFill?: boolean }) {
+export function Token({ type, count, reverseFill = false }: { type: "white" | "black"; count: number; reverseFill?: boolean }) {
   return (
     <div className="flex items-center gap-1">
       {Array.from({ length: 2 }).map((_, i) => {
