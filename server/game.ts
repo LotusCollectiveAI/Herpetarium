@@ -29,9 +29,14 @@ function seededShuffleArray<T>(array: T[], rng: () => number): T[] {
 }
 
 export function generateGameId(): string {
+  // 6 chars over this 32-symbol alphabet is ~1.07B combinations (vs. ~1.05M at 4 chars) --
+  // matches are looked up by gameId alone for replay/export, with no DB uniqueness
+  // constraint, so a collision silently serves the wrong match's data. 4 chars put the
+  // 50%-collision point around ~1,200 games, comfortably within this app's real usage;
+  // 6 pushes that to ~38,700.
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
