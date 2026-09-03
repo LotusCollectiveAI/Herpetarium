@@ -498,7 +498,9 @@ interface DeliberationContext {
   opponentHistory?: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   opponentDeliberationTranscript?: ChatterMessage[];
   clueGiverName: string;
-  guessers: [Player, Player];
+  // 2 for own-guess (clue-giver always excluded); all team members (including the
+  // clue-giver, who has no special knowledge of the opponent's code) for interception.
+  guessers: Player[];
   scratchNotes?: Record<string, string>;
   scratchNotesByTeam?: Partial<Record<"amber" | "blue", string>>;
   ablations?: AblationFlag[];
@@ -536,14 +538,14 @@ async function processDeliberation(
   qualityState: MatchQualityRuntimeState,
   healthTracker?: ModelHealthTracker,
 ): Promise<DeliberationResult> {
-  const MAX_EXCHANGES = 10; // 10 rounds = 20 messages max
+  const MAX_EXCHANGES = 10; // 10 rounds of every participant speaking once
   const messages: ChatterMessage[] = [];
   const readySignals: Map<string, [number, number, number]> = new Map();
-  const [playerA, playerB] = context.guessers;
+  const participants = context.guessers;
   const opponentTeam: "amber" | "blue" = context.team === "amber" ? "blue" : "amber";
   const phaseStartMs = Date.now();
-  const maxPhaseDurationMs = MAX_EXCHANGES * (
-    getConfigForPlayer(playerA).timeoutMs + getConfigForPlayer(playerB).timeoutMs
+  const maxPhaseDurationMs = MAX_EXCHANGES * participants.reduce(
+    (sum, p) => sum + getConfigForPlayer(p).timeoutMs, 0
   );
 
   const finalizeDeliberation = (
@@ -568,12 +570,11 @@ async function processDeliberation(
   };
 
   for (let exchange = 0; exchange < MAX_EXCHANGES; exchange++) {
-    const turnOrder: Array<[Player, Player, boolean]> = [
-      [playerA, playerB, false],
-      [playerB, playerA, true],
-    ];
+    for (const currentPlayer of participants) {
+      const otherPlayers = participants.filter(p => p.id !== currentPlayer.id);
+      const lensIndex = participants.indexOf(currentPlayer);
+      const isFirstMessageFromCurrentPlayer = !messages.some(m => m.playerId === currentPlayer.id);
 
-    for (const [currentPlayer, otherPlayer, isPlayerB] of turnOrder) {
       const config = getConfigForPlayer(currentPlayer);
       const strategy = getPromptStrategy(config.promptStrategy || "default");
       let prompt: string;
@@ -589,7 +590,7 @@ async function processDeliberation(
           history: context.teamHistory,
           clueGiverName: context.clueGiverName,
           currentPlayerName: currentPlayer.name,
-          otherPlayerName: otherPlayer.name,
+          otherPlayerNames: otherPlayers.map(p => p.name),
           conversationSoFar,
           exchangeNumber: exchange,
           roundNumber: context.roundNumber,
@@ -597,14 +598,13 @@ async function processDeliberation(
           ablations: context.ablations,
           systemPromptOverride: resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
           taskDirectives: resolveRoleTaskDirectives(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
-          isPlayerB,
+          lensIndex,
         };
 
-        if (messages.length === 0 || (messages.length === 1 && isPlayerB)) {
-          // First turn
+        if (isFirstMessageFromCurrentPlayer) {
           const builder = strategy.deliberationOwnTemplate
             ? strategy.deliberationOwnTemplate
-            : (params: DeliberationOwnTemplateParams) => defaultDeliberationOwnFirstTurn({ ...params, isPlayerB });
+            : defaultDeliberationOwnFirstTurn;
           prompt = builder(templateParams);
         } else {
           prompt = defaultDeliberationOwnFollowUp({ ...templateParams, exchangeNumber: exchange });
@@ -621,7 +621,7 @@ async function processDeliberation(
           opponentHistory: context.opponentHistory || [],
           opponentDeliberationTranscript: opponentTranscriptFormatted,
           currentPlayerName: currentPlayer.name,
-          otherPlayerName: otherPlayer.name,
+          otherPlayerNames: otherPlayers.map(p => p.name),
           conversationSoFar,
           exchangeNumber: exchange,
           roundNumber: context.roundNumber,
@@ -629,13 +629,13 @@ async function processDeliberation(
           ablations: context.ablations,
           systemPromptOverride: resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
           taskDirectives: resolveRoleTaskDirectives(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)),
-          isPlayerB,
+          lensIndex,
         };
 
-        if (messages.length === 0 || (messages.length === 1 && isPlayerB)) {
+        if (isFirstMessageFromCurrentPlayer) {
           const builder = strategy.deliberationInterceptTemplate
             ? strategy.deliberationInterceptTemplate
-            : (params: DeliberationInterceptTemplateParams) => defaultDeliberationInterceptFirstTurn({ ...params, isPlayerB });
+            : defaultDeliberationInterceptFirstTurn;
           prompt = builder(templateParams);
         } else {
           prompt = defaultDeliberationInterceptFollowUp({ ...templateParams, exchangeNumber: exchange });
@@ -742,10 +742,10 @@ async function processDeliberation(
         );
       }
 
-      // Check consensus: both players READY with same answer
-      if (readySignals.size === 2) {
+      // Check consensus: every participant READY with the same answer
+      if (readySignals.size === participants.length) {
         const signals = [...readySignals.values()];
-        if (arraysEqual(signals[0], signals[1])) {
+        if (signals.every(s => arraysEqual(s, signals[0]))) {
           return {
             answer: signals[0] as [number, number, number],
             messages,
@@ -1051,7 +1051,9 @@ export async function runHeadlessMatch(
           keywords: game.teams[team].keywords,
           teamHistory: game.teams[team].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
           clueGiverName: teamPlayers.find(p => p.id === clueGiverId)!.name,
-          guessers: [guessers[0], guessers[1]] as [Player, Player],
+          // Own-guess deliberation is always exactly the 2 non-clue-givers, by design --
+          // the clue-giver already knows the answer, so "guessing" it isn't meaningful.
+          guessers: guessers.slice(0, 2),
           scratchNotes: scratchNotesMap,
           scratchNotesByTeam: config.scratchNotesByTeam,
           ablations,
@@ -1120,11 +1122,13 @@ export async function runHeadlessMatch(
 
       for (const team of ["amber", "blue"] as const) {
         const opponentTeam: "amber" | "blue" = team === "amber" ? "blue" : "amber";
-        const clueGiverId = game.currentClueGiver[team]!;
-        const teamPlayers = game.players.filter(p => p.team === team);
-        const guessers = teamPlayers.filter(p => p.id !== clueGiverId);
+        // Unlike own-guess, the clue-giver is NOT excluded here: intercepting the
+        // opponent's code doesn't touch anything the clue-giver has special knowledge
+        // of, so all team members are equally eligible (matching the live game's
+        // designated-submitter logic, which makes the same call for the same reason).
+        const interceptors = game.players.filter(p => p.team === team);
 
-        if (guessers.length < 2) {
+        if (interceptors.length < 2) {
           interceptionNeedsFallback = true;
           continue;
         }
@@ -1139,7 +1143,7 @@ export async function runHeadlessMatch(
           teamHistory: game.teams[team].history.map(h => ({ clues: h.clues, targetCode: h.targetCode })),
           opponentDeliberationTranscript: opponentTranscript,
           clueGiverName: game.players.find(p => p.id === game.currentClueGiver[opponentTeam]!)!.name,
-          guessers: [guessers[0], guessers[1]] as [Player, Player],
+          guessers: interceptors,
           scratchNotes: scratchNotesMap,
           scratchNotesByTeam: config.scratchNotesByTeam,
           ablations,
@@ -1162,7 +1166,7 @@ export async function runHeadlessMatch(
 
         game = submitInterception(game, team, result.answer);
 
-        const lastSpeaker = result.messages[result.messages.length - 1]?.playerId ?? guessers[0].id;
+        const lastSpeaker = result.messages[result.messages.length - 1]?.playerId ?? interceptors[0].id;
         await emitMatchEvent(game.id, matchId, {
           eventType: "interception_submitted",
           team,
