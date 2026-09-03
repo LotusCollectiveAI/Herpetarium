@@ -903,6 +903,7 @@ export default function Series() {
 
   const { data: seriesList, isLoading } = useQuery<SeriesEntry[]>({
     queryKey: ["/api/series"],
+    refetchInterval: 10000,
   });
 
   if (selectedSeriesId !== null) {
