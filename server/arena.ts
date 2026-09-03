@@ -68,6 +68,16 @@ const DECEPTION_CATEGORIES: DeceptionCategory[] = [
 ];
 const ARENA_LONGFORM_RULES_ENABLED = /^(1|true|yes|on)$/i.test(process.env.ARENA_LONGFORM_RULES_ENABLED || "");
 
+const activeArenas = new Map<string, boolean>();
+
+export function isArenaRunning(id: string): boolean {
+  return activeArenas.get(id) === true;
+}
+
+export function stopArena(id: string): void {
+  activeArenas.set(id, false);
+}
+
 void coachAutopsy;
 
 interface ArenaRuntimeSlot {
@@ -1156,7 +1166,7 @@ function toArenaResultFromStorage(
 
 async function finalizeArenaRuns(
   slots: ArenaRuntimeSlot[],
-  status: "completed" | "failed",
+  status: "completed" | "failed" | "stopped" | "budget_exceeded",
   completedAt: Date,
 ): Promise<void> {
   await Promise.all(slots.map(async (slot) => {
@@ -1202,9 +1212,13 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
   const foiaDelaySprints = Math.max(0, Math.floor(config.foiaDelaySprints ?? 0));
   const slots: ArenaRuntimeSlot[] = [];
   const pairingHistory = createPairingHistory();
+  const budgetCapUsd = config.coachConfig.budgetCapUsd;
   let sprintsCompleted = 0;
   let totalGamesPlayed = 0;
   let priorArenaBriefing: string | undefined;
+  let stoppedEarlyStatus: "stopped" | "budget_exceeded" | null = null;
+
+  activeArenas.set(config.arenaId, true);
 
   try {
     for (const [slotIndex, seedGenome] of config.seedGenomes.entries()) {
@@ -1247,6 +1261,12 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
     );
 
     for (let sprintIndex = 0; sprintIndex < config.totalSprints; sprintIndex++) {
+      if (!activeArenas.get(config.arenaId)) {
+        logArena(`Arena ${config.arenaId} stopped before sprint ${sprintIndex + 1}`);
+        stoppedEarlyStatus = "stopped";
+        break;
+      }
+
       const sprintNumber = sprintIndex + 1;
       const pairings = buildSprintPairings(slots, config.matchesPerSprint, pairingHistory, config);
       const pairingTasks = pairings.map((pairing, pairingIndex) => async (): Promise<PairingResult> => {
@@ -1553,6 +1573,16 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
       logArena(`Arena sprint ${sprintNumber} complete: [${progress}]`);
       logArena(`Arena sprint ${sprintNumber} matchmaking: ${formatBucketDistribution(pairings)}`);
 
+      if (budgetCapUsd !== undefined) {
+        const allMatchIds = slots.flatMap((slot) => getUniqueMatchIds(slot.state));
+        const totalCost = allMatchIds.length > 0 ? await storage.getCumulativeCost(allMatchIds) : 0;
+        if (totalCost >= budgetCapUsd) {
+          logArena(`Arena ${config.arenaId} budget cap of $${budgetCapUsd.toFixed(2)} reached after sprint ${sprintNumber} (spent $${totalCost.toFixed(2)}). Stopping.`);
+          stoppedEarlyStatus = "budget_exceeded";
+          break;
+        }
+      }
+
       // Compute arena briefing for the next sprint (1-sprint delay)
       try {
         const briefing = await buildArenaBriefing(slots, sprintNumber);
@@ -1562,7 +1592,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
       }
     }
 
-    await finalizeArenaRuns(slots, "completed", new Date());
+    await finalizeArenaRuns(slots, stoppedEarlyStatus ?? "completed", new Date());
 
     return {
       arenaId: config.arenaId,
@@ -1580,5 +1610,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
     }
 
     throw error;
+  } finally {
+    activeArenas.delete(config.arenaId);
   }
 }
