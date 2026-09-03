@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { useGame } from "@/lib/gameContext";
 import { Button } from "@/components/ui/button";
-import { Card, CardHeader, CardTitle } from "@/components/ui/card";
 import { Token } from "@/components/ScoreBoard";
 import { Trophy, Home, RotateCcw, Loader2, History } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -54,6 +53,17 @@ export function GameOverView() {
       </div>
 
       <div className="w-full max-w-md flex flex-col gap-2 p-3 rounded-lg bg-card border">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-amber-500" />
+            <span className="text-sm font-semibold">Amber</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold">Blue</span>
+            <div className="w-3 h-3 rounded-full bg-blue-500" />
+          </div>
+        </div>
+
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
           <div className="flex justify-end">
             <Token type="white" count={gameState.teams.amber.whiteTokens} reverseFill />
@@ -79,26 +89,6 @@ export function GameOverView() {
         <div className="text-center text-xs text-muted-foreground pt-1 border-t">
           {gameState.teams.amber.history.length} rounds played
         </div>
-      </div>
-
-      <div className="grid grid-cols-2 gap-4 w-full max-w-md">
-        <Card className={cn(
-          "border-2",
-          winner === "amber" ? "border-amber-500" : "border-amber-500/30"
-        )}>
-          <CardHeader className="pb-2 team-amber">
-            <CardTitle className="text-white text-sm text-center">Team Amber</CardTitle>
-          </CardHeader>
-        </Card>
-
-        <Card className={cn(
-          "border-2",
-          winner === "blue" ? "border-blue-500" : "border-blue-500/30"
-        )}>
-          <CardHeader className="pb-2 team-blue">
-            <CardTitle className="text-white text-sm text-center">Team Blue</CardTitle>
-          </CardHeader>
-        </Card>
       </div>
 
       <div className="flex flex-col gap-3 w-full max-w-md">
