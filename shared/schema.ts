@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
@@ -510,7 +510,13 @@ export const matches = pgTable("matches", {
   focalTeam: varchar("focal_team", { length: 10 }).$type<"amber" | "blue" | null>(),
   gameRules: jsonb("game_rules").$type<GameRules | null>(),
   matchmakingBucket: varchar("matchmaking_bucket", { length: 24 }),
-});
+}, (table) => ({
+  // Already present in the database via migrations 0002 and 0005.
+  // Declared here too so drizzle-kit push doesn't read them as drift and
+  // offer to drop them.
+  qualityStatusIdx: index("idx_matches_quality_status").on(table.qualityStatus),
+  teamSizeIdx: index("idx_matches_team_size").on(table.teamSize),
+}));
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
 export type InsertMatch = z.infer<typeof insertMatchSchema>;
@@ -547,7 +553,13 @@ export const teamChatter = pgTable("team_chatter", {
   consensusReached: boolean("consensus_reached").notNull().default(false),
   finalAnswer: jsonb("final_answer"), // [number, number, number] | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Already present in the database via migrations/0001_team_chatter.sql.
+  // Declared here too so drizzle-kit push doesn't read them as drift and
+  // offer to drop them.
+  matchIdIdx: index("idx_team_chatter_match_id").on(table.matchId),
+  gameRoundIdx: index("idx_team_chatter_game_round").on(table.gameId, table.roundNumber),
+}));
 
 export const insertTeamChatterSchema = createInsertSchema(teamChatter).omit({ id: true, createdAt: true });
 export type InsertTeamChatter = z.infer<typeof insertTeamChatterSchema>;
@@ -624,7 +636,14 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
   reasoningTrace: text("reasoning_trace"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Every read of this table filters on match_id (eq or IN) -- cost
+  // totals, per-match log listings, the reasoning-trace scan, and the
+  // export endpoints. This is also the largest table in the schema, one
+  // row per AI call per round per match, so without this index each of
+  // those was a full sequential scan.
+  matchIdIdx: index("idx_ai_call_logs_match_id").on(table.matchId),
+}));
 
 export const insertAiCallLogSchema = createInsertSchema(aiCallLogs).omit({ id: true, createdAt: true });
 export type InsertAiCallLog = z.infer<typeof insertAiCallLogSchema>;
