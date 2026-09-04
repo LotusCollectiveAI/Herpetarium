@@ -3,6 +3,7 @@ import { useParams } from "wouter";
 import { useGame } from "@/lib/gameContext";
 import { GameHeader } from "@/components/GameHeader";
 import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
+import { GameHistoryPanel } from "@/components/GameHistoryPanel";
 import { PhaseAnnouncement } from "@/components/PhaseAnnouncement";
 import { LobbyView } from "@/components/views/LobbyView";
 import { TeamSetupView } from "@/components/views/TeamSetupView";
@@ -91,7 +92,10 @@ export default function Game() {
         {renderPhaseView()}
       </main>
       {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && (
-        <ClueHistoryPanel />
+        <>
+          <ClueHistoryPanel />
+          <GameHistoryPanel />
+        </>
       )}
     </div>
   );
