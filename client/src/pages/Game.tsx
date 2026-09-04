@@ -1,24 +1,16 @@
 import { useEffect } from "react";
 import { useParams } from "wouter";
 import { useGame } from "@/lib/gameContext";
-import { GameHeader } from "@/components/GameHeader";
-import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
-import { GameHistoryPanel } from "@/components/GameHistoryPanel";
-import { TeamRosters } from "@/components/ScoreBoard";
-import { PhaseAnnouncement } from "@/components/PhaseAnnouncement";
-import { LobbyView } from "@/components/views/LobbyView";
-import { TeamSetupView } from "@/components/views/TeamSetupView";
-import { GivingCluesView } from "@/components/views/GivingCluesView";
-import { GuessingView } from "@/components/views/GuessingView";
-import { InterceptingView } from "@/components/views/InterceptingView";
-import { RoundResultsView } from "@/components/views/RoundResultsView";
-import { GameOverView } from "@/components/views/GameOverView";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { GameShell } from "@/components/GameShell";
+import { Loader2 } from "lucide-react";
 
+// Owns the connection: joins the game over the WebSocket and waits for the
+// first state to arrive. The screen itself is GameShell, which the
+// /dev/preview sandbox renders too.
 export default function Game() {
   const params = useParams<{ id: string }>();
   const gameId = params.id || "";
-  const { gameState, playerId, isConnected, connect, disconnect, aiFallback, clueError, phaseAnnouncement, myTeam } = useGame();
+  const { gameState, isConnected, connect, disconnect } = useGame();
 
   useEffect(() => {
     const playerName = sessionStorage.getItem("playerName") || `Player${Math.random().toString(36).slice(2, 6)}`;
@@ -42,69 +34,5 @@ export default function Game() {
     );
   }
 
-  const renderPhaseView = () => {
-    switch (gameState.phase) {
-      case "lobby":
-        return <LobbyView />;
-      case "team_setup":
-        return <TeamSetupView />;
-      case "giving_clues":
-        return <GivingCluesView />;
-      case "own_team_guessing":
-        return <GuessingView />;
-      case "opponent_intercepting":
-        return <InterceptingView />;
-      case "round_results":
-        return <RoundResultsView />;
-      case "game_over":
-        return <GameOverView />;
-      default:
-        return <LobbyView />;
-    }
-  };
-
-  return (
-    <div className="min-h-screen bg-background flex flex-col">
-      <GameHeader gameId={gameId} />
-      {phaseAnnouncement && (
-        <PhaseAnnouncement
-          phase={phaseAnnouncement.phase}
-          round={phaseAnnouncement.round}
-          myTeam={myTeam}
-        />
-      )}
-      {(aiFallback || clueError) && (
-        <div className="px-4 pt-2" data-testid="notification-banner">
-          {aiFallback && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/30 text-yellow-700 dark:text-yellow-400 text-sm" data-testid="text-ai-fallback">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              {aiFallback}
-            </div>
-          )}
-          {clueError && (
-            <div className="flex items-center gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-400 text-sm mt-2" data-testid="text-clue-error">
-              <AlertTriangle className="h-4 w-4 shrink-0" />
-              {clueError}
-            </div>
-          )}
-        </div>
-      )}
-      {/* Below the sticky header rather than inside it, so the rosters
-          scroll out of the way while the round and tokens stay pinned. */}
-      {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && (
-        <div className="px-2 pt-2">
-          <TeamRosters gameState={gameState} playerId={playerId} />
-        </div>
-      )}
-      <main className="flex-1 flex flex-col overflow-hidden">
-        {renderPhaseView()}
-      </main>
-      {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && (
-        <>
-          <ClueHistoryPanel />
-          <GameHistoryPanel />
-        </>
-      )}
-    </div>
-  );
+  return <GameShell gameId={gameId} />;
 }

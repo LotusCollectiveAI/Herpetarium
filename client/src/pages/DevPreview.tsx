@@ -2,17 +2,7 @@ import { useMemo, useState } from "react";
 import { GameContext } from "@/lib/gameContext";
 import type { GameState, GamePhase, Player, RoundHistory, WSMessage } from "@shared/schema";
 import { DEFAULT_GAME_RULES } from "@shared/schema";
-import { GameHeader } from "@/components/GameHeader";
-import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
-import { GameHistoryPanel } from "@/components/GameHistoryPanel";
-import { TeamRosters } from "@/components/ScoreBoard";
-import { LobbyView } from "@/components/views/LobbyView";
-import { TeamSetupView } from "@/components/views/TeamSetupView";
-import { GivingCluesView } from "@/components/views/GivingCluesView";
-import { GuessingView } from "@/components/views/GuessingView";
-import { InterceptingView } from "@/components/views/InterceptingView";
-import { RoundResultsView } from "@/components/views/RoundResultsView";
-import { GameOverView } from "@/components/views/GameOverView";
+import { GameShell } from "@/components/GameShell";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -159,30 +149,9 @@ export default function DevPreview() {
     disconnect: () => {},
   }), [gameState, viewer.id, viewer.name, myTeam, simulateAiThinking, isClueGiver]);
 
-  const renderPhaseView = () => {
-    switch (phase) {
-      case "lobby":
-        return <LobbyView />;
-      case "team_setup":
-        return <TeamSetupView />;
-      case "giving_clues":
-        return <GivingCluesView />;
-      case "own_team_guessing":
-        return <GuessingView />;
-      case "opponent_intercepting":
-        return <InterceptingView />;
-      case "round_results":
-        return <RoundResultsView />;
-      case "game_over":
-        return <GameOverView />;
-      default:
-        return <LobbyView />;
-    }
-  };
-
   return (
     <GameContext.Provider value={contextValue}>
-      <div className="min-h-screen bg-background flex flex-col">
+      <div>
         <div className="border-b bg-muted/50 p-3 flex flex-wrap items-center gap-4 text-sm">
           <span className="font-semibold shrink-0">UI Preview</span>
 
@@ -244,23 +213,9 @@ export default function DevPreview() {
           </label>
         </div>
 
-        <GameHeader gameId="preview" />
-        {/* Mirrors Game.tsx: the rosters sit below the sticky header rather
-            than inside it, so they scroll away. */}
-        {phase !== "lobby" && phase !== "team_setup" && (
-          <div className="px-2 pt-2">
-            <TeamRosters gameState={gameState} playerId={viewer.id} />
-          </div>
-        )}
-        <main className="flex-1 flex flex-col overflow-hidden">
-          {renderPhaseView()}
-        </main>
-        {phase !== "lobby" && phase !== "team_setup" && (
-          <>
-            <ClueHistoryPanel />
-            <GameHistoryPanel />
-          </>
-        )}
+        {/* The same screen the live route renders, so anything rearranged
+            there shows up here without this page being touched. */}
+        <GameShell gameId="preview" />
       </div>
     </GameContext.Provider>
   );
