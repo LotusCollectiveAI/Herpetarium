@@ -63,9 +63,10 @@ vi.mock("./ai", async () => {
     }),
     generateClues: async (config: any, params: any, options?: any) => {
       record(calls.clues)(config, params, options);
-      // Echo the code back as clue text so a later assertion can tell which
-      // team's code a given clue call was working from.
-      return aiResult(params.targetCode.map((n: number) => `clue-${n}`));
+      // Tag each clue with the round it was given in (history length is the
+      // round index), so a prompt containing a clue from an earlier round is
+      // identifiable as history rather than as this round's own clues.
+      return aiResult(params.targetCode.map((n: number) => `rd${params.history.length}c${n}`));
     },
     generateGuess: async (config: any, params: any, options?: any) => {
       record(calls.guesses)(config, params, options);
@@ -250,6 +251,57 @@ describe("ablations reaching the AI layer", () => {
     }
   }, 30000);
 
+  it("keeps scratch notes out of deliberation prompts under no_scratch_notes", async () => {
+    // Deliberation builds its own prompts rather than going through
+    // applyAblations, so the flag has to be honoured here separately. It
+    // wasn't, which made this ablation a no-op on the 3v3 path -- the one
+    // that decides both the guess and the interception.
+    const notes = "MARKER-NOTE: open with the most abstract keyword.";
+    const seeded = { amber: notes, blue: notes };
+
+    await runHeadlessMatch(matchConfig({ scratchNotesByTeam: seeded }));
+    const withNotes = calls.deliberations.filter(c =>
+      (c.params.userPrompt as string).includes("MARKER-NOTE"));
+    expect(withNotes.length).toBeGreaterThan(0);
+
+    calls.deliberations.length = 0;
+    await runHeadlessMatch(withFlags(["no_scratch_notes"], { scratchNotesByTeam: seeded }));
+    expect(calls.deliberations.length).toBeGreaterThan(0);
+    for (const call of calls.deliberations) {
+      expect(call.params.userPrompt).not.toContain("MARKER-NOTE");
+    }
+  }, 60000);
+
+  it("keeps history out of deliberation prompts under no_history", async () => {
+    // Same gap as the notes above: the flag reached the call and did
+    // nothing, so earlier rounds stayed visible in later ones.
+    // A prompt for round R shows this round's clues (tagged rd{R-1}); any
+    // lower-numbered tag in it can only have come from history. Matching on
+    // the section heading instead would be a false positive, since the
+    // advanced template mentions "previous rounds" in its static text.
+    const staleClueTags = (prompt: string) => {
+      const round = Number(/ROUND (\d+)/i.exec(prompt)?.[1] ?? 1);
+      return [...prompt.matchAll(/rd(\d+)c\d/g)]
+        .map(m => Number(m[1]))
+        .filter(index => index < round - 1);
+    };
+
+    await runHeadlessMatch(matchConfig());
+    const carryingHistory = calls.deliberations.filter(
+      c => staleClueTags(c.params.userPrompt as string).length > 0,
+    );
+    // The assertion below is vacuous unless a normal run reaches round two,
+    // where there is history to show in the first place.
+    expect(carryingHistory.length).toBeGreaterThan(0);
+
+    calls.deliberations.length = 0;
+    await runHeadlessMatch(withFlags(["no_history"]));
+    expect(calls.deliberations.length).toBeGreaterThan(0);
+    for (const call of calls.deliberations) {
+      expect(staleClueTags(call.params.userPrompt as string)).toEqual([]);
+    }
+  }, 60000);
+
   it("swaps the deliberation prompt off the advanced strategy for no_chain_of_thought", async () => {
     await runHeadlessMatch(withFlags(["no_chain_of_thought"]));
     const ablated = calls.deliberations.map(c => c.params.systemPrompt as string);
@@ -279,6 +331,16 @@ describe("post-match reflection", () => {
     expect(calls.reflections).toHaveLength(2);
     expect(result.updatedScratchNotes?.amber?.notesText).toBeTruthy();
     expect(result.updatedScratchNotes?.blue?.notesText).toBeTruthy();
+  }, 30000);
+
+  it("does not reflect when the scratch-notes ablation is on", async () => {
+    // Reflection only exists to write notes that later matches read, so
+    // under this ablation its two calls per match buy nothing.
+    await runHeadlessMatch(withFlags(["no_scratch_notes"], {
+      enablePostMatchReflection: true,
+      reflectionTokenBudget: 500,
+    }));
+    expect(calls.reflections).toHaveLength(0);
   }, 30000);
 
   it("keeps each reflection to its own team's material", async () => {

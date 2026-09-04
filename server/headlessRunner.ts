@@ -507,6 +507,23 @@ async function processDeliberation(
     (sum, p) => sum + getConfigForPlayer(p).timeoutMs, 0
   );
 
+  // The single-shot calls get their content ablations applied inside ai.ts
+  // (applyAblations, on the clue/guess/interception params). Deliberation
+  // builds its own prompts here and generateDeliberationMessage never reads
+  // params.ablations, so without this the flags travel with the call and do
+  // nothing -- and since teamSize defaults to 3, a no_history or
+  // no_scratch_notes run was measuring the un-ablated condition on the path
+  // that actually decides both guesses. Semantics deliberately mirror
+  // applyAblations: no_history drops all history, no_opponent_history drops
+  // only the opponent's (which is read solely by the intercept prompt).
+  const flags = context.ablations;
+  const teamHistory = flags?.includes("no_history") ? [] : context.teamHistory;
+  const opponentHistory =
+    flags?.includes("no_history") || flags?.includes("no_opponent_history")
+      ? []
+      : context.opponentHistory || [];
+  const scratchNotesAllowed = !flags?.includes("no_scratch_notes");
+
   const finalizeDeliberation = (
     terminationReason: DeliberationResult["terminationReason"],
     error: string | null,
@@ -554,7 +571,7 @@ async function processDeliberation(
           team: context.team,
           keywords: context.keywords || [],
           clues: context.clues,
-          history: context.teamHistory,
+          history: teamHistory,
           clueGiverName: context.clueGiverName,
           currentPlayerName: currentPlayer.name,
           otherPlayerNames: otherPlayers.map(p => p.name),
@@ -585,7 +602,7 @@ async function processDeliberation(
           team: context.team,
           opponentTeam,
           clues: context.clues,
-          opponentHistory: context.opponentHistory || [],
+          opponentHistory,
           opponentDeliberationTranscript: opponentTranscriptFormatted,
           currentPlayerName: currentPlayer.name,
           otherPlayerNames: otherPlayers.map(p => p.name),
@@ -610,13 +627,15 @@ async function processDeliberation(
       }
 
       // Append scratch notes (prefer scratchNotesByTeam, fall back to legacy map)
-      const teamNote = context.scratchNotesByTeam?.[context.team];
-      if (teamNote) {
-        prompt += formatScratchNotes(teamNote);
-      } else {
-        const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
-        if (context.scratchNotes?.[noteKey]) {
-          prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+      if (scratchNotesAllowed) {
+        const teamNote = context.scratchNotesByTeam?.[context.team];
+        if (teamNote) {
+          prompt += formatScratchNotes(teamNote);
+        } else {
+          const noteKey = `${currentPlayer.aiProvider}-${context.team}`;
+          if (context.scratchNotes?.[noteKey]) {
+            prompt += formatScratchNotes(context.scratchNotes[noteKey]);
+          }
         }
       }
 
@@ -798,6 +817,14 @@ async function buildUpdatedScratchNotes(
   config: HeadlessMatchConfig,
 ): Promise<Partial<Record<"amber" | "blue", ScratchNotesSnapshot>>> {
   if (!config.enablePostMatchReflection) {
+    return {};
+  }
+
+  // Reflection exists only to write the scratch notes that later matches
+  // read. Under no_scratch_notes nothing will ever read them, so the two
+  // calls it makes per match are pure spend -- and any that leaked into a
+  // prompt would be measuring the condition the ablation is meant to remove.
+  if (config.ablations?.flags.includes("no_scratch_notes")) {
     return {};
   }
 
