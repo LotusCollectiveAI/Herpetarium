@@ -48,10 +48,15 @@ export function PlayerAvatar({ player, size = "md", showName = true, isCurrentPl
         </AvatarFallback>
       </Avatar>
       {showName && (
-        <span className={cn(
-          "font-medium truncate max-w-32",
-          isCurrentPlayer && "text-primary font-bold"
-        )}>
+        <span
+          className={cn(
+            "font-medium truncate max-w-32",
+            isCurrentPlayer && "text-primary font-bold"
+          )}
+          // Names are clipped at this width, and AI names carry the model
+          // they run, so give the full one on hover.
+          title={player.name}
+        >
           {player.name}
         </span>
       )}
