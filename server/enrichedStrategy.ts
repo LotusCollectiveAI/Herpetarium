@@ -9,17 +9,10 @@
  */
 
 import type { PromptStrategy, ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
-import { formatScratchNotes } from "./promptStrategies";
+import { formatScratchNotes, formatHistory } from "./promptStrategies";
 import { getWordCardForLabel } from "./wordPacks";
 import { getPersonaByName } from "./botPersonas";
 import type { BotPersona } from "./botPersonas";
-
-function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
-  if (history.length === 0) return "";
-  return history.map((round, i) =>
-    `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]`
-  ).join("\n");
-}
 
 function formatKeywordWithContext(keyword: string, index: number): string {
   const card = getWordCardForLabel(keyword);

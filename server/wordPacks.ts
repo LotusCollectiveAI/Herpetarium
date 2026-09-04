@@ -131,13 +131,18 @@ export const ALL_WORDS: string[] = Array.from(new Set([
 ])).sort();
 
 export function getRandomKeywords(count: number = 4, rng?: () => number): string[] {
-  const shuffled = [...ALL_WORDS];
+  // Partial Fisher-Yates: only shuffle the first `count` slots instead of
+  // the whole ~180-word pool, since that's all that's ever read back out.
+  const pool = [...ALL_WORDS];
   const random = rng || Math.random;
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+  const n = pool.length;
+  const result: string[] = [];
+  for (let i = 0; i < count && i < n; i++) {
+    const j = i + Math.floor(random() * (n - i));
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+    result.push(pool[i]);
   }
-  return shuffled.slice(0, count);
+  return result;
 }
 
 export function getWordPacks(): WordPack[] {

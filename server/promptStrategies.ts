@@ -142,7 +142,7 @@ export function applyAblations<T extends AblationTarget>(
   return result;
 }
 
-function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
+export function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
   if (history.length === 0) return "";
   return history.map((round, i) =>
     `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]`

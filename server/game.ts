@@ -1,5 +1,14 @@
-import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, CLASSIC_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
+import { GameState, Player, RoundHistory, AIProvider, AIPlayerConfig, getDefaultConfig, DEFAULT_GAME_RULES, CLASSIC_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
 import { getRandomKeywords } from "./wordPacks";
+
+// Shared by both orchestration layers (live websocket.ts games and the
+// headless AI-research runner) so a player's effective AI config is
+// resolved identically regardless of which one is driving the match.
+export function getConfigForPlayer(player: Player): AIPlayerConfig {
+  if (player.aiConfig) return player.aiConfig;
+  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
+  return getDefaultConfig("chatgpt");
+}
 
 export function createSeededRng(seed: string): () => number {
   let h = 0;

@@ -272,16 +272,19 @@ export const MIN_TEAM_PLAYERS = 2;
 export const MAX_GAME_PLAYERS = 8;
 export const MAX_TEAM_PLAYERS = 4;
 
-export type GamePhase =
-  | "lobby"
-  | "team_setup"
-  | "giving_clues"
-  | "own_team_deliberation"
-  | "own_team_guessing"
-  | "opponent_deliberation"
-  | "opponent_intercepting"
-  | "round_results"
-  | "game_over";
+export const GAME_PHASES = [
+  "lobby",
+  "team_setup",
+  "giving_clues",
+  "own_team_deliberation",
+  "own_team_guessing",
+  "opponent_deliberation",
+  "opponent_intercepting",
+  "round_results",
+  "game_over",
+] as const;
+
+export type GamePhase = (typeof GAME_PHASES)[number];
 
 export const clueSchema = z.object({
   playerId: z.string(),
@@ -358,7 +361,7 @@ export const LONGFORM_ARENA_RULES: GameRules = {
 
 export const gameStateSchema = z.object({
   id: z.string(),
-  phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]),
+  phase: z.enum(GAME_PHASES),
   round: z.number(),
   rules: gameRulesSchema,
   players: z.array(playerSchema),
@@ -453,7 +456,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ai_done"), aiName: z.string() }),
   z.object({ type: z.literal("ai_fallback"), aiName: z.string(), reason: z.string() }),
   z.object({ type: z.literal("new_game_created"), gameId: z.string() }),
-  z.object({ type: z.literal("phase_changed"), phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]), round: z.number() }),
+  z.object({ type: z.literal("phase_changed"), phase: z.enum(GAME_PHASES), round: z.number() }),
 ]);
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;

@@ -103,42 +103,36 @@ const LEVEL_3_PATTERNS = [
 function analyzeText(text: string): TomAnalysis {
   const evidence: string[] = [];
   let maxLevel: TomLevel = 0;
+  let score = 0;
 
   const sentences = text.split(/[.!?\n]+/).filter(s => s.trim().length > 10);
 
+  // Single pass: each pattern group is tested once per sentence and the
+  // result reused for both the evidence/maxLevel tracking below and the
+  // score sum, instead of re-running all ~40 regexes a second time per
+  // sentence just to recompute the same per-sentence level.
   for (const sentence of sentences) {
-    for (const pattern of LEVEL_3_PATTERNS) {
-      if (pattern.test(sentence)) {
+    const matchesLevel3 = LEVEL_3_PATTERNS.some(pattern => pattern.test(sentence));
+    const matchesLevel2 = LEVEL_2_PATTERNS.some(pattern => pattern.test(sentence));
+    const matchesLevel1 = LEVEL_1_PATTERNS.some(pattern => pattern.test(sentence));
+
+    if (matchesLevel3) {
+      evidence.push(sentence.trim().slice(0, 120));
+      maxLevel = Math.max(maxLevel, 3) as TomLevel;
+    }
+    if (matchesLevel2) {
+      if (!evidence.some(e => e === sentence.trim().slice(0, 120))) {
         evidence.push(sentence.trim().slice(0, 120));
-        maxLevel = Math.max(maxLevel, 3) as TomLevel;
-        break;
       }
+      maxLevel = Math.max(maxLevel, 2) as TomLevel;
     }
-    for (const pattern of LEVEL_2_PATTERNS) {
-      if (pattern.test(sentence)) {
-        if (!evidence.some(e => e === sentence.trim().slice(0, 120))) {
-          evidence.push(sentence.trim().slice(0, 120));
-        }
-        maxLevel = Math.max(maxLevel, 2) as TomLevel;
-        break;
-      }
+    if (matchesLevel1) {
+      maxLevel = Math.max(maxLevel, 1) as TomLevel;
     }
-    for (const pattern of LEVEL_1_PATTERNS) {
-      if (pattern.test(sentence)) {
-        maxLevel = Math.max(maxLevel, 1) as TomLevel;
-        break;
-      }
-    }
+
+    score += matchesLevel3 ? 3 : matchesLevel2 ? 2 : matchesLevel1 ? 1 : 0;
   }
 
-  let score = 0;
-  for (const sentence of sentences) {
-    let sentenceMax = 0;
-    for (const p of LEVEL_3_PATTERNS) if (p.test(sentence)) sentenceMax = 3;
-    if (sentenceMax === 0) for (const p of LEVEL_2_PATTERNS) if (p.test(sentence)) sentenceMax = 2;
-    if (sentenceMax === 0) for (const p of LEVEL_1_PATTERNS) if (p.test(sentence)) sentenceMax = 1;
-    score += sentenceMax;
-  }
   const normalizedScore = sentences.length > 0 ? score / sentences.length : 0;
 
   return {
