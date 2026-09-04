@@ -1096,12 +1096,10 @@ export async function registerRoutes(
 
       const matchIds = [...new Set(notes.filter(n => n.matchId).map(n => n.matchId as number))];
       const unsortedDetails = await storage.getMatchesByIds(matchIds);
-      const matchDetailsWithRounds = await Promise.all(
-        unsortedDetails.sort((a: any, b: any) => a.id - b.id).map(async (m) => {
-          const rounds = await storage.getMatchRounds(m.id);
-          return { ...m, rounds };
-        })
-      );
+      const allRounds = await storage.getMatchRoundsForMatches(matchIds);
+      const matchDetailsWithRounds = unsortedDetails
+        .sort((a: any, b: any) => a.id - b.id)
+        .map((m) => ({ ...m, rounds: allRounds.filter(r => r.matchId === m.id) }));
 
       res.json({
         series: s,
@@ -1405,11 +1403,17 @@ export async function registerRoutes(
       const genome = await storage.getStrategyGenome(genomeId);
       if (!genome) return res.status(404).json({ error: "Genome not found" });
 
-      const parents = genome.parentIds && (genome.parentIds as number[]).length > 0
-        ? await Promise.all((genome.parentIds as number[]).map(pid => storage.getStrategyGenome(pid)))
-        : [];
+      const parentIds = (genome.parentIds as number[] | null) || [];
+      let parents: Awaited<ReturnType<typeof storage.getStrategyGenomesByIds>> = [];
+      if (parentIds.length > 0) {
+        const fetched = await storage.getStrategyGenomesByIds(parentIds);
+        const byId = new Map(fetched.map(g => [g.id, g]));
+        // Preserve parentIds' order (and any duplicate entries) rather than
+        // whatever order the batched IN (...) query happens to return.
+        parents = parentIds.map(pid => byId.get(pid)).filter((g): g is typeof fetched[number] => g !== undefined);
+      }
 
-      res.json({ ...genome, parents: parents.filter(Boolean) });
+      res.json({ ...genome, parents });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch genome" });
     }
@@ -1609,17 +1613,12 @@ export async function registerRoutes(
   app.get("/api/arena/:id/evaluations", async (req, res) => {
     try {
       const runs = await storage.getCoachRunsByArenaId(req.params.id);
-      const allEvaluations = await Promise.all(
-        runs.map(async (run) => {
-          const records = await storage.getSprintEvaluations(run.id);
-          return records.map((r) => ({
-            runId: r.runId,
-            sprintNumber: r.sprintNumber,
-            evaluation: r.evaluation,
-          }));
-        }),
-      );
-      res.json(allEvaluations.flat());
+      const records = await storage.getSprintEvaluationsForRuns(runs.map((run) => run.id));
+      res.json(records.map((r) => ({
+        runId: r.runId,
+        sprintNumber: r.sprintNumber,
+        evaluation: r.evaluation,
+      })));
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to get arena evaluations" });
     }

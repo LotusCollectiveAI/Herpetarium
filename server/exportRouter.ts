@@ -130,9 +130,7 @@ export function registerExportRoutes(app: Express): void {
       const rounds = await storage.getMatchRoundsForMatches(matchIds);
 
       // Fetch all team chatter for these matches (for 3v3 deliberation columns)
-      const allChatter = matchIds.length > 0
-        ? await Promise.all(matchIds.map(id => storage.getTeamChatter(id))).then(arrays => arrays.flat())
-        : [];
+      const allChatter = await storage.getTeamChatterForMatches(matchIds);
 
       // Index chatter by matchId-roundNumber-team-phase
       const chatterIndex = new Map<string, any>();

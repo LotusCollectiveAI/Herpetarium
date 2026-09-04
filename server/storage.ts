@@ -137,6 +137,7 @@ export interface IStorage {
   createSprintEvaluation(entry: InsertSprintEvaluationRecord): Promise<SprintEvaluationRecord>;
   getSprintEvaluation(runId: string, sprintNumber: number): Promise<SprintEvaluationRecord | undefined>;
   getSprintEvaluations(runId: string): Promise<SprintEvaluationRecord[]>;
+  getSprintEvaluationsForRuns(runIds: string[]): Promise<SprintEvaluationRecord[]>;
   updateSprintEvaluation(runId: string, sprintNumber: number, evaluation: SprintEvaluation): Promise<SprintEvaluationRecord | undefined>;
   createAnchorEvaluation(entry: InsertAnchorEvaluationRecord): Promise<AnchorEvaluationRecord>;
   getAnchorEvaluations(runId: string, sprintNumber?: number): Promise<AnchorEvaluationRecord[]>;
@@ -153,6 +154,7 @@ export interface IStorage {
   updateStrategyGenome(id: number, data: Partial<InsertStrategyGenome>): Promise<StrategyGenome | undefined>;
   getStrategyGenomes(evolutionRunId: number, generationNumber?: number): Promise<StrategyGenome[]>;
   getStrategyGenome(id: number): Promise<StrategyGenome | undefined>;
+  getStrategyGenomesByIds(ids: number[]): Promise<StrategyGenome[]>;
   getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]>;
 
   createTeamChatter(entry: InsertTeamChatter): Promise<TeamChatter>;
@@ -525,6 +527,13 @@ export class DatabaseStorage implements IStorage {
       .orderBy(sprintEvaluations.sprintNumber, sprintEvaluations.createdAt, sprintEvaluations.id);
   }
 
+  async getSprintEvaluationsForRuns(runIds: string[]): Promise<SprintEvaluationRecord[]> {
+    if (runIds.length === 0) return [];
+    return db.select().from(sprintEvaluations)
+      .where(inArray(sprintEvaluations.runId, runIds))
+      .orderBy(sprintEvaluations.runId, sprintEvaluations.sprintNumber, sprintEvaluations.createdAt, sprintEvaluations.id);
+  }
+
   async updateSprintEvaluation(
     runId: string,
     sprintNumber: number,
@@ -651,6 +660,11 @@ export class DatabaseStorage implements IStorage {
   async getStrategyGenome(id: number): Promise<StrategyGenome | undefined> {
     const [genome] = await db.select().from(strategyGenomes).where(eq(strategyGenomes.id, id)).limit(1);
     return genome;
+  }
+
+  async getStrategyGenomesByIds(ids: number[]): Promise<StrategyGenome[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(strategyGenomes).where(inArray(strategyGenomes.id, ids));
   }
 
   async getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]> {
