@@ -1403,15 +1403,17 @@ export async function registerRoutes(
       const genome = await storage.getStrategyGenome(genomeId);
       if (!genome) return res.status(404).json({ error: "Genome not found" });
 
-      const parentIds = (genome.parentIds as number[] | null) || [];
-      let parents: Awaited<ReturnType<typeof storage.getStrategyGenomesByIds>> = [];
-      if (parentIds.length > 0) {
-        const fetched = await storage.getStrategyGenomesByIds(parentIds);
-        const byId = new Map(fetched.map(g => [g.id, g]));
-        // Preserve parentIds' order (and any duplicate entries) rather than
-        // whatever order the batched IN (...) query happens to return.
-        parents = parentIds.map(pid => byId.get(pid)).filter((g): g is typeof fetched[number] => g !== undefined);
-      }
+      const parentIds = (genome.parentIds as number[] | null) ?? [];
+      const byId = new Map(
+        (await storage.getStrategyGenomesByIds(parentIds)).map(g => [g.id, g]),
+      );
+      // Keep parentIds' own order (and any duplicate entries) rather than
+      // whatever order the batched IN (...) query happens to return, and
+      // drop ids with no surviving row.
+      const parents = parentIds.flatMap(pid => {
+        const parent = byId.get(pid);
+        return parent ? [parent] : [];
+      });
 
       res.json({ ...genome, parents });
     } catch (error: any) {
