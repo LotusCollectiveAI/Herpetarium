@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs, MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS, MAX_TEAM_PLAYERS } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs, MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS, MAX_TEAM_PLAYERS } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -18,6 +18,7 @@ import {
   generatePlayerId,
   getAIProviderName,
   shuffleArray,
+  getConfigForPlayer,
 } from "./game";
 import { generateClues, generateGuess, generateInterception, AICallResult } from "./ai";
 import { storage } from "./storage";
@@ -49,12 +50,6 @@ function getPlayerTimeout(player: Player): number {
     return player.aiConfig.timeoutMs; // Respect the configured value, no cap
   }
   return DEFAULT_AI_TIMEOUT_MS;
-}
-
-function getPlayerConfig(player: Player): AIPlayerConfig {
-  if (player.aiConfig) return player.aiConfig;
-  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
-  return getDefaultConfig("chatgpt");
 }
 
 function withTimeout<T>(
@@ -136,33 +131,98 @@ function sendTo(ws: WebSocket, message: ServerMessage) {
 
 const lastPhase = new Map<string, string>();
 
+// The wire format for GameState carries both teams' secrets (the in-progress
+// code, the opposing team's keywords, each team's own decode/interception
+// guesses and live picks) because the reducer needs all of it in one shared
+// object. None of that may reach a socket outside the team it belongs to --
+// e.g. a team's decode guess must stay hidden from the opponent, or the
+// opponent could just read it off the wire during interception instead of
+// working it out from clues. Round history is exempt: past rounds are
+// intentionally revealed to both teams once scored (that's how clue
+// deduction across rounds works), so only the *current* round's secrets are
+// redacted here.
+// ScoreBoard shows both teams' rosters to every player, including a
+// submitted/not-submitted indicator driven purely by whether currentGuesses
+// is null -- it never reads the actual digits. So a hidden guess still has
+// to read as non-null once submitted, or that always-visible progress
+// indicator gets permanently stuck on "in progress" for the other team.
+// [0, 0, 0] is never a real code/guess (those only ever use digits 1-4), so
+// it can't be mistaken for one by anything that did read the value.
+const HIDDEN_GUESS: [number, number, number] = [0, 0, 0];
+function maskGuess(value: [number, number, number] | null): [number, number, number] | null {
+  return value === null ? null : HIDDEN_GUESS;
+}
+
+function redactGameStateForTeam(game: GameState, viewerTeam: "amber" | "blue" | null): GameState {
+  return {
+    ...game,
+    currentCode: { amber: null, blue: null },
+    teams: {
+      amber: viewerTeam === "amber" ? game.teams.amber : { ...game.teams.amber, keywords: [] },
+      blue: viewerTeam === "blue" ? game.teams.blue : { ...game.teams.blue, keywords: [] },
+    },
+    currentGuesses: {
+      amber: viewerTeam === "amber" ? game.currentGuesses.amber : {
+        ownTeam: maskGuess(game.currentGuesses.amber.ownTeam),
+        opponent: maskGuess(game.currentGuesses.amber.opponent),
+      },
+      blue: viewerTeam === "blue" ? game.currentGuesses.blue : {
+        ownTeam: maskGuess(game.currentGuesses.blue.ownTeam),
+        opponent: maskGuess(game.currentGuesses.blue.opponent),
+      },
+    },
+    currentSelections: {
+      amber: viewerTeam === "amber" ? game.currentSelections.amber : {},
+      blue: viewerTeam === "blue" ? game.currentSelections.blue : {},
+    },
+  };
+}
+
 function sendGameState(gameId: string) {
   const game = games.get(gameId);
   if (!game) return;
-  
+
   const prevPhase = lastPhase.get(gameId);
   if (prevPhase && prevPhase !== game.phase) {
     broadcast(gameId, { type: "phase_changed", phase: game.phase, round: game.round });
   }
   lastPhase.set(gameId, game.phase);
-  
-  broadcast(gameId, { type: "game_state", state: game });
-  
+
   const sockets = gameClients.get(gameId);
   if (!sockets) return;
-  
+
+  // At most 3 distinct views exist (amber, blue, no-team-yet), so serialize
+  // each once and reuse it across every socket on that team instead of
+  // re-stringifying per recipient.
+  const serializedByTeam = new Map<"amber" | "blue" | null, string>();
+  const getSerializedState = (team: "amber" | "blue" | null): string => {
+    let data = serializedByTeam.get(team);
+    if (data === undefined) {
+      const message: ServerMessage = { type: "game_state", state: redactGameStateForTeam(game, team) };
+      data = JSON.stringify(message);
+      serializedByTeam.set(team, data);
+    }
+    return data;
+  };
+
   sockets.forEach(ws => {
     const client = clients.get(ws);
     if (!client) return;
-    
+
     const player = game.players.find(p => p.id === client.playerId);
+    const viewerTeam = player?.team ?? null;
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(getSerializedState(viewerTeam));
+    }
+
     if (!player?.team) return;
-    
+
     const keywords = game.teams[player.team].keywords;
     if (keywords.length > 0) {
       sendTo(ws, { type: "keywords", keywords });
     }
-    
+
     if (game.currentClueGiver[player.team] === client.playerId && game.currentCode[player.team]) {
       sendTo(ws, { type: "your_code", code: game.currentCode[player.team]! });
     }
@@ -420,7 +480,7 @@ async function processAIClues(gameId: string) {
     if (!clueGiver?.isAI || !clueGiver.aiProvider) continue;
     
     const aiName = getAIProviderName(clueGiver.aiProvider);
-    const config = getPlayerConfig(clueGiver);
+    const config = getConfigForPlayer(clueGiver);
     const timeoutMs = getPlayerTimeout(clueGiver);
     
     broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
@@ -485,7 +545,7 @@ async function runAIGuessCall(
   fallbackGuess: [number, number, number],
 ): Promise<[number, number, number]> {
   const aiName = getAIProviderName(aiPlayer.aiProvider!);
-  const config = getPlayerConfig(aiPlayer);
+  const config = getConfigForPlayer(aiPlayer);
   const timeoutMs = getPlayerTimeout(aiPlayer);
 
   broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
@@ -595,7 +655,7 @@ async function runAIInterceptionCall(
   fallbackGuess: [number, number, number],
 ): Promise<[number, number, number]> {
   const aiName = getAIProviderName(aiPlayer.aiProvider!);
-  const config = getPlayerConfig(aiPlayer);
+  const config = getConfigForPlayer(aiPlayer);
   const timeoutMs = getPlayerTimeout(aiPlayer);
 
   broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
