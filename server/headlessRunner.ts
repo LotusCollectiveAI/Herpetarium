@@ -4,7 +4,6 @@ import {
   Player,
   HeadlessMatchConfig,
   AIPlayerConfig,
-  getDefaultConfig,
   AblationFlag,
   ChatterMessage,
   MatchQualityEvent,
@@ -34,6 +33,7 @@ import {
   generateSecretCode,
   validateGameState,
   isGameDecided,
+  getConfigForPlayer,
 } from "./game";
 import { getRandomKeywords } from "./wordPacks";
 import {
@@ -44,6 +44,7 @@ import {
   generateReflection,
   estimateCost,
   AICallResult,
+  ADVANCED_STRATEGIES,
 } from "./ai";
 import {
   getPromptStrategy,
@@ -106,12 +107,6 @@ function withTimeout<T>(
         });
       });
   });
-}
-
-function getConfigForPlayer(player: Player): AIPlayerConfig {
-  if (player.aiConfig) return player.aiConfig;
-  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
-  return getDefaultConfig("chatgpt");
 }
 
 function resolveRoleSystemPrompt(
@@ -577,6 +572,14 @@ async function processDeliberation(
 
       const config = getConfigForPlayer(currentPlayer);
       const strategy = getPromptStrategy(config.promptStrategy || "default");
+      // Mirrors generateClues/generateGuess/generateInterception in ai.ts:
+      // no_chain_of_thought swaps to the plain templates *and* has to
+      // disable native provider reasoning below, or deliberation exchanges
+      // would keep using the full advanced-strategy prompt and reasoning
+      // budget even after a player's clue/guess/interception calls are
+      // correctly de-reasoned by that same ablation.
+      const useSimplePrompt = context.ablations?.includes("no_chain_of_thought") && ADVANCED_STRATEGIES.includes(config.promptStrategy);
+      const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
       let prompt: string;
 
       // Build conversation-so-far for prompt injection
@@ -602,8 +605,8 @@ async function processDeliberation(
         };
 
         if (isFirstMessageFromCurrentPlayer) {
-          const builder = strategy.deliberationOwnTemplate
-            ? strategy.deliberationOwnTemplate
+          const builder = activeStrategy.deliberationOwnTemplate
+            ? activeStrategy.deliberationOwnTemplate
             : defaultDeliberationOwnFirstTurn;
           prompt = builder(templateParams);
         } else {
@@ -633,8 +636,8 @@ async function processDeliberation(
         };
 
         if (isFirstMessageFromCurrentPlayer) {
-          const builder = strategy.deliberationInterceptTemplate
-            ? strategy.deliberationInterceptTemplate
+          const builder = activeStrategy.deliberationInterceptTemplate
+            ? activeStrategy.deliberationInterceptTemplate
             : defaultDeliberationInterceptFirstTurn;
           prompt = builder(templateParams);
         } else {
@@ -654,7 +657,7 @@ async function processDeliberation(
       }
 
       // Get system prompt from strategy
-      const systemPrompt = resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)) || strategy.systemPrompt;
+      const systemPrompt = resolveRoleSystemPrompt(context.promptOverrides, context.team, resolveDeliberationPromptRole(context.phase)) || activeStrategy.systemPrompt;
 
       const remainingPhaseMs = maxPhaseDurationMs - (Date.now() - phaseStartMs);
       if (remainingPhaseMs <= 0) {
@@ -683,6 +686,7 @@ async function processDeliberation(
           ablations: context.ablations,
         }, {
           healthTracker,
+          ...(useSimplePrompt ? { disableReasoning: true } : {}),
         }),
         "",
         config.model,

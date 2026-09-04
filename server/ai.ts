@@ -66,7 +66,7 @@ function isRateLimitError(err: unknown): { isRateLimit: boolean; retryAfterMs?: 
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
 const MAX_BACKOFF_MS = 30000;
-const ADVANCED_STRATEGIES: ReadonlyArray<AIPlayerConfig["promptStrategy"]> = ["advanced", "k-level", "enriched"];
+export const ADVANCED_STRATEGIES: ReadonlyArray<AIPlayerConfig["promptStrategy"]> = ["advanced", "k-level", "enriched"];
 
 export interface AICallOptions {
   maxTokens?: number;
@@ -275,10 +275,18 @@ async function callOpenAI(
   };
 
   if (isModernOpenAIModel) {
-    completionParams.max_completion_tokens = options.maxTokens ?? 16384;
-    if (!options.disableReasoning && reasoningMode === "openai_reasoning_effort" && ADVANCED_STRATEGIES.includes(config.promptStrategy)) {
-      completionParams.reasoning_effort = config.reasoningEffort || "high";
+    const isAdvancedReasoningCall = reasoningMode === "openai_reasoning_effort" && ADVANCED_STRATEGIES.includes(config.promptStrategy);
+    if (isAdvancedReasoningCall) {
+      // disableReasoning must actively force the lowest effort rather than
+      // omit the field -- gpt-5-family models default to a "medium" effort
+      // when reasoning_effort is left unset, so native reasoning would stay
+      // on. The 100k budget stays too, regardless of effort level, so the
+      // (now minimal but nonzero) reasoning tokens don't get crowded out of
+      // a shrunk completion budget.
+      completionParams.reasoning_effort = options.disableReasoning ? "low" : (config.reasoningEffort || "high");
       completionParams.max_completion_tokens = options.maxTokens ?? 100000;
+    } else {
+      completionParams.max_completion_tokens = options.maxTokens ?? 16384;
     }
   } else {
     if (getModelEntry(config)?.supportsTemperature !== false) {
@@ -405,11 +413,20 @@ async function callGemini(
   userPrompt: string,
   options: AICallOptions = {},
 ): Promise<RawAIResponse> {
-  const useThinking = getReasoningMode(config) === "gemini_thinking" && !options.disableReasoning;
+  const isThinkingModel = getReasoningMode(config) === "gemini_thinking";
+  const useThinking = isThinkingModel && !options.disableReasoning;
   const requestConfig: Record<string, unknown> = {};
 
   if (options.maxTokens !== undefined) {
     requestConfig.maxOutputTokens = options.maxTokens;
+  }
+
+  // Gemini's thinking-tagged models think by default with a dynamic budget
+  // when no thinkingConfig is sent at all -- unlike Claude, omitting the
+  // field does NOT turn reasoning off, so disabling it has to say so
+  // explicitly or native reasoning silently keeps running.
+  if (isThinkingModel && options.disableReasoning) {
+    requestConfig.thinkingConfig = { thinkingBudget: 0 };
   }
 
   if (useThinking) {
@@ -474,6 +491,12 @@ async function callOpenRouter(
 
   const isReasoning = getReasoningMode(config) === "openrouter_reasoning";
   const usesCombinedPrompt = isReasoning && modelHasTag(config, "combined_prompt");
+  // Unlike the effort/thinking gates on the other three providers, this used
+  // to fire for ANY promptStrategy -- a "default"-strategy config on a
+  // reasoning-tagged model always requested full effort, with no ablated
+  // "on" case for no_chain_of_thought (which only sets disableReasoning for
+  // advanced/k-level/enriched configs) to ever turn off.
+  const isAdvancedReasoningCall = isReasoning && ADVANCED_STRATEGIES.includes(config.promptStrategy);
 
   const messages: Array<{ role: string; content: string }> = [];
   if (!usesCombinedPrompt) {
@@ -491,8 +514,14 @@ async function callOpenRouter(
     body.temperature = config.temperature;
   }
 
-  if (isReasoning && !options.disableReasoning) {
-    body.reasoning = { effort: config.reasoningEffort || "high" };
+  if (isAdvancedReasoningCall) {
+    // `enabled: false` is OpenRouter's documented way to ask a reasoning
+    // model to skip/minimize its reasoning step -- an explicit request,
+    // unlike omitting the field (which only defers to the provider's own
+    // default, frequently not minimal). Some backends bake chain-of-thought
+    // directly into generation (e.g. DeepSeek R1) and may not fully honor
+    // this; that's a model limitation no request parameter can override.
+    body.reasoning = options.disableReasoning ? { enabled: false } : { effort: config.reasoningEffort || "high" };
   }
 
   const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -642,21 +671,6 @@ function parseCluesResponse(response: string): ParseResult<string[]> {
   return { value: ["hint", "clue", "guess"], quality: "fallback_used" };
 }
 
-export function buildCluePrompt(params: ClueTemplateParams): string {
-  const strategy = getPromptStrategy("default");
-  return `${strategy.systemPrompt}\n\n${strategy.clueTemplate(params)}`;
-}
-
-export function buildGuessPrompt(params: GuessTemplateParams): string {
-  const strategy = getPromptStrategy("default");
-  return `${strategy.systemPrompt}\n\n${strategy.guessTemplate(params)}`;
-}
-
-export function buildInterceptionPrompt(params: InterceptionTemplateParams): string {
-  const strategy = getPromptStrategy("default");
-  return `${strategy.systemPrompt}\n\n${strategy.interceptionTemplate(params)}`;
-}
-
 function resolveConfig(configOrProvider: AIPlayerConfig | string): AIPlayerConfig {
   if (typeof configOrProvider === "string") {
     return getDefaultConfigForProvider(configOrProvider as AIPlayerConfig["provider"]);
@@ -679,14 +693,21 @@ export async function generateClues(
   }
 
   const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ADVANCED_STRATEGIES.includes(config.promptStrategy);
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.clueTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, systemPrompt, prompt, options);
+    // Swapping the template alone leaves native provider reasoning (Claude
+    // extended thinking, OpenAI reasoning_effort, Gemini thinking) untouched
+    // -- it's gated on config.promptStrategy, which this ablation doesn't
+    // change. disableReasoning is the flag those provider paths actually
+    // check, so it has to travel with the simplified prompt for the
+    // ablation to mean what it says.
+    const callOptions = useSimplePrompt ? { ...options, disableReasoning: true } : options;
+    const raw = await callAI(config, systemPrompt, prompt, callOptions);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCluesResponse(raw.text);
     return {
@@ -709,14 +730,17 @@ export async function generateGuess(
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "guess");
   const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ADVANCED_STRATEGIES.includes(config.promptStrategy);
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.guessTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, systemPrompt, prompt, options);
+    // See generateClues: disableReasoning must accompany the simplified
+    // prompt or native provider reasoning stays on for this ablation.
+    const callOptions = useSimplePrompt ? { ...options, disableReasoning: true } : options;
+    const raw = await callAI(config, systemPrompt, prompt, callOptions);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {
@@ -881,14 +905,17 @@ export async function generateInterception(
   const config = resolveConfig(configOrProvider);
   const ablatedParams = applyAblations(params, params.ablations, "interception");
   const strategy = getPromptStrategy(config.promptStrategy);
-  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ["advanced", "k-level", "enriched"].includes(config.promptStrategy);
+  const useSimplePrompt = ablatedParams.ablations?.includes("no_chain_of_thought") && ADVANCED_STRATEGIES.includes(config.promptStrategy);
   const activeStrategy = useSimplePrompt ? getPromptStrategy("default") : strategy;
   const prompt = activeStrategy.interceptionTemplate(ablatedParams);
   const systemPrompt = ablatedParams.systemPromptOverride || activeStrategy.systemPrompt;
   const fullPrompt = `${systemPrompt}\n\n${prompt}`;
   const startTime = Date.now();
   try {
-    const raw = await callAI(config, systemPrompt, prompt, options);
+    // See generateClues: disableReasoning must accompany the simplified
+    // prompt or native provider reasoning stays on for this ablation.
+    const callOptions = useSimplePrompt ? { ...options, disableReasoning: true } : options;
+    const raw = await callAI(config, systemPrompt, prompt, callOptions);
     const latencyMs = Date.now() - startTime;
     const parsed = parseCodeResponse(raw.text);
     return {
