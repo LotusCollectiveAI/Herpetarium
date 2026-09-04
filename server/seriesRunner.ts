@@ -6,6 +6,7 @@ import { generateReflection, ReflectionParams, AICallResult } from "./ai";
 import { storage } from "./storage";
 import { log } from "./index";
 import { createHash } from "crypto";
+import { createCostTracker } from "./costTracker";
 
 const activeSeries = new Map<number, boolean>();
 
@@ -127,6 +128,7 @@ export async function runSeries(seriesId: number) {
       .filter(n => n.matchId != null)
       .map(n => n.matchId as number)
       .filter((id, idx, arr) => arr.indexOf(id) === idx);
+    const costTracker = createCostTracker();
 
     let completed = s.completedGames || 0;
     let failedCount = 0;
@@ -138,7 +140,7 @@ export async function runSeries(seriesId: number) {
       }
 
       if (budgetCap && completedMatchIds.length > 0) {
-        const currentCost = await storage.getCumulativeCost(completedMatchIds);
+        const currentCost = await costTracker.update(completedMatchIds);
         await storage.updateSeries(seriesId, { actualCostUsd: currentCost.toFixed(6) });
         if (currentCost >= budgetCap) {
           log(`[series] Series ${seriesId} - Budget cap exceeded ($${currentCost.toFixed(4)} >= $${budgetCap})`, "series");
@@ -216,13 +218,13 @@ export async function runSeries(seriesId: number) {
       }
     }
 
+    let finalCost = 0;
     if (completedMatchIds.length > 0) {
-      const finalCost = await storage.getCumulativeCost(completedMatchIds);
+      finalCost = await costTracker.update(completedMatchIds);
       await storage.updateSeries(seriesId, { actualCostUsd: finalCost.toFixed(6) });
     }
 
-    const budgetExceeded = budgetCap && completedMatchIds.length > 0 &&
-      (await storage.getCumulativeCost(completedMatchIds)) >= budgetCap;
+    const budgetExceeded = budgetCap && completedMatchIds.length > 0 && finalCost >= budgetCap;
     const finalStatus = budgetExceeded ? "budget_exceeded" : failedCount > 0 ? (failedCount === config.totalGames ? "failed" : "completed_with_errors") : "completed";
 
     // The stop endpoint sets status to "stopped" directly -- don't clobber

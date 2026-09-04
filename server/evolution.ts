@@ -3,6 +3,7 @@ import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { callAI } from "./ai";
 import { log } from "./index";
+import { createCostTracker } from "./costTracker";
 
 const activeRuns = new Map<number, boolean>();
 
@@ -377,6 +378,7 @@ export async function runEvolution(runId: number) {
     const generationStats: GenStats[] = [];
     const allMatchIds: number[] = [];
     const transitions: PhaseTransition[] = [];
+    const costTracker = createCostTracker();
 
     for (let gen = run.currentGeneration; gen < config.totalGenerations; gen++) {
       if (!activeRuns.get(runId)) {
@@ -385,7 +387,7 @@ export async function runEvolution(runId: number) {
       }
 
       if (budgetCap && allMatchIds.length > 0) {
-        const currentCost = await storage.getCumulativeCost(allMatchIds);
+        const currentCost = await costTracker.update(allMatchIds);
         await storage.updateEvolutionRun(runId, { actualCostUsd: currentCost.toFixed(6) });
         if (currentCost >= budgetCap) {
           log(`[evolution] Run ${runId} budget exceeded at gen ${gen}`, "evolution");
@@ -416,7 +418,7 @@ export async function runEvolution(runId: number) {
         if (!activeRuns.get(runId)) break;
 
         if (budgetCap && allMatchIds.length > 0) {
-          const currentCost = await storage.getCumulativeCost(allMatchIds);
+          const currentCost = await costTracker.update(allMatchIds);
           await storage.updateEvolutionRun(runId, { actualCostUsd: currentCost.toFixed(6) });
           if (currentCost >= budgetCap) {
             log(`[evolution] Run ${runId} budget exceeded mid-generation ${gen}`, "evolution");
@@ -498,21 +500,27 @@ export async function runEvolution(runId: number) {
         }
       }
 
+      // Merge each genome's updated fields into the original population in
+      // memory instead of re-fetching from storage right after writing the
+      // exact same data -- nothing else could have changed these rows
+      // between the write and here.
+      const updatedPop: StrategyGenome[] = [];
       for (const g of population) {
         const s = stats.get(g.id)!;
-        const intRate = s.interceptAttempts > 0 ? (s.interceptedOpp / s.interceptAttempts).toFixed(6) : null;
-        const miscRate = s.ownGuesses > 0 ? (s.miscommunications / s.ownGuesses).toFixed(6) : null;
-        await storage.updateStrategyGenome(g.id, {
+        const interceptionRate = s.interceptAttempts > 0 ? (s.interceptedOpp / s.interceptAttempts).toFixed(6) : null;
+        const miscommunicationRate = s.ownGuesses > 0 ? (s.miscommunications / s.ownGuesses).toFixed(6) : null;
+        const updatedFields = {
           eloRating: s.elo,
           wins: s.wins,
           losses: s.losses,
           matchesPlayed: s.matchesPlayed,
-          interceptionRate: intRate,
-          miscommunicationRate: miscRate,
-        });
+          interceptionRate,
+          miscommunicationRate,
+        };
+        await storage.updateStrategyGenome(g.id, updatedFields);
+        updatedPop.push({ ...g, ...updatedFields });
       }
 
-      const updatedPop = await storage.getStrategyGenomes(runId, gen);
       const fitnessScores = updatedPop.map(g => computeFitness(g));
 
       for (let i = 0; i < updatedPop.length; i++) {
@@ -546,10 +554,10 @@ export async function runEvolution(runId: number) {
 
       const transition = detectPhaseTransitions(gen, generationStats);
       if (transition) {
-        transition.populationSnapshot = updatedPop.map(g => ({
+        transition.populationSnapshot = updatedPop.map((g, i) => ({
           genomeId: g.id,
           lineageTag: g.lineageTag,
-          fitnessScore: computeFitness(g),
+          fitnessScore: fitnessScores[i],
           eloRating: g.eloRating,
           modules: g.modules as GenomeModules,
         }));
@@ -569,7 +577,7 @@ export async function runEvolution(runId: number) {
     }
 
     if (allMatchIds.length > 0) {
-      const finalCost = await storage.getCumulativeCost(allMatchIds);
+      const finalCost = await costTracker.update(allMatchIds);
       await storage.updateEvolutionRun(runId, { actualCostUsd: finalCost.toFixed(6) });
     }
 

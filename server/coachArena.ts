@@ -20,6 +20,7 @@ import {
 import { buildDisclosureText } from "./disclosure";
 import { log } from "./index";
 import { storage } from "./storage";
+import { getCostTracker, clearCostTracker } from "./costTracker";
 
 const COACH_ARENA_SOURCE = "coach_arena";
 
@@ -111,6 +112,8 @@ async function finalizeEcologyRun(
     actualCostUsd,
     completedAt,
   });
+
+  clearCostTracker(runId);
 }
 
 async function createEcologyRun(
@@ -182,9 +185,10 @@ export async function runEcology(config: EcologyConfig): Promise<EcologyResult> 
         const sharedMatchIds = Array.from(new Set(left.state.sprintHistory.flatMap((sprint) =>
           sprint.matchResults.map((match) => match.matchId),
         )));
-        const recordedCost = sharedMatchIds.length > 0
-          ? await storage.getCumulativeCost(sharedMatchIds)
-          : 0;
+        // Keyed by left.runId -- the same tracker persistCoachRunProgress
+        // uses for this run below, so this pre-sprint check just catches up
+        // on whatever wasn't already priced by the end of the prior sprint.
+        const recordedCost = await getCostTracker(left.runId).update(sharedMatchIds);
 
         await Promise.all(createdRuns.map((run) => storage.updateCoachRun(run.runId, {
           actualCostUsd: recordedCost > 0 ? recordedCost.toFixed(6) : null,

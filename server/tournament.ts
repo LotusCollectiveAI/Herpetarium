@@ -4,6 +4,7 @@ import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
 import { log } from "./index";
 import { ModelHealthTracker } from "./modelHealth";
+import { createCostTracker } from "./costTracker";
 
 // ── Round-robin config generator ──────────────────────────────────────
 
@@ -277,6 +278,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     const delayBetweenMatches = tournamentConfig?.delayBetweenMatchesMs || 0;
 
     const TERMINAL_STATUSES = new Set(["completed", "failed", "skipped"]);
+    const costTracker = createCostTracker();
 
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -301,9 +303,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
 
     async function syncActualCost() {
       const snapshot = await getTournamentSnapshot();
-      const currentCost = snapshot.completedMatchIds.length > 0
-        ? await storage.getCumulativeCost(snapshot.completedMatchIds)
-        : 0;
+      const currentCost = await costTracker.update(snapshot.completedMatchIds);
       await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
       return { ...snapshot, currentCost };
     }
@@ -553,9 +553,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     }
 
     const finalSnapshot = await getTournamentSnapshot();
-    const finalCost = finalSnapshot.completedMatchIds.length > 0
-      ? await storage.getCumulativeCost(finalSnapshot.completedMatchIds)
-      : 0;
+    const finalCost = await costTracker.update(finalSnapshot.completedMatchIds);
     const budgetExceeded = budgetCap !== null && finalCost >= budgetCap;
     const finalStatus = budgetExceeded
       ? "budget_exceeded"
