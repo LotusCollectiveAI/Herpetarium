@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Bot, Check, KeyRound, Pencil, Radio, Target } from "lucide-react";
+import { Bot, Check, Radio } from "lucide-react";
 import type { GameState, Player } from "@shared/schema";
 
 interface ScoreBoardProps {
@@ -171,63 +171,18 @@ function TeamRoster({ gameState, team, playerId }: { gameState: GameState; team:
   );
 }
 
-// Whoever the phase currently hangs on for this team: the clue-giver while
-// clues are being written, then the one teammate allowed to submit the
-// decode, then the one allowed to submit the interception. Everyone else is
-// advising. Nothing is waiting on a particular player between rounds.
-function activeRole(gameState: GameState, team: Team) {
-  switch (gameState.phase) {
-    case "giving_clues":
-      return { playerId: gameState.currentClueGiver[team], Icon: Pencil, doing: "giving clues" };
-    case "own_team_guessing":
-      return { playerId: gameState.decodeSubmitter[team], Icon: KeyRound, doing: "submitting the decode" };
-    case "opponent_intercepting":
-      return { playerId: gameState.interceptSubmitter[team], Icon: Target, doing: "submitting the intercept" };
-    default:
-      return null;
-  }
-}
-
-// Sits alongside the team name in the pinned board, which is the only place
-// this shows once the rosters have scrolled away.
-function ActivePlayer({ gameState, team, playerId }: ScoreBoardProps & { team: Team }) {
-  const role = activeRole(gameState, team);
-  if (!role?.playerId) return null;
-
-  const isMe = role.playerId === playerId;
-  const name = gameState.players.find(p => p.id === role.playerId)?.name ?? "—";
-
-  return (
-    <span
-      className="flex min-w-0 items-center gap-1"
-      title={`${name} — ${role.doing}`}
-      data-testid={`active-player-${team}`}
-    >
-      <role.Icon className="h-3 w-3 shrink-0 text-muted-foreground" />
-      <span
-        className={cn(
-          "truncate text-[11px]",
-          isMe ? "font-semibold text-primary" : "text-muted-foreground",
-        )}
-      >
-        {isMe ? "You" : name}
-      </span>
-    </span>
-  );
-}
-
 export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
   const { amber: amberState, blue: blueState } = gameState.teams;
 
   return (
     <div className="flex flex-col gap-2 p-3 rounded-lg bg-card border">
       {/* Same column template as the token rows below, so the team names,
-          the round and the tokens all line up. */}
+          the round and the tokens all line up. Who is currently acting is
+          left to the rosters, which say it per player. */}
       <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2">
         <div className="flex min-w-0 items-center gap-1.5">
           <div className="h-3 w-3 shrink-0 rounded-full bg-amber-500" />
-          <span className="shrink-0 text-sm font-semibold">Amber</span>
-          <ActivePlayer gameState={gameState} team="amber" playerId={playerId} />
+          <span className="truncate text-sm font-semibold">Amber</span>
         </div>
 
         <span className="shrink-0 text-sm font-medium text-muted-foreground">
@@ -235,8 +190,7 @@ export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
         </span>
 
         <div className="flex min-w-0 items-center justify-end gap-1.5">
-          <ActivePlayer gameState={gameState} team="blue" playerId={playerId} />
-          <span className="shrink-0 text-sm font-semibold">Blue</span>
+          <span className="truncate text-sm font-semibold">Blue</span>
           <div className="h-3 w-3 shrink-0 rounded-full bg-blue-500" />
         </div>
       </div>
