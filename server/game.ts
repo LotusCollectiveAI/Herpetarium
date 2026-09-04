@@ -195,10 +195,14 @@ export function removePlayer(game: GameState, playerId: string): GameState {
   };
 }
 
-export function assignTeam(game: GameState, playerId: string, team: "amber" | "blue"): GameState {
-  const currentTeamSize = game.players.filter(p => p.team === team && p.id !== playerId).length;
-  if (currentTeamSize >= MAX_TEAM_PLAYERS) {
-    return game;
+// A null team puts the player back in the unassigned pool, where
+// autoAssignRemainingPlayers will place them at confirm time.
+export function assignTeam(game: GameState, playerId: string, team: "amber" | "blue" | null): GameState {
+  if (team !== null) {
+    const currentTeamSize = game.players.filter(p => p.team === team && p.id !== playerId).length;
+    if (currentTeamSize >= MAX_TEAM_PLAYERS) {
+      return game;
+    }
   }
   return {
     ...game,

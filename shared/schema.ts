@@ -431,6 +431,14 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("remove_player"), playerId: z.string() }),
   z.object({ type: z.literal("join_team"), team: z.enum(["amber", "blue"]) }),
+  // Host-only, and only for AI players: join_team can only ever move its
+  // own sender, so before this there was no way to place a bot -- they were
+  // swept into whichever team needed filling at confirm time.
+  z.object({
+    type: z.literal("assign_ai_team"),
+    playerId: z.string(),
+    team: z.enum(["amber", "blue"]).nullable(),
+  }),
   z.object({ type: z.literal("start_game") }),
   z.object({ type: z.literal("confirm_teams") }),
   z.object({ type: z.literal("submit_clues"), clues: z.array(z.string()) }),

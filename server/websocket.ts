@@ -859,16 +859,21 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       }
       
       const modelLabel = config.model || message.provider;
-      const baseName = `${getAIProviderName(config.provider)} (${modelLabel})`;
-      // Two AI on the same provider+model would otherwise be given the same
-      // name, and every place a player is identified to a human -- the
-      // roster, the teammate pick bubbles -- shows the name, not the id. In
-      // a 3-per-team game that means teammates offering conflicting advice
-      // are indistinguishable, so number the repeats.
-      const sameNameCount = game.players.filter(
-        p => p.name === baseName || p.name.startsWith(`${baseName} #`),
+      const providerName = getAIProviderName(config.provider);
+      // Two AI on the same provider and model would otherwise be given the
+      // same name, and every place a player is identified to a human --
+      // the roster, the teammate pick bubbles, the team-setup cards --
+      // shows the name, not the id. In a 3-per-team game that means
+      // teammates offering conflicting advice are indistinguishable, so
+      // number the repeats. The number goes before the model rather than
+      // after it because these names are shown truncated in narrow
+      // columns, and a trailing "#2" is the first thing to be clipped.
+      const sameConfigCount = game.players.filter(
+        p => p.isAI && p.aiProvider === config.provider && p.aiConfig?.model === config.model,
       ).length;
-      const displayName = sameNameCount === 0 ? baseName : `${baseName} #${sameNameCount + 1}`;
+      const displayName = sameConfigCount === 0
+        ? `${providerName} (${modelLabel})`
+        : `${providerName} #${sameConfigCount + 1} (${modelLabel})`;
 
       const aiPlayer: Player = {
         id: generatePlayerId(),
@@ -923,7 +928,49 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       sendGameState(client.gameId);
       break;
     }
-    
+
+    case "assign_ai_team": {
+      if (!client) return;
+
+      const game = games.get(client.gameId);
+      if (!game || game.hostId !== client.playerId) {
+        sendTo(ws, { type: "error", message: "Only host can assign AI players to teams" });
+        return;
+      }
+
+      if (game.phase !== "lobby" && game.phase !== "team_setup") {
+        sendTo(ws, { type: "error", message: "Teams are already set for this game" });
+        return;
+      }
+
+      const target = game.players.find(p => p.id === message.playerId);
+      if (!target) {
+        sendTo(ws, { type: "error", message: "Player not found" });
+        return;
+      }
+
+      // Humans choose for themselves via join_team; the host moving them
+      // around underneath them would be a different feature.
+      if (!target.isAI) {
+        sendTo(ws, { type: "error", message: "Only AI players can be assigned by the host" });
+        return;
+      }
+
+      if (message.team !== null) {
+        const targetTeamSize = game.players.filter(p => p.team === message.team && p.id !== target.id).length;
+        if (targetTeamSize >= MAX_TEAM_PLAYERS) {
+          sendTo(ws, { type: "error", message: `Team ${message.team === "amber" ? "Amber" : "Blue"} is full (max ${MAX_TEAM_PLAYERS} players)` });
+          return;
+        }
+      }
+
+      const updated = assignTeam(game, target.id, message.team);
+      games.set(client.gameId, updated);
+      sendGameState(client.gameId);
+      log(`Host assigned ${target.name} to ${message.team ?? "unassigned"} in game ${client.gameId}`, "websocket");
+      break;
+    }
+
     case "start_game": {
       if (!client) return;
       
