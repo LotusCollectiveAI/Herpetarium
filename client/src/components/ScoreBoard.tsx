@@ -212,17 +212,28 @@ export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
           <Token type="black" count={blueState.blackTokens} />
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div className="flex items-stretch justify-between gap-2 sm:gap-4">
-        <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
-          <TeamRoster gameState={gameState} team="amber" playerId={playerId} />
-        </div>
+// Kept out of ScoreBoard, and so out of the sticky header, because the
+// rosters are the bulk of its height and the least useful thing to hold on
+// screen the whole game. They render in the normal document flow instead
+// and scroll away, leaving the round and token board pinned.
+export function TeamRosters({ gameState, playerId }: ScoreBoardProps) {
+  return (
+    <div
+      className="flex items-stretch justify-between gap-2 rounded-lg border bg-card p-3 sm:gap-4"
+      data-testid="team-rosters"
+    >
+      <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
+        <TeamRoster gameState={gameState} team="amber" playerId={playerId} />
+      </div>
 
-        <div className="w-px bg-border" />
+      <div className="w-px bg-border" />
 
-        <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
-          <TeamRoster gameState={gameState} team="blue" playerId={playerId} />
-        </div>
+      <div className="flex min-w-0 flex-1 flex-col items-center gap-2">
+        <TeamRoster gameState={gameState} team="blue" playerId={playerId} />
       </div>
     </div>
   );

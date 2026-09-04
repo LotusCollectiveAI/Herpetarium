@@ -4,6 +4,7 @@ import { useGame } from "@/lib/gameContext";
 import { GameHeader } from "@/components/GameHeader";
 import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
 import { GameHistoryPanel } from "@/components/GameHistoryPanel";
+import { TeamRosters } from "@/components/ScoreBoard";
 import { PhaseAnnouncement } from "@/components/PhaseAnnouncement";
 import { LobbyView } from "@/components/views/LobbyView";
 import { TeamSetupView } from "@/components/views/TeamSetupView";
@@ -17,7 +18,7 @@ import { Loader2, AlertTriangle } from "lucide-react";
 export default function Game() {
   const params = useParams<{ id: string }>();
   const gameId = params.id || "";
-  const { gameState, isConnected, connect, disconnect, aiFallback, clueError, phaseAnnouncement, myTeam } = useGame();
+  const { gameState, playerId, isConnected, connect, disconnect, aiFallback, clueError, phaseAnnouncement, myTeam } = useGame();
 
   useEffect(() => {
     const playerName = sessionStorage.getItem("playerName") || `Player${Math.random().toString(36).slice(2, 6)}`;
@@ -86,6 +87,13 @@ export default function Game() {
               {clueError}
             </div>
           )}
+        </div>
+      )}
+      {/* Below the sticky header rather than inside it, so the rosters
+          scroll out of the way while the round and tokens stay pinned. */}
+      {gameState.phase !== "lobby" && gameState.phase !== "team_setup" && (
+        <div className="px-2 pt-2">
+          <TeamRosters gameState={gameState} playerId={playerId} />
         </div>
       )}
       <main className="flex-1 flex flex-col overflow-hidden">
