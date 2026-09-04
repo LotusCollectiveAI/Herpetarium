@@ -194,6 +194,54 @@ export interface AICallResult<T> {
   estimatedCostUsd?: string;
 }
 
+// Races an AI call against its configured timeout, falling back to a
+// synthetic error result rather than throwing, so a slow or failing model
+// degrades that one turn instead of aborting the match.
+//
+// Both orchestration layers (websocket.ts for live games, headlessRunner.ts
+// for the research runners) used to keep their own copy of this. The copies
+// had drifted: the live one took its arguments in the opposite order and
+// never cleared its timer, so every clue/guess/interception call in a live
+// game left a pending timer holding a closure alive for the rest of the
+// configured timeout -- up to 15 minutes by default, and up to 4 hours at
+// the maximum a config can set.
+export function withAICallTimeout<T>(
+  timeoutMs: number,
+  promise: Promise<AICallResult<T>>,
+  fallback: T,
+  model: string,
+): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      resolve({
+        result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
+        timedOut: true,
+      });
+    }, timeoutMs);
+
+    promise
+      .then((result) => {
+        clearTimeout(timer);
+        resolve({ result, timedOut: false });
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        resolve({
+          result: {
+            result: fallback,
+            prompt: "",
+            rawResponse: "",
+            model,
+            latencyMs: 0,
+            error: error instanceof Error ? error.message : String(error),
+            parseQuality: "error" as const,
+          },
+          timedOut: false,
+        });
+      });
+  });
+}
+
 export function estimateCost(config: Pick<AIPlayerConfig, "provider" | "model">, promptTokens?: number, completionTokens?: number): string | undefined;
 export function estimateCost(provider: AIPlayerConfig["provider"], model: string, promptTokens?: number, completionTokens?: number): string | undefined;
 export function estimateCost(
@@ -421,19 +469,17 @@ async function callGemini(
     requestConfig.maxOutputTokens = options.maxTokens;
   }
 
-  // Gemini's thinking-tagged models think by default with a dynamic budget
-  // when no thinkingConfig is sent at all -- unlike Claude, omitting the
-  // field does NOT turn reasoning off, so disabling it has to say so
-  // explicitly or native reasoning silently keeps running.
-  if (isThinkingModel && options.disableReasoning) {
-    requestConfig.thinkingConfig = { thinkingBudget: 0 };
+  // These models think by default with a dynamic budget when no
+  // thinkingConfig is sent at all -- unlike Claude, omitting the field does
+  // NOT turn reasoning off, so disabling it has to say so explicitly with a
+  // zero budget or native reasoning silently keeps running.
+  if (isThinkingModel) {
+    requestConfig.thinkingConfig = {
+      thinkingBudget: useThinking ? getThinkingBudget(config, 32000) : 0,
+    };
   }
 
   if (useThinking) {
-    requestConfig.thinkingConfig = {
-      thinkingBudget: getThinkingBudget(config, 32000),
-    };
-
     const response = await getGemini().models.generateContent({
       model: config.model,
       contents: `${systemPrompt}\n\n${userPrompt}`,

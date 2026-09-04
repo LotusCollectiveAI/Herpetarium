@@ -36,7 +36,10 @@ export interface CostTracker {
 // instead of "this run's cost tracking is stuck forever."
 const GET_COST_TIMEOUT_MS = 30000;
 
-function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+// Distinct from ai.ts's withAICallTimeout, which resolves to a fallback
+// result -- this one rejects, because a cost lookup has no meaningful
+// fallback value and the caller must not record a wrong total.
+function rejectAfterTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(message)), ms);
     promise.then(
@@ -53,7 +56,7 @@ function makeTracker(): CostTracker {
   async function doUpdate(matchIds: number[]): Promise<number> {
     const newIds = matchIds.filter(id => !priced.has(id));
     if (newIds.length > 0) {
-      total += await withTimeout(
+      total += await rejectAfterTimeout(
         storage.getCumulativeCost(newIds),
         GET_COST_TIMEOUT_MS,
         `getCumulativeCost timed out after ${GET_COST_TIMEOUT_MS}ms`,

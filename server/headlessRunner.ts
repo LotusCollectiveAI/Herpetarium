@@ -45,6 +45,7 @@ import {
   estimateCost,
   AICallResult,
   ADVANCED_STRATEGIES,
+  withAICallTimeout,
 } from "./ai";
 import {
   getPromptStrategy,
@@ -70,43 +71,6 @@ interface HeadlessResult {
   teams: GameState["teams"];
   players: Player[];
   updatedScratchNotes?: Partial<Record<"amber" | "blue", ScratchNotesSnapshot>>;
-}
-
-function withTimeout<T>(
-  timeoutMs: number,
-  promise: Promise<AICallResult<T>>,
-  fallback: T,
-  model: string
-): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => {
-      resolve({
-        result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
-        timedOut: true,
-      });
-    }, timeoutMs);
-
-    promise
-      .then((result) => {
-        clearTimeout(timer);
-        resolve({ result, timedOut: false });
-      })
-      .catch((error) => {
-        clearTimeout(timer);
-        resolve({
-          result: {
-            result: fallback,
-            prompt: "",
-            rawResponse: "",
-            model,
-            latencyMs: 0,
-            error: error instanceof Error ? error.message : String(error),
-            parseQuality: "error" as const,
-          },
-          timedOut: false,
-        });
-      });
-  });
 }
 
 function resolveRoleSystemPrompt(
@@ -313,7 +277,7 @@ async function processClues(
     const teamNotesClue = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
     const clueParams = { keywords, targetCode: code, history, scratchNotes: teamNotesClue, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "cluegiver"), taskDirectives: resolveRoleTaskDirectives(promptOverrides, team, "cluegiver") };
 
-    const { result: callResult, timedOut } = await withTimeout(
+    const { result: callResult, timedOut } = await withAICallTimeout(
       config.timeoutMs,
       generateClues(config, clueParams, { healthTracker }),
       fallbackClues,
@@ -393,7 +357,7 @@ async function processGuesses(
     const noteKey = `${aiGuesser.aiProvider}-${team}`;
     const teamNotesGuess = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
     const guessParams = { keywords, clues, history, scratchNotes: teamNotesGuess, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "own_guesser"), taskDirectives: resolveRoleTaskDirectives(promptOverrides, team, "own_guesser") };
-    const { result: callResult, timedOut } = await withTimeout(
+    const { result: callResult, timedOut } = await withAICallTimeout(
       config.timeoutMs,
       generateGuess(config, guessParams, { healthTracker }),
       fallbackGuess,
@@ -453,7 +417,7 @@ async function processInterceptions(
     const noteKey = `${aiInterceptor.aiProvider}-${team}`;
     const teamNotesIntercept = matchConfig?.scratchNotesByTeam?.[team] ?? scratchNotesMap?.[noteKey];
     const interceptParams = { clues, history, scratchNotes: teamNotesIntercept, ablations, systemPromptOverride: resolveRoleSystemPrompt(promptOverrides, team, "interceptor"), taskDirectives: resolveRoleTaskDirectives(promptOverrides, team, "interceptor") };
-    const { result: callResult, timedOut } = await withTimeout(
+    const { result: callResult, timedOut } = await withAICallTimeout(
       config.timeoutMs,
       generateInterception(config, interceptParams, { healthTracker }),
       fallbackGuess,
@@ -678,7 +642,7 @@ async function processDeliberation(
         return finalizeDeliberation("phase_timeout", error, true, true);
       }
 
-      const { result: callResult, timedOut } = await withTimeout(
+      const { result: callResult, timedOut } = await withAICallTimeout(
         Math.min(config.timeoutMs, remainingPhaseMs),
         generateDeliberationMessage(config, {
           systemPrompt,

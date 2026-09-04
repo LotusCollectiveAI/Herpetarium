@@ -20,7 +20,7 @@ import {
   shuffleArray,
   getConfigForPlayer,
 } from "./game";
-import { generateClues, generateGuess, generateInterception, AICallResult } from "./ai";
+import { generateClues, generateGuess, generateInterception, AICallResult, withAICallTimeout } from "./ai";
 import { storage } from "./storage";
 import { log } from "./index";
 import { emitMatchEvent, clearMatchEventSequence } from "./matchEvents";
@@ -50,27 +50,6 @@ function getPlayerTimeout(player: Player): number {
     return player.aiConfig.timeoutMs; // Respect the configured value, no cap
   }
   return DEFAULT_AI_TIMEOUT_MS;
-}
-
-function withTimeout<T>(
-  promise: Promise<AICallResult<T>>,
-  timeoutMs: number,
-  fallback: T,
-  model: string
-): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
-  const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
-
-  const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
-    setTimeout(() => resolve({
-      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
-      timedOut: true,
-    }), timeoutMs)
-  );
-
-  return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error", parseQuality: "error" as const },
-    timedOut: false,
-  }));
 }
 
 function getStem(word: string): string {
@@ -494,9 +473,9 @@ async function processAIClues(gameId: string) {
     
     const fallbackClues = code.map(n => keywords[n - 1].slice(0, 3));
     
-    const { result: callResult, timedOut } = await withTimeout(
-      generateClues(config, { keywords, targetCode: code, history }),
+    const { result: callResult, timedOut } = await withAICallTimeout(
       timeoutMs,
+      generateClues(config, { keywords, targetCode: code, history }),
       fallbackClues,
       config.model
     );
@@ -557,9 +536,9 @@ async function runAIGuessCall(
     targetCode: h.targetCode,
   }));
 
-  const { result: callResult, timedOut } = await withTimeout(
-    generateGuess(config, { keywords, clues, history }),
+  const { result: callResult, timedOut } = await withAICallTimeout(
     timeoutMs,
+    generateGuess(config, { keywords, clues, history }),
     fallbackGuess,
     config.model
   );
@@ -666,9 +645,9 @@ async function runAIInterceptionCall(
     targetCode: h.targetCode,
   }));
 
-  const { result: callResult, timedOut } = await withTimeout(
-    generateInterception(config, { clues, history }),
+  const { result: callResult, timedOut } = await withAICallTimeout(
     timeoutMs,
+    generateInterception(config, { clues, history }),
     fallbackGuess,
     config.model
   );
