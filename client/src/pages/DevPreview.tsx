@@ -4,6 +4,8 @@ import type { GameState, GamePhase, Player, RoundHistory, WSMessage } from "@sha
 import { DEFAULT_GAME_RULES } from "@shared/schema";
 import { GameHeader } from "@/components/GameHeader";
 import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
+import { GameHistoryPanel } from "@/components/GameHistoryPanel";
+import { TeamRosters } from "@/components/ScoreBoard";
 import { LobbyView } from "@/components/views/LobbyView";
 import { TeamSetupView } from "@/components/views/TeamSetupView";
 import { GivingCluesView } from "@/components/views/GivingCluesView";
@@ -243,10 +245,22 @@ export default function DevPreview() {
         </div>
 
         <GameHeader gameId="preview" />
+        {/* Mirrors Game.tsx: the rosters sit below the sticky header rather
+            than inside it, so they scroll away. */}
+        {phase !== "lobby" && phase !== "team_setup" && (
+          <div className="px-2 pt-2">
+            <TeamRosters gameState={gameState} playerId={viewer.id} />
+          </div>
+        )}
         <main className="flex-1 flex flex-col overflow-hidden">
           {renderPhaseView()}
         </main>
-        {phase !== "lobby" && phase !== "team_setup" && <ClueHistoryPanel />}
+        {phase !== "lobby" && phase !== "team_setup" && (
+          <>
+            <ClueHistoryPanel />
+            <GameHistoryPanel />
+          </>
+        )}
       </div>
     </GameContext.Provider>
   );
