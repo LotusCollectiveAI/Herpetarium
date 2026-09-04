@@ -343,11 +343,17 @@ export function submitClues(game: GameState, team: "amber" | "blue", clues: stri
     return game;
   }
 
+  // Normalize casing here so stored clues don't depend on who authored
+  // them. The clue input uppercases what a human types, while the AI
+  // response parser lowercases what a model returns -- both render through
+  // the same uppercasing CSS, so the difference is invisible in game but
+  // reaches the match_rounds rows, the CSV/JSON exports, and any
+  // case-sensitive analysis downstream.
   const updatedClues = {
     ...game.currentClues,
-    [team]: clues,
+    [team]: clues.map(clue => clue.trim().toLowerCase()),
   };
-  
+
   // Check if both teams have submitted clues
   const bothSubmitted = updatedClues.amber !== null && updatedClues.blue !== null;
   

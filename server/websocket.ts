@@ -859,8 +859,17 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       }
       
       const modelLabel = config.model || message.provider;
-      const displayName = `${getAIProviderName(config.provider)} (${modelLabel})`;
-      
+      const baseName = `${getAIProviderName(config.provider)} (${modelLabel})`;
+      // Two AI on the same provider+model would otherwise be given the same
+      // name, and every place a player is identified to a human -- the
+      // roster, the teammate pick bubbles -- shows the name, not the id. In
+      // a 3-per-team game that means teammates offering conflicting advice
+      // are indistinguishable, so number the repeats.
+      const sameNameCount = game.players.filter(
+        p => p.name === baseName || p.name.startsWith(`${baseName} #`),
+      ).length;
+      const displayName = sameNameCount === 0 ? baseName : `${baseName} #${sameNameCount + 1}`;
+
       const aiPlayer: Player = {
         id: generatePlayerId(),
         name: displayName,

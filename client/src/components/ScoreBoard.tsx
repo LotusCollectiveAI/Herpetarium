@@ -42,6 +42,33 @@ export function Token({ type, count, reverseFill = false }: { type: "white" | "b
   );
 }
 
+// Only one teammate actually submits a team's guess each round; the others
+// just advise by clicking numbers. Reporting the team's single submitted
+// value against every player on the roster claimed all of them had
+// submitted, which is wrong as soon as a team has more than two players.
+function describeGuessActivity(
+  gameState: GameState,
+  player: Player,
+  team: Team,
+  submitted: boolean,
+  isSubmitter: boolean,
+  activeLabel: string,
+  doneLabel: string,
+): PlayerActivity | null {
+  if (isSubmitter) {
+    return submitted
+      ? { label: doneLabel, active: false, complete: true }
+      : { label: activeLabel, active: true };
+  }
+  // A non-submitting teammate's own live pick is visible for your own team.
+  // The opponent's picks are withheld, so there the honest thing to show is
+  // just that their turn is still running.
+  if (gameState.currentSelections[team][player.id]) {
+    return { label: "Suggested a pick", active: false, complete: true };
+  }
+  return submitted ? null : { label: activeLabel, active: true };
+}
+
 function getPlayerActivity(gameState: GameState, player: Player, team: Team): PlayerActivity | null {
   const isClueGiver = gameState.currentClueGiver[team] === player.id;
 
@@ -54,16 +81,31 @@ function getPlayerActivity(gameState: GameState, player: Player, team: Team): Pl
     case "own_team_deliberation":
       return !isClueGiver ? { label: "Discussing clues", active: true } : null;
     case "own_team_guessing":
+      // The clue-giver already knows the code and never decodes it.
       if (isClueGiver) return null;
-      return gameState.currentGuesses[team].ownTeam
-        ? { label: "Guess submitted", active: false, complete: true }
-        : { label: "Decoding clues", active: true };
+      return describeGuessActivity(
+        gameState,
+        player,
+        team,
+        gameState.currentGuesses[team].ownTeam !== null,
+        gameState.decodeSubmitter[team] === player.id,
+        "Decoding clues",
+        "Guess submitted",
+      );
     case "opponent_deliberation":
       return { label: "Planning intercept", active: true };
     case "opponent_intercepting":
-      return gameState.currentGuesses[team].opponent
-        ? { label: "Intercept submitted", active: false, complete: true }
-        : { label: "Intercepting", active: true };
+      // The clue-giver is included here -- they know as little about the
+      // opponent's code as anyone else on the team.
+      return describeGuessActivity(
+        gameState,
+        player,
+        team,
+        gameState.currentGuesses[team].opponent !== null,
+        gameState.interceptSubmitter[team] === player.id,
+        "Intercepting",
+        "Intercept submitted",
+      );
     default:
       return null;
   }
