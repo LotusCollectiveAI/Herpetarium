@@ -4,10 +4,23 @@ import { storage } from "./storage";
 // every id in the list on every call. Every long-running orchestrator here
 // (tournament/evolution/series/coach/arena) passes it an ever-growing list
 // of completed matchIds, so calling it once per new match/sprint/generation
-// makes total DB work grow O(n^2) over a run's lifetime instead of O(n) --
-// each match's cost only ever needs to be priced once, since a match's
-// ai_call_log rows are final once it's done (no more calls get logged
-// against a completed matchId).
+// makes total DB work grow O(n^2) over a run's lifetime instead of O(n).
+//
+// THE INVARIANT CALLERS MUST HOLD: a matchId passed to update() must have
+// all of its ai_call_log rows already written, because its cost is summed
+// once and that figure is then cached forever. It is NOT true that a match
+// stops accruing rows the moment it finishes -- seriesRunner logs a
+// per-player "reflection" AI call against a match *after* runHeadlessMatch
+// returns and after the id is pushed onto its completed list. What makes
+// that safe today is ordering, not the match being over: series prices a
+// match only on a later loop iteration (or in the final tally), by which
+// point its reflections have landed. headlessRunner's own post-match
+// reflection is awaited before it returns, so coach/arena/tournament ids
+// are already complete when recorded.
+//
+// So: if you add post-match AI logging, or move a budget check to the
+// bottom of a loop, price the match only after that logging completes --
+// otherwise its cost is silently undercounted for the rest of the run.
 export interface CostTracker {
   // matchIds may be passed in any order, on any call, and may repeat ids
   // already seen -- only ids not yet priced are fetched from storage.
