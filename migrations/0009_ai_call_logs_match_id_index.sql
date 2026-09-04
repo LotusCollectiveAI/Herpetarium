@@ -6,9 +6,15 @@
 -- the reasoning-trace presence scan, and the CSV/JSON export endpoints.
 -- Without this index each of those was a full sequential scan.
 --
+-- Note this file is a record matching the convention of its neighbours,
+-- not the mechanism: migrations/meta lists only 0000, so 0001-0009 are not
+-- journalled and drizzle-kit push works from shared/schema.ts instead. The
+-- index is declared there too, under this same name, and that is what
+-- actually creates it.
+--
 -- On a large existing table CREATE INDEX takes a write lock for the
 -- duration. If that matters, run the CONCURRENTLY form by hand instead --
--- it cannot be used here because migrations run inside a transaction:
+-- it cannot be used inside a transaction:
 --   CREATE INDEX CONCURRENTLY IF NOT EXISTS "idx_ai_call_logs_match_id"
 --     ON "ai_call_logs" ("match_id");
 

@@ -511,9 +511,9 @@ export const matches = pgTable("matches", {
   gameRules: jsonb("game_rules").$type<GameRules | null>(),
   matchmakingBucket: varchar("matchmaking_bucket", { length: 24 }),
 }, (table) => ({
-  // Already present in the database via migrations 0002 and 0005.
-  // Declared here too so drizzle-kit push doesn't read them as drift and
-  // offer to drop them.
+  // As with team_chatter above: migrations 0002 and 0005 add these, but
+  // neither is in the drizzle journal, so they never reached a database
+  // built by push. Declaring them here is what actually creates them.
   qualityStatusIdx: index("idx_matches_quality_status").on(table.qualityStatus),
   teamSizeIdx: index("idx_matches_team_size").on(table.teamSize),
 }));
@@ -554,9 +554,11 @@ export const teamChatter = pgTable("team_chatter", {
   finalAnswer: jsonb("final_answer"), // [number, number, number] | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
 }, (table) => ({
-  // Already present in the database via migrations/0001_team_chatter.sql.
-  // Declared here too so drizzle-kit push doesn't read them as drift and
-  // offer to drop them.
+  // Declared here because migrations/0001_team_chatter.sql, which adds
+  // these, is not in migrations/meta (the journal only tracks 0000) and so
+  // never ran against a database provisioned by drizzle-kit push -- these
+  // were missing entirely until they were declared here. The names match
+  // the SQL exactly, so applying either route is idempotent.
   matchIdIdx: index("idx_team_chatter_match_id").on(table.matchId),
   gameRoundIdx: index("idx_team_chatter_game_round").on(table.gameId, table.roundNumber),
 }));
