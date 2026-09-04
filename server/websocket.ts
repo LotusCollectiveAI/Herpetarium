@@ -24,6 +24,7 @@ import { generateClues, generateGuess, generateInterception, AICallResult, withA
 import { storage } from "./storage";
 import { log } from "./index";
 import { emitMatchEvent, clearMatchEventSequence } from "./matchEvents";
+import { redactGameStateForTeam } from "./redactGameState";
 
 interface ClientConnection {
   ws: WebSocket;
@@ -109,53 +110,6 @@ function sendTo(ws: WebSocket, message: ServerMessage) {
 }
 
 const lastPhase = new Map<string, string>();
-
-// The wire format for GameState carries both teams' secrets (the in-progress
-// code, the opposing team's keywords, each team's own decode/interception
-// guesses and live picks) because the reducer needs all of it in one shared
-// object. None of that may reach a socket outside the team it belongs to --
-// e.g. a team's decode guess must stay hidden from the opponent, or the
-// opponent could just read it off the wire during interception instead of
-// working it out from clues. Round history is exempt: past rounds are
-// intentionally revealed to both teams once scored (that's how clue
-// deduction across rounds works), so only the *current* round's secrets are
-// redacted here.
-// ScoreBoard shows both teams' rosters to every player, including a
-// submitted/not-submitted indicator driven purely by whether currentGuesses
-// is null -- it never reads the actual digits. So a hidden guess still has
-// to read as non-null once submitted, or that always-visible progress
-// indicator gets permanently stuck on "in progress" for the other team.
-// [0, 0, 0] is never a real code/guess (those only ever use digits 1-4), so
-// it can't be mistaken for one by anything that did read the value.
-const HIDDEN_GUESS: [number, number, number] = [0, 0, 0];
-function maskGuess(value: [number, number, number] | null): [number, number, number] | null {
-  return value === null ? null : HIDDEN_GUESS;
-}
-
-function redactGameStateForTeam(game: GameState, viewerTeam: "amber" | "blue" | null): GameState {
-  return {
-    ...game,
-    currentCode: { amber: null, blue: null },
-    teams: {
-      amber: viewerTeam === "amber" ? game.teams.amber : { ...game.teams.amber, keywords: [] },
-      blue: viewerTeam === "blue" ? game.teams.blue : { ...game.teams.blue, keywords: [] },
-    },
-    currentGuesses: {
-      amber: viewerTeam === "amber" ? game.currentGuesses.amber : {
-        ownTeam: maskGuess(game.currentGuesses.amber.ownTeam),
-        opponent: maskGuess(game.currentGuesses.amber.opponent),
-      },
-      blue: viewerTeam === "blue" ? game.currentGuesses.blue : {
-        ownTeam: maskGuess(game.currentGuesses.blue.ownTeam),
-        opponent: maskGuess(game.currentGuesses.blue.opponent),
-      },
-    },
-    currentSelections: {
-      amber: viewerTeam === "amber" ? game.currentSelections.amber : {},
-      blue: viewerTeam === "blue" ? game.currentSelections.blue : {},
-    },
-  };
-}
 
 function sendGameState(gameId: string) {
   const game = games.get(gameId);
