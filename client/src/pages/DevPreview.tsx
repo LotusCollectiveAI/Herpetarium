@@ -132,6 +132,8 @@ export default function DevPreview() {
 
   const contextValue = useMemo(() => ({
     gameState,
+    // The preview exists to exercise the live, interactive views.
+    isReplay: false,
     playerId: viewer.id,
     playerName: viewer.name,
     myTeam,

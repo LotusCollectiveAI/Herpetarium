@@ -178,6 +178,7 @@ export default function Replay() {
 
   const contextValue = useMemo(() => ({
     gameState: headerGameState,
+    isReplay: true,
     playerId: REPLAY_SPECTATOR_ID,
     playerName: "Spectator",
     myTeam: viewTeam,

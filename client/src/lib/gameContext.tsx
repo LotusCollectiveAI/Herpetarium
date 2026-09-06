@@ -4,6 +4,10 @@ import { useToast } from "@/hooks/use-toast";
 
 interface GameContextType {
   gameState: GameState | null;
+  // True when the state on screen is a recording rather than a game in
+  // progress. Replay renders the same views as the live game, so anything
+  // that takes input from the viewer has to opt out of it explicitly.
+  isReplay: boolean;
   playerId: string | null;
   playerName: string | null;
   myTeam: "amber" | "blue" | null;
@@ -261,6 +265,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   return (
     <GameContext.Provider value={{
       gameState,
+      isReplay: false,
       playerId,
       playerName,
       myTeam,

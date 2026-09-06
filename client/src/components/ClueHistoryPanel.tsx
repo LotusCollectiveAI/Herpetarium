@@ -75,7 +75,7 @@ function ClueChips({ clues }: { clues: SlotClue[] }) {
 }
 
 export function ClueHistoryPanel() {
-  const { gameState, myTeam } = useGame();
+  const { gameState, myTeam, isReplay } = useGame();
   const [notes, setNotes] = useState<[string, string, string, string]>(["", "", "", ""]);
 
   const gameId = gameState?.id ?? null;
@@ -116,26 +116,49 @@ export function ClueHistoryPanel() {
           Opponent's Clues
         </div>
 
+        {/* space-y-1.5 on both columns, not just the one with the input:
+            the guess field's focus ring extends past its box and was
+            landing on the clue chips underneath, and the two columns have
+            to keep the same gap or their chip rows stop lining up. */}
         {[0, 1, 2, 3].flatMap(i => [
-          <div key={`own-${i}`} className="px-3 pb-3">
-            <div className={cn("text-xs font-medium", teamLabelClass(myTeam))}>
+          <div key={`own-${i}`} className="px-3 pb-3 space-y-1.5">
+            {/* h-6 matches the height the guess field gives the opposite
+                column, so both sides' chip rows stay on the same line. */}
+            <div className={cn("flex h-6 items-center text-xs font-medium", teamLabelClass(myTeam))}>
               {i + 1}. {myKeywords[i]}
             </div>
             <ClueChips clues={myClueSlots[i]} />
           </div>,
 
-          <div key={`opp-${i}`} className="px-3 pb-3 border-l">
-            <div className="flex items-center gap-2">
+          <div key={`opp-${i}`} className="px-3 pb-3 border-l space-y-1.5">
+            <div className="flex h-6 items-center gap-2">
               <span className={cn("text-xs font-medium shrink-0", teamLabelClass(opponentTeam))}>
                 Keyword {i + 1}
               </span>
-              <Input
-                value={notes[i]}
-                onChange={(e) => handleNoteChange(i, e.target.value)}
-                placeholder="Your guess..."
-                className="h-6 text-xs flex-1 min-w-0"
-                data-testid={`input-note-${i + 1}`}
-              />
+              {isReplay ? (
+                // The scratchpad is for working out a code that is still
+                // secret. In a recording it is already on screen, so the
+                // field would be pointless to fill in -- but notes taken
+                // while the game was live are worth still being able to
+                // read back.
+                notes[i] && (
+                  <span
+                    className="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+                    title={notes[i]}
+                    data-testid={`note-readonly-${i + 1}`}
+                  >
+                    {notes[i]}
+                  </span>
+                )
+              ) : (
+                <Input
+                  value={notes[i]}
+                  onChange={(e) => handleNoteChange(i, e.target.value)}
+                  placeholder="Your guess..."
+                  className="h-6 text-xs flex-1 min-w-0"
+                  data-testid={`input-note-${i + 1}`}
+                />
+              )}
             </div>
             <ClueChips clues={opponentClueSlots[i]} />
           </div>,
