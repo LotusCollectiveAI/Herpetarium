@@ -57,16 +57,21 @@ export function RoundResultsView() {
         team === "amber" ? "border-amber-500/30" : "border-blue-500/30"
       )}>
         <CardHeader className={cn(
-          "pb-2",
+          "py-3",
           team === "amber" ? "team-amber" : "team-blue"
         )}>
-          <CardTitle className="text-white text-sm flex items-center gap-2">
+          {/* Centered to match the round title above and the summary line
+              directly below, both of which are centered -- a left-aligned
+              header between them read as misaligned. text-lg rather than
+              CardTitle's default text-2xl: it is the label on a card, not
+              the heading of the screen. */}
+          <CardTitle className="text-white text-lg flex items-center justify-center gap-2">
             {/* Keyed off the same condition as the banner colour, so a round
                 that was decoded but intercepted is marked as the bad outcome
                 it is instead of showing no icon at all. */}
             {isGoodOutcome
-              ? <Trophy className="h-4 w-4" />
-              : <AlertTriangle className="h-4 w-4" />}
+              ? <Trophy className="h-5 w-5 shrink-0" />
+              : <AlertTriangle className="h-5 w-5 shrink-0" />}
             Team {team === "amber" ? "Amber" : "Blue"}
           </CardTitle>
         </CardHeader>
