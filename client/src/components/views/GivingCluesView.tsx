@@ -1,5 +1,5 @@
 import { useGame } from "@/lib/gameContext";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClueInput } from "@/components/ClueInput";
 import { KeywordCard } from "@/components/KeywordCard";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
@@ -53,16 +53,12 @@ export function GivingCluesView() {
 
       {isClueGiver && myCode && myKeywords ? (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5" />
-              Create Your Clues
-            </CardTitle>
-            <CardDescription>
-              Give one-word clues that will help your team guess the code
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+          {/* No heading or description here: the banner above already says
+              which phase this is, and the panel restated it twice over --
+              once as a card description and again inside ClueInput. The
+              three numbered code slots are self-explanatory, and the space
+              they were taking is scarce on a phone. */}
+          <CardContent className="pt-4">
             <ClueInput
               code={myCode}
               keywords={myKeywords}

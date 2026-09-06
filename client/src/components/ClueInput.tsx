@@ -59,9 +59,11 @@ export function ClueInput({ code, keywords, team, onSubmit, disabled = false }: 
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="text-center text-sm text-muted-foreground mb-2">
-        Give one-word clues for your team to guess the code:
-        <div className="flex items-center justify-center gap-2 mt-2">
+      {/* The code digits stand on their own -- each one sits directly above
+          the field for its clue, which says what to do more clearly than a
+          sentence did. */}
+      <div className="text-center text-sm text-muted-foreground">
+        <div className="flex items-center justify-center gap-2">
           {code.map((num, i) => (
             <span
               key={i}
