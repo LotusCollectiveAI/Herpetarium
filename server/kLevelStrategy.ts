@@ -8,7 +8,7 @@
  */
 
 import type { PromptStrategy, ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
-import { applyAblations, formatScratchNotes, formatHistory } from "./promptStrategies";
+import { formatScratchNotes, formatHistory } from "./promptStrategies";
 
 export const kLevelStrategy: PromptStrategy = {
   name: "k-level",

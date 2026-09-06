@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -10,11 +10,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, ArrowDown, Dna, Play, Bot, BarChart3, Loader2, ChevronDown, ChevronRight, Zap, TrendingUp, GitBranch, Shield, Brain, Crosshair, BookOpen, AlertTriangle, Square, DollarSign } from "lucide-react";
+import { ArrowLeft, ArrowDown, Dna, Play, Bot, BarChart3, Loader2, ChevronDown, ChevronRight, Zap, TrendingUp, GitBranch, Shield, Brain, Crosshair, BookOpen, AlertTriangle, Square } from "lucide-react";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
-import type { MODEL_OPTIONS, AIProvider, GenomeModules } from "@shared/schema";
+import type { GenomeModules } from "@shared/schema";
 
 interface EvolutionRun {
   id: number;
@@ -512,8 +512,6 @@ function RunDetail({ runId }: { runId: number }) {
       queryClient.invalidateQueries({ queryKey: ["/api/evolution", runId] });
     },
   });
-
-  const { toast } = useToast();
 
   if (isLoading) return <Skeleton className="h-64 w-full" />;
   if (!run) return <div className="text-muted-foreground">Run not found</div>;

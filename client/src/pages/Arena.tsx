@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,23 +5,8 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ArrowLeft, Trophy, BarChart3, Dna, GitBranch } from "lucide-react";
-import type { SprintEvaluation, GenomeModuleKey } from "@shared/schema";
-
-interface ArenaSlot {
-  slotIndex: number;
-  runId: string;
-  wins: number;
-  losses: number;
-  draws: number;
-}
-
-interface ArenaResult {
-  arenaId: string;
-  sprintsCompleted: number;
-  totalGamesPlayed: number;
-  slots: ArenaSlot[];
-}
+import { ArrowLeft, Trophy, BarChart3, Dna } from "lucide-react";
+import type { SprintEvaluation } from "@shared/schema";
 
 interface EvaluationRecord {
   runId: string;
@@ -57,16 +41,6 @@ export default function Arena() {
   });
 
   const arenaRuns = (runs || []).filter((r: any) => r.arenaId === arenaId);
-
-  // Compute standings from runs
-  const standings = arenaRuns
-    .map((run: any) => ({
-      runId: run.id,
-      genome: run.currentGenome,
-      sprint: run.currentSprint,
-      status: run.status,
-    }))
-    .sort((a: any, b: any) => (b.sprint || 0) - (a.sprint || 0));
 
   // Side balance across all evaluations
   const sideBalanceData = (evaluations || [])

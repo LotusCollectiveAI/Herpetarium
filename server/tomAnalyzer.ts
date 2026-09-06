@@ -34,12 +34,6 @@ const TOM_LEVEL_LABELS: Record<TomLevel, string> = {
   3: "Meta-Strategic",
 };
 
-const LEVEL_0_PATTERNS = [
-  /\brandom\b/i,
-  /\bguess\b/i,
-  /\bno idea\b/i,
-  /\bnot sure\b/i,
-];
 
 const LEVEL_1_PATTERNS = [
   /\bmy (team|keyword|clue|strategy)\b/i,

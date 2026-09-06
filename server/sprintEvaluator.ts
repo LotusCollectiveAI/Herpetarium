@@ -539,7 +539,6 @@ async function buildPerMatchSummaries(
 
   for (const match of matches) {
     const focalTeam = focalTeamByMatchId.get(match.id) || input.focalTeam;
-    const opponentTeam = oppositeTeam(focalTeam);
     const matchRounds = roundsByMatchId.get(match.id) || [];
 
     // Determine outcome

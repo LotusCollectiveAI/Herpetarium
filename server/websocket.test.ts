@@ -341,6 +341,82 @@ describe("opponent keywords over the wire", () => {
   }, 30000);
 });
 
+describe("guess validation at the wire", () => {
+  // Nothing downstream re-checks the digits: the reducer only compares a
+  // guess to the code, so an out-of-range one is stored and rendered as-is.
+  // The schema is the only place this is caught.
+  const rejected: [string, unknown][] = [
+    ["zero, which collides with the redaction sentinel", [0, 0, 0]],
+    ["above the four keyword slots", [5, 1, 2]],
+    ["negative", [-1, 2, 3]],
+    ["fractional", [1.5, 2, 3]],
+    ["too few digits", [1, 2]],
+    ["not numbers at all", ["1", "2", "3"]],
+  ];
+
+  for (const [label, guess] of rejected) {
+    it(`refuses a decode guess that is ${label}`, async () => {
+      const { clients, clientFor, state } = await startedGame();
+      const { host } = clients;
+
+      clientFor(state.currentClueGiver.amber).send({ type: "submit_clues", clues: ["one", "two", "three"] });
+      clientFor(state.currentClueGiver.blue).send({ type: "submit_clues", clues: ["four", "five", "six"] });
+      await waitFor(() => host.latestState()!.phase === "own_team_guessing", "decode phase");
+
+      const submitter = clientFor(host.latestState()!.decodeSubmitter.amber);
+      submitter.send({ type: "submit_guess", guess });
+
+      await waitFor(() => submitter.messagesOfType("error").length > 0, "rejection");
+      expect(submitter.messagesOfType("error").at(-1)!.message).toMatch(/invalid/i);
+      // Rejected outright, so the round is untouched and still waiting.
+      expect(host.latestState()!.currentGuesses.amber.ownTeam).toBeNull();
+      expect(host.latestState()!.phase).toBe("own_team_guessing");
+
+      Object.values(clients).forEach(c => c.close());
+    });
+  }
+
+  it("still accepts every legal digit", async () => {
+    const { clients, clientFor, state } = await startedGame();
+    const { host } = clients;
+
+    clientFor(state.currentClueGiver.amber).send({ type: "submit_clues", clues: ["one", "two", "three"] });
+    clientFor(state.currentClueGiver.blue).send({ type: "submit_clues", clues: ["four", "five", "six"] });
+    await waitFor(() => host.latestState()!.phase === "own_team_guessing", "decode phase");
+
+    clientFor(host.latestState()!.decodeSubmitter.amber).send({ type: "submit_guess", guess: [1, 4, 3] });
+    await waitFor(() => host.latestState()!.currentGuesses.amber.ownTeam !== null, "accepted");
+    expect(host.latestState()!.currentGuesses.amber.ownTeam).toEqual([1, 4, 3]);
+
+    Object.values(clients).forEach(c => c.close());
+  });
+
+  it("refuses an out-of-range teammate pick as well", async () => {
+    // update_selection is broadcast to teammates, so it needs the same bound
+    // as the guess it feeds into.
+    const { clients, clientFor, state } = await startedGame();
+    const { host } = clients;
+
+    clientFor(state.currentClueGiver.amber).send({ type: "submit_clues", clues: ["one", "two", "three"] });
+    clientFor(state.currentClueGiver.blue).send({ type: "submit_clues", clues: ["four", "five", "six"] });
+    await waitFor(() => host.latestState()!.phase === "own_team_guessing", "decode phase");
+
+    const adviser = clients.amber2;
+    adviser.send({ type: "update_selection", selection: [9, null, null] });
+    await waitFor(() => adviser.messagesOfType("error").length > 0, "rejection");
+
+    // A null slot is legal -- it means "not decided yet" -- so the bound
+    // must not have taken that with it.
+    adviser.send({ type: "update_selection", selection: [2, null, null] });
+    await waitFor(
+      () => Object.keys(host.latestState()!.currentSelections.amber).length > 0,
+      "legal pick accepted",
+    );
+
+    Object.values(clients).forEach(c => c.close());
+  });
+});
+
 describe("confirm_teams", () => {
   it("creates one match row even if it is confirmed twice", async () => {
     // A double-clicked button was enough: creating the match row is a

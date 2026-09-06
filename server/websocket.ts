@@ -17,7 +17,6 @@ import {
   updateSelection,
   generatePlayerId,
   getAIProviderName,
-  shuffleArray,
   getConfigForPlayer,
 } from "./game";
 import { generateClues, generateGuess, generateInterception, AICallResult, withAICallTimeout } from "./ai";
@@ -1245,7 +1244,7 @@ function handleDisconnect(ws: WebSocket) {
   const client = clients.get(ws);
   if (!client) return;
   
-  const { gameId, playerId } = client;
+  const { gameId } = client;
   
   const sockets = gameClients.get(gameId);
   if (sockets) {

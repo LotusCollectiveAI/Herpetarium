@@ -12,7 +12,6 @@ import type {
   CoachPatchBundle,
   CoachProposal,
   CoachReviewResult,
-  CoachRollbackTrigger,
   CoachRun,
   CoachSprint,
   CoachResearchMetrics,

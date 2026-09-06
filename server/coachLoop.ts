@@ -34,10 +34,6 @@ const COACH_SOURCE = "coach";
 const COACH_ACTION_TYPE = "coach_autopsy";
 const DEFAULT_EXECUTION_GUIDANCE = "For each keyword in the code, mentally generate 3 candidate clues. Evaluate each for teammate decode probability and opponent interception risk. Choose the candidate with the best ratio.";
 const DEFAULT_DELIBERATION_SCAFFOLD = "State your confidence level before each guess. Explain the association chain: clue X maps to keyword Y because X connects to Y through Z. If disagreement exists, list evidence for each interpretation before converging.";
-const DEFAULT_GENOME_EXTENSION_FIELDS: Pick<GenomeModules, "executionGuidance" | "deliberationScaffold"> = {
-  executionGuidance: DEFAULT_EXECUTION_GUIDANCE,
-  deliberationScaffold: DEFAULT_DELIBERATION_SCAFFOLD,
-};
 const GENOME_MODULE_KEYS: Array<keyof GenomeModules> = [
   "cluePhilosophy",
   "opponentModeling",
