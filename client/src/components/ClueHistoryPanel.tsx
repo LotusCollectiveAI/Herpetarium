@@ -133,7 +133,10 @@ export function ClueHistoryPanel() {
           <div key={`own-${i}`} className="px-3 pb-3 space-y-1.5">
             {/* h-6 matches the height the guess field gives the opposite
                 column, so both sides' chip rows stay on the same line. */}
-            <div className={cn("flex h-6 items-center text-xs font-medium", teamLabelClass(myTeam))}>
+            <div
+              className={cn("flex h-6 items-center text-xs font-medium", teamLabelClass(myTeam))}
+              data-testid={`own-slot-${i + 1}`}
+            >
               {i + 1}. {myKeywords[i]}
             </div>
             <ClueChips clues={myClueSlots[i]} />

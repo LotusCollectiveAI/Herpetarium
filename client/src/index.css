@@ -270,4 +270,40 @@
   .token-black {
     @apply bg-gray-900 border-2 border-gray-700 shadow-md;
   }
+
+  /* Round-reveal tiles. Tailwind 3 ships no 3D-transform utilities, so the
+     flip lives here rather than on the element. Both faces sit in the same
+     grid cell and the tile as a whole is rotated; backface-visibility is
+     what hides whichever face is turned away. */
+  .flip-tile {
+    perspective: 600px;
+  }
+
+  .flip-tile-inner {
+    display: grid;
+    transform-style: preserve-3d;
+    transition: transform 520ms cubic-bezier(0.45, 0.05, 0.3, 1.15);
+  }
+
+  .flip-tile-revealed .flip-tile-inner {
+    transform: rotateY(180deg);
+  }
+
+  .flip-tile-face {
+    grid-area: 1 / 1;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+  }
+
+  .flip-tile-back {
+    transform: rotateY(180deg);
+  }
+
+  /* Someone who asked for less motion still needs the answer, so the face
+     swap stays and only the spin goes. */
+  @media (prefers-reduced-motion: reduce) {
+    .flip-tile-inner {
+      transition-duration: 1ms;
+    }
+  }
 }

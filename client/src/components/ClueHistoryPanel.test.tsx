@@ -118,11 +118,15 @@ describe("opponent keyword slots", () => {
   });
 
   it("always shows the viewer's own keywords, at every phase", () => {
+    // Read the own column by its slots rather than searching the document:
+    // startGame deals each team from the same pool with no cross-team
+    // dedup, so the two teams can share a word, and after the end-of-game
+    // reveal a document-wide search for it would match in both columns.
     for (const game of [twoVersusTwo(), playedOut()]) {
       const { unmount } = renderAsAmber(game);
-      for (const keyword of game.teams.amber.keywords) {
-        expect(screen.getByText(new RegExp(keyword, "i"))).toBeTruthy();
-      }
+      game.teams.amber.keywords.forEach((keyword, i) => {
+        expect(screen.getByTestId(`own-slot-${i + 1}`)).toHaveTextContent(`${i + 1}. ${keyword}`);
+      });
       unmount();
     }
   });

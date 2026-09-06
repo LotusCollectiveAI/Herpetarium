@@ -4,15 +4,26 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Check, X, Target, ArrowRight, Trophy, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useRoundReveal } from "@/lib/useRoundReveal";
+import { RoundRevealView } from "./RoundRevealView";
 
 export function RoundResultsView() {
-  const { gameState, myTeam, isHost, sendMessage } = useGame();
+  const { gameState, myTeam, isHost, sendMessage, isReplay } = useGame();
   const [showTokens, setShowTokens] = useState(false);
 
+  // The viewer's own code goes first: it is the one they have been guessing
+  // at all round, so it carries the suspense the opponent's does not.
+  const revealOrder: ("amber" | "blue")[] = myTeam === "blue" ? ["blue", "amber"] : ["amber", "blue"];
+
+  // Not in replay: there the viewer drives the pace with the scrubber, and
+  // a sequence playing itself out on arrival at a step fights that.
+  const reveal = useRoundReveal(revealOrder.length, !isReplay);
+
   useEffect(() => {
+    if (!reveal.done) return;
     const timer = setTimeout(() => setShowTokens(true), 600);
     return () => clearTimeout(timer);
-  }, []);
+  }, [reveal.done]);
 
   if (!gameState || !myTeam) return null;
 
@@ -190,6 +201,24 @@ export function RoundResultsView() {
       </Card>
     );
   };
+
+  // Uncover one team's code at a time before showing the scored round. The
+  // history rows are already final -- this only paces how they are read.
+  if (!reveal.done && reveal.teamIndex !== null) {
+    const revealTeam = revealOrder[reveal.teamIndex];
+    const revealHistory = revealTeam === "amber" ? latestAmber : latestBlue;
+    if (revealHistory) {
+      return (
+        <RoundRevealView
+          round={gameState.round}
+          team={revealTeam}
+          history={revealHistory}
+          revealed={reveal.revealed}
+          onSkip={reveal.skip}
+        />
+      );
+    }
+  }
 
   return (
     <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto">
