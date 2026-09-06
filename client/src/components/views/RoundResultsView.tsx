@@ -27,19 +27,20 @@ export function RoundResultsView() {
   const latestAmber = amberHistory[amberHistory.length - 1];
   const latestBlue = blueHistory[blueHistory.length - 1];
 
+  // Decoding and being intercepted are scored separately, so a team can do
+  // both in one round. The two clauses are joined into a single sentence
+  // rather than left as two exclamations: "but" when the interception
+  // undercuts a successful decode, "and" when it compounds a failed one.
   const getTeamSummary = (team: "amber" | "blue", latest: typeof latestAmber | undefined) => {
-    if (!latest) return null;
     const teamName = team === "amber" ? "Amber" : "Blue";
-    const parts: string[] = [];
-    if (latest.ownTeamCorrect) {
-      parts.push(`Team ${teamName} decoded correctly!`);
-    } else {
-      parts.push(`Team ${teamName} failed to decode!`);
+    if (!latest) return null;
+
+    const decode = latest.ownTeamCorrect ? "decoded correctly" : "failed to decode";
+    if (!latest.intercepted) {
+      return `Team ${teamName} ${decode}!`;
     }
-    if (latest.intercepted) {
-      parts.push(`Their code was intercepted!`);
-    }
-    return parts.join(" ");
+    const conjunction = latest.ownTeamCorrect ? "but" : "and";
+    return `Team ${teamName} ${decode}, ${conjunction} their code was intercepted!`;
   };
 
   const renderTeamResult = (
@@ -60,8 +61,12 @@ export function RoundResultsView() {
           team === "amber" ? "team-amber" : "team-blue"
         )}>
           <CardTitle className="text-white text-sm flex items-center gap-2">
-            {isGoodOutcome && <Trophy className="h-4 w-4" />}
-            {!latestRound.ownTeamCorrect && <AlertTriangle className="h-4 w-4" />}
+            {/* Keyed off the same condition as the banner colour, so a round
+                that was decoded but intercepted is marked as the bad outcome
+                it is instead of showing no icon at all. */}
+            {isGoodOutcome
+              ? <Trophy className="h-4 w-4" />
+              : <AlertTriangle className="h-4 w-4" />}
             Team {team === "amber" ? "Amber" : "Blue"}
           </CardTitle>
         </CardHeader>
