@@ -4,7 +4,7 @@ import { act, render, screen } from "@testing-library/react";
 import { GameContext } from "@/lib/gameContext";
 import { RoundResultsView } from "./RoundResultsView";
 import { CLASSIC_GAME_RULES } from "@shared/schema";
-import { REVEAL_TIMINGS } from "@/lib/useRoundReveal";
+import { REVEAL_TIMINGS, TILE_SETTLE_MS } from "@/lib/useRoundReveal";
 import type { GameState, RoundHistory, WSMessage } from "@shared/schema";
 
 // Decoding and being intercepted are scored independently, so each team has
@@ -176,6 +176,19 @@ describe("code reveal sequence", () => {
       </GameContext.Provider>,
     );
     expect(revealTitle()).toBe("Round 1 — Team Blue's code");
+  });
+
+  it("marks the guesses only after the tile has finished turning", () => {
+    // The tiles are the reveal and the guess rows are the reaction to it.
+    // Marking a guess the instant a flip starts announced the answer while
+    // the tile was still mid-turn, which gave it away early.
+    renderOutcome(true, false);
+    for (let i = 0; i < 3; i++) tick();
+    expect(tilesFaceUp(), "all three tiles turning").toBe(3);
+    expect(screen.queryByTestId("reveal-verdict-amber"), "verdict before the last tile lands").toBeNull();
+
+    advance(TILE_SETTLE_MS);
+    expect(screen.getByTestId("reveal-verdict-amber")).toBeTruthy();
   });
 
   it("shows the scored round only once both teams have been revealed", () => {

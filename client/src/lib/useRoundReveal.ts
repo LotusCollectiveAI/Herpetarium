@@ -22,6 +22,13 @@ export const REVEAL_TIMINGS = {
 
 export const DIGITS_PER_CODE = 3;
 
+// How long a tile takes to turn, plus a beat. Must stay at or above the
+// transition on .flip-tile-inner in index.css (520ms), because the guess
+// digits above are held back by this: mark them the moment the flip starts
+// and the answer is readable up there before the tile it belongs to has
+// finished showing it.
+export const TILE_SETTLE_MS = 620;
+
 export interface RoundRevealState {
   /** Index into the team order; null once the sequence has finished. */
   teamIndex: number | null;

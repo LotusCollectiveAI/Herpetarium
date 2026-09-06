@@ -1,8 +1,9 @@
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Check, X, FastForward } from "lucide-react";
-import { DIGITS_PER_CODE } from "@/lib/useRoundReveal";
+import { DIGITS_PER_CODE, TILE_SETTLE_MS } from "@/lib/useRoundReveal";
 import type { RoundHistory } from "@shared/schema";
 
 type Team = "amber" | "blue";
@@ -36,23 +37,26 @@ function CodeTile({ team, digit, revealed }: { team: Team; digit: number; reveal
   );
 }
 
-// A submitted guess, with each digit marked as the code digit beneath it is
-// turned over -- so the row fills in with ticks and crosses as the reveal
-// runs, rather than being judged all at once at the end.
+// A submitted guess, with each digit marked once the code digit beneath it
+// has finished turning -- so the row fills in with ticks and crosses as the
+// reveal runs, rather than being judged all at once at the end.
+//
+// `judged` is not the tile count: it trails it, so this row never announces
+// a digit before the tile it belongs to has shown it.
 function GuessRow({
   label,
   guess,
   code,
-  revealed,
+  judged,
   emphasis,
 }: {
   label: string;
   guess: [number, number, number] | null;
   code: [number, number, number];
-  revealed: number;
+  judged: number;
   emphasis: Team;
 }) {
-  const settled = revealed >= DIGITS_PER_CODE;
+  const settled = judged >= DIGITS_PER_CODE;
   const correct = !!guess && guess.every((n, i) => n === code[i]);
 
   return (
@@ -70,22 +74,22 @@ function GuessRow({
       <span className="min-w-0 truncate text-sm">{label}</span>
       <div className="flex shrink-0 items-center gap-1.5">
         {(guess ?? [0, 0, 0]).map((num, i) => {
-          const judged = i < revealed;
+          const isJudged = i < judged;
           return (
             <span
               key={i}
               className={cn(
                 "flex h-7 w-7 items-center justify-center rounded text-sm font-bold transition-colors duration-300",
-                !judged && "bg-muted text-foreground",
-                judged && num === code[i] && "bg-emerald-500 text-white",
-                judged && num !== code[i] && "bg-red-500 text-white",
+                !isJudged && "bg-muted text-foreground",
+                isJudged && num === code[i] && "bg-emerald-500 text-white",
+                isJudged && num !== code[i] && "bg-red-500 text-white",
               )}
             >
               {num}
             </span>
           );
         })}
-        <span className="w-4 shrink-0">
+        <span className="w-4 shrink-0" data-testid={settled ? `reveal-verdict-${emphasis}` : undefined}>
           {settled && (correct
             ? <Check className="h-4 w-4 text-emerald-500" />
             : <X className="h-4 w-4 text-red-500" />)}
@@ -110,6 +114,21 @@ export function RoundRevealView({
 }) {
   const opponent: Team = team === "amber" ? "blue" : "amber";
 
+  // The tiles below are the reveal; the guess digits above are the reaction
+  // to it. Marking a guess digit off `revealed` directly gave the answer
+  // away while its tile was still mid-turn, so the marking trails the flip
+  // by the time the flip takes. Dropping to 0 when the next team comes up
+  // is immediate -- there is nothing to hold back at that point.
+  const [judged, setJudged] = useState(0);
+  useEffect(() => {
+    if (revealed === 0) {
+      setJudged(0);
+      return;
+    }
+    const timer = setTimeout(() => setJudged(revealed), TILE_SETTLE_MS);
+    return () => clearTimeout(timer);
+  }, [revealed]);
+
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-5 p-4">
       <h2 className="text-center text-lg font-semibold text-muted-foreground" data-testid="text-reveal-title">
@@ -131,14 +150,14 @@ export function RoundRevealView({
             label={`${TEAM_LABEL[team]} decoded`}
             guess={history.ownTeamGuess}
             code={history.targetCode}
-            revealed={revealed}
+            judged={judged}
             emphasis={team}
           />
           <GuessRow
             label={`${TEAM_LABEL[opponent]} intercepted`}
             guess={history.opponentGuess}
             code={history.targetCode}
-            revealed={revealed}
+            judged={judged}
             emphasis={opponent}
           />
         </CardContent>
