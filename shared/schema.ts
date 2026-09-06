@@ -421,6 +421,15 @@ export const gameStateSchema = z.object({
 
 export type GameState = z.infer<typeof gameStateSchema>;
 
+// A code position is one of the four keyword slots. The bound matters on the
+// way in because nothing downstream re-checks it: a crafted socket frame
+// could otherwise put any number into a team's round history, and [0, 0, 0]
+// in particular is the sentinel the server masks an opponent's guess with
+// during redaction, so a real guess of it would be indistinguishable from a
+// hidden one. The UI only ever offers 1-4, so this rejects nothing a player
+// can actually do.
+const codeDigitSchema = z.number().int().min(1).max(4);
+
 export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("join"), gameId: z.string(), playerName: z.string(), playerId: z.string().optional() }),
   z.object({ 
@@ -441,9 +450,18 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("start_game") }),
   z.object({ type: z.literal("confirm_teams") }),
   z.object({ type: z.literal("submit_clues"), clues: z.array(z.string()) }),
-  z.object({ type: z.literal("submit_guess"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
-  z.object({ type: z.literal("submit_interception"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
-  z.object({ type: z.literal("update_selection"), selection: z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()]) }),
+  z.object({ type: z.literal("submit_guess"), guess: z.tuple([codeDigitSchema, codeDigitSchema, codeDigitSchema]) }),
+  z.object({ type: z.literal("submit_interception"), guess: z.tuple([codeDigitSchema, codeDigitSchema, codeDigitSchema]) }),
+  z.object({
+    type: z.literal("update_selection"),
+    // Nullable per slot: an unfilled pick is how a teammate shows they have
+    // not decided that position yet.
+    selection: z.tuple([
+      codeDigitSchema.nullable(),
+      codeDigitSchema.nullable(),
+      codeDigitSchema.nullable(),
+    ]),
+  }),
   z.object({ type: z.literal("next_round") }),
   z.object({ type: z.literal("request_state") }),
   z.object({ type: z.literal("new_game_same_players") }),
