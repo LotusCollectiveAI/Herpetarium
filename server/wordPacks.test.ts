@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   ALL_WORDS,
+  EXPANDED_WORDS,
+  dealTeamKeywords,
   getRandomKeywords,
   getWordPacks,
   getRandomKeywordsFromPack,
@@ -88,6 +90,70 @@ describe("getRandomKeywords", () => {
     const before = [...ALL_WORDS];
     getRandomKeywords(4);
     expect(ALL_WORDS).toEqual(before);
+  });
+});
+
+describe("dealTeamKeywords", () => {
+  it("never puts the same word on both boards", () => {
+    // Drawing each team separately made this happen in roughly one game in
+    // ten, and a shared word makes a clue ambiguous however well it is
+    // chosen -- the whole interception mechanic rests on a clue pointing at
+    // one board and not the other.
+    for (let attempt = 0; attempt < 500; attempt++) {
+      const { amber, blue } = dealTeamKeywords(4);
+      expect(amber).toHaveLength(4);
+      expect(blue).toHaveLength(4);
+      expect(new Set([...amber, ...blue]).size).toBe(8);
+    }
+  });
+
+  it("is deterministic for a given seed", () => {
+    const a = dealTeamKeywords(4, createSeededRng("deal-seed"));
+    const b = dealTeamKeywords(4, createSeededRng("deal-seed"));
+    expect(a).toEqual(b);
+  });
+
+  it("gives different boards for different seeds", () => {
+    const a = dealTeamKeywords(4, createSeededRng("deal-one"));
+    const b = dealTeamKeywords(4, createSeededRng("deal-two"));
+    expect(a.amber).not.toEqual(b.amber);
+  });
+
+  it("honours a team size other than four", () => {
+    const { amber, blue } = dealTeamKeywords(3);
+    expect(amber).toHaveLength(3);
+    expect(blue).toHaveLength(3);
+    expect(new Set([...amber, ...blue]).size).toBe(6);
+  });
+});
+
+describe("the expanded pool", () => {
+  it("has no duplicates within itself", () => {
+    // ALL_WORDS runs through a Set, so a word pasted twice would vanish
+    // silently and quietly shrink the pool instead of failing.
+    const seen = new Set<string>();
+    const duplicates = EXPANDED_WORDS.filter(w => !seen.add(w));
+    expect(duplicates).toEqual([]);
+  });
+
+  it("is lowercase and single-word throughout", () => {
+    // Clue matching lowercases and trims; a two-word entry would also break
+    // the keyword-slot display, which assumes one token per card.
+    for (const word of EXPANDED_WORDS) {
+      expect(word, word).toBe(word.toLowerCase().trim());
+      expect(word, word).not.toContain(" ");
+    }
+  });
+
+  it("does not contain either team's name", () => {
+    // "amber" or "blue" as a keyword would collide with the team labels
+    // everywhere they are shown side by side.
+    expect(ALL_WORDS).not.toContain("amber");
+    expect(ALL_WORDS).not.toContain("blue");
+  });
+
+  it("leaves the pool far larger than one game needs", () => {
+    expect(ALL_WORDS.length).toBeGreaterThan(500);
   });
 });
 

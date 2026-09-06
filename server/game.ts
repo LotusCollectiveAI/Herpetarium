@@ -1,5 +1,5 @@
 import { GameState, Player, RoundHistory, AIProvider, AIPlayerConfig, getDefaultConfig, DEFAULT_GAME_RULES, CLASSIC_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
-import { getRandomKeywords } from "./wordPacks";
+import { dealTeamKeywords } from "./wordPacks";
 
 // Shared by both orchestration layers (live websocket.ts games and the
 // headless AI-research runner) so a player's effective AI config is
@@ -216,16 +216,17 @@ export function startGame(game: GameState): GameState {
   // Don't auto-assign anyone yet - let players pick teams in team_setup phase
   // AI players will be assigned when the host confirms teams
 
-  // Generate keywords for each team
-  const amberKeywords = getRandomKeywords(4);
-  const blueKeywords = getRandomKeywords(4);
+  // One draw split between the teams rather than a draw each -- see
+  // dealTeamKeywords for why a word landing on both boards has to be
+  // impossible rather than merely unlikely.
+  const dealt = dealTeamKeywords(4);
 
   return {
     ...game,
     phase: "team_setup",
     teams: {
-      amber: { ...game.teams.amber, keywords: amberKeywords },
-      blue: { ...game.teams.blue, keywords: blueKeywords },
+      amber: { ...game.teams.amber, keywords: dealt.amber },
+      blue: { ...game.teams.blue, keywords: dealt.blue },
     },
   };
 }

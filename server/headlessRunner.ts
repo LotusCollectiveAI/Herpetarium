@@ -35,7 +35,7 @@ import {
   isGameDecided,
   getConfigForPlayer,
 } from "./game";
-import { getRandomKeywords } from "./wordPacks";
+import { dealTeamKeywords } from "./wordPacks";
 import {
   generateClues,
   generateGuess,
@@ -951,11 +951,17 @@ export async function runHeadlessMatch(
   game = startGame(game);
   game = autoAssignRemainingPlayers(game);
 
+  // A single seeded draw split between the teams. Drawing each separately
+  // gave the two boards a word in common in roughly one match in ten, which
+  // for a research run is a confound rather than just an oddity: those
+  // matches measure interception against an ambiguity the model had no way
+  // to resolve. Seeds from before this change deal different words.
+  const dealt = dealTeamKeywords(4, rng);
   game = {
     ...game,
     teams: {
-      amber: { ...game.teams.amber, keywords: getRandomKeywords(4, rng) },
-      blue: { ...game.teams.blue, keywords: getRandomKeywords(4, rng) },
+      amber: { ...game.teams.amber, keywords: dealt.amber },
+      blue: { ...game.teams.blue, keywords: dealt.blue },
     },
   };
 
