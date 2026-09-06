@@ -1,5 +1,5 @@
 import { useGame } from "@/lib/gameContext";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { KeywordCard } from "@/components/KeywordCard";
@@ -122,16 +122,10 @@ export function GuessingView() {
         </Card>
       ) : (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2">
-              <Target className="h-5 w-5" />
-              Make Your Guess
-            </CardTitle>
-            <CardDescription>
-              Which keywords do these clues refer to?
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+          {/* Bare, matching the clue and intercept panels: the banner above
+              already says this is the decode phase, and the keywords and
+              clues are both on screen directly above the input. */}
+          <CardContent className="pt-4">
             <CodeGuess
               team={myTeam}
               clues={myClues ?? undefined}
