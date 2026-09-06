@@ -12,9 +12,18 @@ vi.mock("./matchEvents", () => ({
   emitMatchEvent: async () => {},
   clearMatchEventSequence: () => {},
 }));
+// Creating the match row is a real database round-trip in production, and
+// the window it opens is what the duplicate-match test needs, so its
+// duration is adjustable here too.
+let createMatchLatencyMs = 0;
+let nextMatchId = 1;
+const createMatch = vi.fn(async () => {
+  if (createMatchLatencyMs > 0) await new Promise(r => setTimeout(r, createMatchLatencyMs));
+  return { id: nextMatchId++ };
+});
 vi.mock("./storage", () => ({
   storage: {
-    createMatch: async () => ({ id: 1 }),
+    createMatch: (...args: unknown[]) => createMatch(...(args as [])),
     createAiCallLog: async () => {},
     createMatchRound: async () => {},
     updateMatch: async () => {},
@@ -249,6 +258,58 @@ describe("sendGameState fan-out", () => {
     expect(clients.host.latestState()!.currentClues.amber).toBeNull();
 
     Object.values(clients).forEach(c => c.close());
+  });
+});
+
+describe("confirm_teams", () => {
+  it("creates one match row even if it is confirmed twice", async () => {
+    // A double-clicked button was enough: creating the match row is a
+    // database round-trip, and the phase only leaves team_setup after it,
+    // so the second message passed the same phase check and created a
+    // second row. Both then competed to be the game's record, and the
+    // replay resolved to whichever one had received no rounds.
+    createMatch.mockClear();
+    createMatchLatencyMs = 400;
+    try {
+      const gameId = `TEST${++gameCounter}`;
+      const clients = await Promise.all([
+        Client.connect(), Client.connect(), Client.connect(), Client.connect(),
+      ]);
+      const [host, amber2, blue1, blue2] = clients;
+
+      host.send({ type: "join", gameId, playerName: "Host" });
+      await waitFor(() => !!host.latestState(), "host joined");
+      amber2.send({ type: "join", gameId, playerName: "AmberTwo" });
+      blue1.send({ type: "join", gameId, playerName: "BlueOne" });
+      blue2.send({ type: "join", gameId, playerName: "BlueTwo" });
+      await waitFor(() => (host.latestState()?.players.length ?? 0) === 4, "four players");
+
+      host.send({ type: "join_team", team: "amber" });
+      amber2.send({ type: "join_team", team: "amber" });
+      blue1.send({ type: "join_team", team: "blue" });
+      blue2.send({ type: "join_team", team: "blue" });
+      await waitFor(
+        () => host.latestState()?.players.every(p => p.team !== null) ?? false,
+        "teams chosen",
+      );
+
+      host.send({ type: "start_game" });
+      await waitFor(() => host.latestState()?.phase === "team_setup", "team setup");
+
+      host.send({ type: "confirm_teams" });
+      host.send({ type: "confirm_teams" });
+
+      await waitFor(() => host.latestState()?.phase === "giving_clues", "clue phase");
+      await new Promise(r => setTimeout(r, 600));
+
+      expect(createMatch).toHaveBeenCalledTimes(1);
+      // The round must still start exactly once, not be swallowed with it.
+      expect(host.latestState()!.round).toBe(1);
+
+      clients.forEach(c => c.close());
+    } finally {
+      createMatchLatencyMs = 0;
+    }
   });
 });
 

@@ -337,8 +337,24 @@ export async function registerRoutes(
         return res.status(404).json({ error: "Match not found" });
       }
 
-      const events = await storage.getMatchEvents(match.id);
-      res.json({ matchId: match.id, gameId, events });
+      // Read by gameId rather than by the resolved match id. Events carry a
+      // sequence that is monotonic per game, so this returns the game's
+      // whole stream in order however many match rows exist for it -- which
+      // matters for games recorded before confirm_teams was made
+      // re-entrant, where the duplicate row can be the one getMatchByGameId
+      // returns and reading by its id yields nothing.
+      const events = await storage.getMatchEventsByGameId(gameId);
+
+      // With duplicates the first event can belong to the row that lost the
+      // race and received nothing else, so report the one most of the
+      // stream was written against.
+      const perMatch = new Map<number, number>();
+      for (const event of events) {
+        if (event.matchId != null) perMatch.set(event.matchId, (perMatch.get(event.matchId) ?? 0) + 1);
+      }
+      const matchId = [...perMatch.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? match.id;
+
+      res.json({ matchId, gameId, events });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch match events" });
     }

@@ -371,6 +371,10 @@ async function emitRoundStartedEvent(gameId: string, game: GameState) {
 // guard against the redundant submission itself, independently of this.)
 const aiTurnInProgress = new Set<string>();
 
+// Games whose confirm_teams handler is mid-flight. See the handler for why
+// the phase check alone leaves a window open.
+const confirmingTeams = new Set<string>();
+
 async function processAITurn(gameId: string) {
   if (aiTurnInProgress.has(gameId)) return;
   aiTurnInProgress.add(gameId);
@@ -972,27 +976,42 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         return;
       }
 
-      game = assignedGame;
-      games.set(client.gameId, game);
+      // The phase check above is not enough on its own: creating the match
+      // row is a database round-trip, and the phase only leaves team_setup
+      // after it. A second confirm_teams arriving in that window -- a
+      // double-clicked button is enough -- passes the same check and
+      // creates a second match row for the one game. Both rows then compete
+      // to be the game's record, and getMatchByGameId picks by createdAt,
+      // which for two near-simultaneous inserts can resolve to the empty
+      // one and leave the replay showing no rounds.
+      if (confirmingTeams.has(client.gameId)) return;
+      confirmingTeams.add(client.gameId);
 
-      await createMatchRecord(client.gameId, game);
+      try {
+        game = assignedGame;
+        games.set(client.gameId, game);
 
-      const createdMatchId = gameMatchIds.get(client.gameId) ?? null;
-      await emitMatchEvent(client.gameId, createdMatchId, {
-        eventType: "game_created",
-        rules: game.rules,
-        players: game.players,
-        teamSize: Math.max(amberPlayers.length, bluePlayers.length),
-      });
+        await createMatchRecord(client.gameId, game);
 
-      let updated = startNewRound(game);
-      games.set(client.gameId, updated);
-      sendGameState(client.gameId);
-      log(`Teams confirmed, Round 1 started for game ${client.gameId}`, "websocket");
+        const createdMatchId = gameMatchIds.get(client.gameId) ?? null;
+        await emitMatchEvent(client.gameId, createdMatchId, {
+          eventType: "game_created",
+          rules: game.rules,
+          players: game.players,
+          teamSize: Math.max(amberPlayers.length, bluePlayers.length),
+        });
 
-      await emitRoundStartedEvent(client.gameId, updated);
+        let updated = startNewRound(game);
+        games.set(client.gameId, updated);
+        sendGameState(client.gameId);
+        log(`Teams confirmed, Round 1 started for game ${client.gameId}`, "websocket");
 
-      setTimeout(() => processAITurn(client.gameId), 500);
+        await emitRoundStartedEvent(client.gameId, updated);
+
+        setTimeout(() => processAITurn(client.gameId), 500);
+      } finally {
+        confirmingTeams.delete(client.gameId);
+      }
       break;
     }
     
