@@ -124,15 +124,18 @@ export function RoundRevealView({
         </CardHeader>
 
         <CardContent className="space-y-2 pt-4">
+          {/* No "Team " prefix: at 375px the row truncated mid-verb, and
+              "decoded" / "intercepted" is the part that says what the digits
+              beside it are. The card header already names the team. */}
           <GuessRow
-            label={`Team ${TEAM_LABEL[team]} decoded`}
+            label={`${TEAM_LABEL[team]} decoded`}
             guess={history.ownTeamGuess}
             code={history.targetCode}
             revealed={revealed}
             emphasis={team}
           />
           <GuessRow
-            label={`Team ${TEAM_LABEL[opponent]} intercepted`}
+            label={`${TEAM_LABEL[opponent]} intercepted`}
             guess={history.opponentGuess}
             code={history.targetCode}
             revealed={revealed}
