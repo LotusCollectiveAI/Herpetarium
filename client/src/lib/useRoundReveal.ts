@@ -8,12 +8,16 @@ import { useEffect, useRef, useState } from "react";
 // already in the round history the server sent, so nothing here decides an
 // outcome -- skipping it, or never running it at all, shows the same result.
 
+// Paced so each digit has finished turning, and been read against both
+// guesses above it, before the next one starts. The flip itself takes 520ms
+// (.flip-tile-inner in index.css), so betweenDigits has to stay comfortably
+// clear of that or the tiles overlap mid-spin.
 export const REVEAL_TIMINGS = {
   // Long enough to read the two guesses before the first digit lands.
-  beforeFirstDigit: 800,
-  betweenDigits: 620,
+  beforeFirstDigit: 1600,
+  betweenDigits: 1300,
   // Hold on the completed code before moving to the other team.
-  afterLastDigit: 1100,
+  afterLastDigit: 2200,
 } as const;
 
 export const DIGITS_PER_CODE = 3;
