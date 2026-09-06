@@ -58,6 +58,7 @@ import { analyzeSprintMatches } from "./researchAnalyzer";
 import { evaluatePendingPatchReviews } from "./rollbackEvaluator";
 import { evaluateSprint } from "./sprintEvaluator";
 import { storage } from "./storage";
+import { getCostTracker, clearCostTracker } from "./costTracker";
 
 const ARENA_SOURCE = "arena";
 const MATCHMAKING_BUCKET_ORDER: MatchmakingBucket[] = ["near_peer", "diagnostic", "novelty", "baseline"];
@@ -67,6 +68,16 @@ const DECEPTION_CATEGORIES: DeceptionCategory[] = [
   "observation_sensitivity",
 ];
 const ARENA_LONGFORM_RULES_ENABLED = /^(1|true|yes|on)$/i.test(process.env.ARENA_LONGFORM_RULES_ENABLED || "");
+
+const activeArenas = new Map<string, boolean>();
+
+export function isArenaRunning(id: string): boolean {
+  return activeArenas.get(id) === true;
+}
+
+export function stopArena(id: string): void {
+  activeArenas.set(id, false);
+}
 
 void coachAutopsy;
 
@@ -992,9 +1003,7 @@ async function buildCoachMetaMetrics(runId: string): Promise<CoachMetaMetrics> {
 
 async function persistArenaRunProgress(slot: ArenaRuntimeSlot): Promise<string | null> {
   const matchIds = getUniqueMatchIds(slot.state);
-  const recordedCost = matchIds.length > 0
-    ? await storage.getCumulativeCost(matchIds)
-    : 0;
+  const recordedCost = await getCostTracker(slot.runId).update(matchIds);
   const actualCostUsd = recordedCost > 0 ? recordedCost.toFixed(6) : null;
 
   await storage.updateCoachRun(slot.runId, {
@@ -1156,7 +1165,7 @@ function toArenaResultFromStorage(
 
 async function finalizeArenaRuns(
   slots: ArenaRuntimeSlot[],
-  status: "completed" | "failed",
+  status: "completed" | "failed" | "stopped" | "budget_exceeded",
   completedAt: Date,
 ): Promise<void> {
   await Promise.all(slots.map(async (slot) => {
@@ -1171,6 +1180,8 @@ async function finalizeArenaRuns(
       actualCostUsd,
       completedAt,
     });
+
+    clearCostTracker(slot.runId);
   }));
 }
 
@@ -1202,9 +1213,13 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
   const foiaDelaySprints = Math.max(0, Math.floor(config.foiaDelaySprints ?? 0));
   const slots: ArenaRuntimeSlot[] = [];
   const pairingHistory = createPairingHistory();
+  const budgetCapUsd = config.coachConfig.budgetCapUsd;
   let sprintsCompleted = 0;
   let totalGamesPlayed = 0;
   let priorArenaBriefing: string | undefined;
+  let stoppedEarlyStatus: "stopped" | "budget_exceeded" | null = null;
+
+  activeArenas.set(config.arenaId, true);
 
   try {
     for (const [slotIndex, seedGenome] of config.seedGenomes.entries()) {
@@ -1247,6 +1262,12 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
     );
 
     for (let sprintIndex = 0; sprintIndex < config.totalSprints; sprintIndex++) {
+      if (!activeArenas.get(config.arenaId)) {
+        logArena(`Arena ${config.arenaId} stopped before sprint ${sprintIndex + 1}`);
+        stoppedEarlyStatus = "stopped";
+        break;
+      }
+
       const sprintNumber = sprintIndex + 1;
       const pairings = buildSprintPairings(slots, config.matchesPerSprint, pairingHistory, config);
       const pairingTasks = pairings.map((pairing, pairingIndex) => async (): Promise<PairingResult> => {
@@ -1553,6 +1574,24 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
       logArena(`Arena sprint ${sprintNumber} complete: [${progress}]`);
       logArena(`Arena sprint ${sprintNumber} matchmaking: ${formatBucketDistribution(pairings)}`);
 
+      if (budgetCapUsd !== undefined) {
+        // Every arena match pairs exactly two slots, and both slots record
+        // the same matchId in their own state.sprintHistory -- so summing
+        // each slot's own tracker (as persistArenaRunProgress does, above)
+        // would double-count every shared match. This needs its own
+        // arena-wide tracker instead, fed by the flattened (duplicate-
+        // containing) matchIds across all slots; duplicates within one
+        // update() call are harmless since the underlying SQL IN-list and
+        // the tracker's own priced-id Set both collapse them.
+        const allMatchIds = slots.flatMap((slot) => getUniqueMatchIds(slot.state));
+        const totalCost = await getCostTracker(`arena:${config.arenaId}`).update(allMatchIds);
+        if (totalCost >= budgetCapUsd) {
+          logArena(`Arena ${config.arenaId} budget cap of $${budgetCapUsd.toFixed(2)} reached after sprint ${sprintNumber} (spent $${totalCost.toFixed(2)}). Stopping.`);
+          stoppedEarlyStatus = "budget_exceeded";
+          break;
+        }
+      }
+
       // Compute arena briefing for the next sprint (1-sprint delay)
       try {
         const briefing = await buildArenaBriefing(slots, sprintNumber);
@@ -1562,7 +1601,7 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
       }
     }
 
-    await finalizeArenaRuns(slots, "completed", new Date());
+    await finalizeArenaRuns(slots, stoppedEarlyStatus ?? "completed", new Date());
 
     return {
       arenaId: config.arenaId,
@@ -1580,5 +1619,8 @@ export async function runArena(config: ArenaConfig): Promise<ArenaResult> {
     }
 
     throw error;
+  } finally {
+    activeArenas.delete(config.arenaId);
+    clearCostTracker(`arena:${config.arenaId}`);
   }
 }

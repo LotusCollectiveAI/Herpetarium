@@ -7,6 +7,8 @@ import {
   type InsertMatchRound,
   type AiCallLog,
   type InsertAiCallLog,
+  type MatchEvent,
+  type InsertMatchEvent,
   type Tournament,
   type InsertTournament,
   type TournamentMatch,
@@ -43,6 +45,7 @@ import {
   matches,
   matchRounds,
   aiCallLogs,
+  matchEvents,
   tournaments,
   tournamentMatches,
   experiments,
@@ -84,6 +87,10 @@ export interface IStorage {
   createAiCallLog(log: InsertAiCallLog): Promise<AiCallLog>;
   getAiCallLogs(matchId: number): Promise<AiCallLog[]>;
   getAllAiCallLogs(matchIds?: number[]): Promise<AiCallLog[]>;
+
+  createMatchEvent(event: InsertMatchEvent): Promise<MatchEvent>;
+  getMatchEvents(matchId: number): Promise<MatchEvent[]>;
+  getMatchEventsByGameId(gameId: string): Promise<MatchEvent[]>;
 
   createTournament(data: InsertTournament): Promise<Tournament>;
   updateTournament(id: number, data: Partial<InsertTournament>): Promise<Tournament | undefined>;
@@ -130,6 +137,7 @@ export interface IStorage {
   createSprintEvaluation(entry: InsertSprintEvaluationRecord): Promise<SprintEvaluationRecord>;
   getSprintEvaluation(runId: string, sprintNumber: number): Promise<SprintEvaluationRecord | undefined>;
   getSprintEvaluations(runId: string): Promise<SprintEvaluationRecord[]>;
+  getSprintEvaluationsForRuns(runIds: string[]): Promise<SprintEvaluationRecord[]>;
   updateSprintEvaluation(runId: string, sprintNumber: number, evaluation: SprintEvaluation): Promise<SprintEvaluationRecord | undefined>;
   createAnchorEvaluation(entry: InsertAnchorEvaluationRecord): Promise<AnchorEvaluationRecord>;
   getAnchorEvaluations(runId: string, sprintNumber?: number): Promise<AnchorEvaluationRecord[]>;
@@ -146,6 +154,7 @@ export interface IStorage {
   updateStrategyGenome(id: number, data: Partial<InsertStrategyGenome>): Promise<StrategyGenome | undefined>;
   getStrategyGenomes(evolutionRunId: number, generationNumber?: number): Promise<StrategyGenome[]>;
   getStrategyGenome(id: number): Promise<StrategyGenome | undefined>;
+  getStrategyGenomesByIds(ids: number[]): Promise<StrategyGenome[]>;
   getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]>;
 
   createTeamChatter(entry: InsertTeamChatter): Promise<TeamChatter>;
@@ -257,6 +266,19 @@ export class DatabaseStorage implements IStorage {
     if (matchIds && matchIds.length === 0) return [];
     const where = matchIds ? inArray(aiCallLogs.matchId, matchIds) : undefined;
     return db.select().from(aiCallLogs).where(where).orderBy(aiCallLogs.createdAt);
+  }
+
+  async createMatchEvent(event: InsertMatchEvent): Promise<MatchEvent> {
+    const [created] = await db.insert(matchEvents).values(event).returning();
+    return created;
+  }
+
+  async getMatchEvents(matchId: number): Promise<MatchEvent[]> {
+    return db.select().from(matchEvents).where(eq(matchEvents.matchId, matchId)).orderBy(matchEvents.sequence);
+  }
+
+  async getMatchEventsByGameId(gameId: string): Promise<MatchEvent[]> {
+    return db.select().from(matchEvents).where(eq(matchEvents.gameId, gameId)).orderBy(matchEvents.sequence);
   }
 
   async getMatchIdsWithTraces(matchIds: number[]): Promise<Set<number>> {
@@ -505,6 +527,13 @@ export class DatabaseStorage implements IStorage {
       .orderBy(sprintEvaluations.sprintNumber, sprintEvaluations.createdAt, sprintEvaluations.id);
   }
 
+  async getSprintEvaluationsForRuns(runIds: string[]): Promise<SprintEvaluationRecord[]> {
+    if (runIds.length === 0) return [];
+    return db.select().from(sprintEvaluations)
+      .where(inArray(sprintEvaluations.runId, runIds))
+      .orderBy(sprintEvaluations.runId, sprintEvaluations.sprintNumber, sprintEvaluations.createdAt, sprintEvaluations.id);
+  }
+
   async updateSprintEvaluation(
     runId: string,
     sprintNumber: number,
@@ -631,6 +660,11 @@ export class DatabaseStorage implements IStorage {
   async getStrategyGenome(id: number): Promise<StrategyGenome | undefined> {
     const [genome] = await db.select().from(strategyGenomes).where(eq(strategyGenomes.id, id)).limit(1);
     return genome;
+  }
+
+  async getStrategyGenomesByIds(ids: number[]): Promise<StrategyGenome[]> {
+    if (ids.length === 0) return [];
+    return db.select().from(strategyGenomes).where(inArray(strategyGenomes.id, ids));
   }
 
   async getTopGenomes(evolutionRunId: number, generationNumber: number, limit: number): Promise<StrategyGenome[]> {

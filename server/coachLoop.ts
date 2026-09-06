@@ -24,6 +24,7 @@ import { compileGenomePrompts } from "./genomeCompiler";
 import { runHeadlessMatch } from "./headlessRunner";
 import { log } from "./index";
 import { storage } from "./storage";
+import { getCostTracker, clearCostTracker } from "./costTracker";
 
 type Team = "amber" | "blue";
 export type CoachDecision = "commit" | "revert";
@@ -997,10 +998,14 @@ async function persistCoachCallLog(
   }
 }
 
-async function getRecordedMatchCostUsd(state: CoachState): Promise<number> {
+async function getRecordedMatchCostUsd(runId: string, state: CoachState): Promise<number> {
   const matchIds = state.sprintHistory.flatMap((sprint) => sprint.matchResults.map((match) => match.matchId));
   if (matchIds.length === 0) return 0;
-  return storage.getCumulativeCost(matchIds);
+  // Keyed by the run's own id since this is called from several separate
+  // entry points (this run's own sprint loop, persistCoachRunProgress, run
+  // finalization, and arena/ecology-driven runs) that don't share a
+  // closure -- see server/costTracker.ts.
+  return getCostTracker(runId).update(matchIds);
 }
 
 function toIsoString(value: Date | null | undefined): string | undefined {
@@ -1172,7 +1177,7 @@ function toCoachRunRecord(run: PersistedCoachRun, sprints: PersistedCoachSprint[
 }
 
 export async function persistCoachRunProgress(runId: string, state: CoachState): Promise<string | null> {
-  const recordedCost = await getRecordedMatchCostUsd(state);
+  const recordedCost = await getRecordedMatchCostUsd(runId, state);
   const actualCostUsd = recordedCost > 0 ? recordedCost.toFixed(6) : null;
 
   await storage.updateCoachRun(runId, {
@@ -1543,7 +1548,7 @@ async function runCoachLoopInternal(config: CoachConfig, initialState: CoachStat
     }
 
     if (config.budgetCapUsd !== undefined) {
-      const recordedCost = await getRecordedMatchCostUsd(state);
+      const recordedCost = await getRecordedMatchCostUsd(runId, state);
       await storage.updateCoachRun(runId, {
         actualCostUsd: recordedCost > 0 ? recordedCost.toFixed(6) : null,
       });
@@ -1677,7 +1682,7 @@ export async function runCoachRun(id: string): Promise<CoachState> {
     const latestRun = await storage.getCoachRun(id);
     const stopped = activeCoachRuns.get(id) === false && latestRun?.status === "stopped";
     const status: CoachRunStatus = stopped ? "stopped" : outcome.budgetExceeded ? "budget_exceeded" : "completed";
-    const actualCostUsd = await getRecordedMatchCostUsd(outcome.state);
+    const actualCostUsd = await getRecordedMatchCostUsd(id, outcome.state);
 
     await storage.updateCoachRun(id, {
       status,
@@ -1689,9 +1694,11 @@ export async function runCoachRun(id: string): Promise<CoachState> {
     });
 
     activeCoachRuns.delete(id);
+    clearCostTracker(id);
     return outcome.state;
   } catch (error) {
     activeCoachRuns.delete(id);
+    clearCostTracker(id);
     await storage.updateCoachRun(id, {
       status: "failed",
       completedAt: new Date(),

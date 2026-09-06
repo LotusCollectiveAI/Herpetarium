@@ -1,5 +1,14 @@
-import { GameState, Player, RoundHistory, AIProvider, DEFAULT_GAME_RULES, type GameRules } from "@shared/schema";
-import { getRandomKeywords } from "./wordPacks";
+import { GameState, Player, RoundHistory, AIProvider, AIPlayerConfig, getDefaultConfig, DEFAULT_GAME_RULES, CLASSIC_GAME_RULES, MAX_GAME_PLAYERS, MAX_TEAM_PLAYERS, type GameRules } from "@shared/schema";
+import { dealTeamKeywords } from "./wordPacks";
+
+// Shared by both orchestration layers (live websocket.ts games and the
+// headless AI-research runner) so a player's effective AI config is
+// resolved identically regardless of which one is driving the match.
+export function getConfigForPlayer(player: Player): AIPlayerConfig {
+  if (player.aiConfig) return player.aiConfig;
+  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
+  return getDefaultConfig("chatgpt");
+}
 
 export function createSeededRng(seed: string): () => number {
   let h = 0;
@@ -29,9 +38,14 @@ function seededShuffleArray<T>(array: T[], rng: () => number): T[] {
 }
 
 export function generateGameId(): string {
+  // 6 chars over this 32-symbol alphabet is ~1.07B combinations (vs. ~1.05M at 4 chars) --
+  // matches are looked up by gameId alone for replay/export, with no DB uniqueness
+  // constraint, so a collision silently serves the wrong match's data. 4 chars put the
+  // 50%-collision point around ~1,200 games, comfortably within this app's real usage;
+  // 6 pushes that to ~38,700.
   const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
   let result = "";
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 6; i++) {
     result += chars.charAt(Math.floor(Math.random() * chars.length));
   }
   return result;
@@ -81,7 +95,13 @@ function comparePenaltyBurden(
   return null;
 }
 
-export function createNewGame(hostId: string, hostName: string, rules: GameRules = DEFAULT_GAME_RULES): GameState {
+// Live human games default to CLASSIC_GAME_RULES (2 intercepts, no minimum
+// round count) so they play out the way anyone who knows the real Decrypto
+// board game would expect. DEFAULT_GAME_RULES (3 intercepts, min 3 rounds)
+// exists for the AI-research paths (Tournament/Series/Evolution/Coach/Arena),
+// which explicitly pass config.gameRules || DEFAULT_GAME_RULES themselves --
+// they don't rely on this default, so this only affects live games.
+export function createNewGame(hostId: string, hostName: string, rules: GameRules = CLASSIC_GAME_RULES): GameState {
   return {
     id: generateGameId(),
     phase: "lobby",
@@ -102,6 +122,9 @@ export function createNewGame(hostId: string, hostName: string, rules: GameRules
       amber: { ownTeam: null, opponent: null },
       blue: { ownTeam: null, opponent: null },
     },
+    decodeSubmitter: { amber: null, blue: null },
+    interceptSubmitter: { amber: null, blue: null },
+    currentSelections: { amber: {}, blue: {} },
     teams: {
       amber: { keywords: [], whiteTokens: 0, blackTokens: 0, history: [] },
       blue: { keywords: [], whiteTokens: 0, blackTokens: 0, history: [] },
@@ -110,8 +133,50 @@ export function createNewGame(hostId: string, hostName: string, rules: GameRules
   };
 }
 
+// Picks who is allowed to submit this team's decode guess and interception
+// guess for the round. A human always gets the job over an AI teammate
+// whenever one is eligible, rotating round-robin by join order so the same
+// person isn't stuck deciding every round.
+//
+// The two roles have different eligibility: decoding excludes the current
+// round's clue-giver (they already know the code), but intercepting doesn't
+// -- the clue-giver has no more insight into the opponent's code than
+// anyone else. Normally the same person handles both jobs for simplicity.
+// But if the team's only human happens to be this round's clue-giver,
+// decoding is forced to an AI teammate -- and reusing that same AI for
+// interception would leave a human who *could* be in control sitting out
+// for the whole round. So interception falls back to finding its own
+// human instead of blindly mirroring decode's pick.
+function getDesignatedSubmitters(
+  players: Player[],
+  team: "amber" | "blue",
+  round: number,
+  clueGiverId: string | null,
+): { decode: string | null; intercept: string | null } {
+  const teamPlayers = players.filter(p => p.team === team);
+  if (teamPlayers.length === 0) return { decode: null, intercept: null };
+
+  const decodeEligible = teamPlayers.filter(p => p.id !== clueGiverId);
+  const decodeHumans = decodeEligible.filter(p => !p.isAI);
+  const decodePool = decodeHumans.length > 0 ? decodeHumans : decodeEligible;
+  const decode = decodePool.length > 0 ? decodePool[(round - 1) % decodePool.length].id : null;
+
+  const decodeSubmitterIsHuman = decodeHumans.some(p => p.id === decode);
+  let intercept: string | null;
+  if (decodeSubmitterIsHuman) {
+    intercept = decode;
+  } else {
+    const interceptHumans = teamPlayers.filter(p => !p.isAI);
+    intercept = interceptHumans.length > 0
+      ? interceptHumans[(round - 1) % interceptHumans.length].id
+      : decode;
+  }
+
+  return { decode, intercept };
+}
+
 export function addPlayer(game: GameState, player: Player): GameState {
-  if (game.players.length >= 6) {
+  if (game.players.length >= MAX_GAME_PLAYERS) {
     throw new Error("Game is full");
   }
   if (game.phase !== "lobby") {
@@ -130,10 +195,18 @@ export function removePlayer(game: GameState, playerId: string): GameState {
   };
 }
 
-export function assignTeam(game: GameState, playerId: string, team: "amber" | "blue"): GameState {
+// A null team puts the player back in the unassigned pool, where
+// autoAssignRemainingPlayers will place them at confirm time.
+export function assignTeam(game: GameState, playerId: string, team: "amber" | "blue" | null): GameState {
+  if (team !== null) {
+    const currentTeamSize = game.players.filter(p => p.team === team && p.id !== playerId).length;
+    if (currentTeamSize >= MAX_TEAM_PLAYERS) {
+      return game;
+    }
+  }
   return {
     ...game,
-    players: game.players.map(p => 
+    players: game.players.map(p =>
       p.id === playerId ? { ...p, team } : p
     ),
   };
@@ -143,16 +216,17 @@ export function startGame(game: GameState): GameState {
   // Don't auto-assign anyone yet - let players pick teams in team_setup phase
   // AI players will be assigned when the host confirms teams
 
-  // Generate keywords for each team
-  const amberKeywords = getRandomKeywords(4);
-  const blueKeywords = getRandomKeywords(4);
+  // One draw split between the teams rather than a draw each -- see
+  // dealTeamKeywords for why a word landing on both boards has to be
+  // impossible rather than merely unlikely.
+  const dealt = dealTeamKeywords(4);
 
   return {
     ...game,
     phase: "team_setup",
     teams: {
-      amber: { ...game.teams.amber, keywords: amberKeywords },
-      blue: { ...game.teams.blue, keywords: blueKeywords },
+      amber: { ...game.teams.amber, keywords: dealt.amber },
+      blue: { ...game.teams.blue, keywords: dealt.blue },
     },
   };
 }
@@ -168,8 +242,20 @@ export function autoAssignRemainingPlayers(game: GameState): GameState {
   // Build assignment map
   const assignments = new Map<string, "amber" | "blue">();
   for (const player of unassigned) {
-    // Assign to smaller team, prefer blue if equal (humans typically pick amber first)
-    const team: "amber" | "blue" = blueCount < amberCount ? "blue" : (amberCount < blueCount ? "amber" : "blue");
+    const amberOpen = amberCount < MAX_TEAM_PLAYERS;
+    const blueOpen = blueCount < MAX_TEAM_PLAYERS;
+
+    // Assign to smaller team, prefer blue if equal (humans typically pick
+    // amber first), but never push a team past its cap.
+    let team: "amber" | "blue";
+    if (amberOpen && blueOpen) {
+      team = blueCount < amberCount ? "blue" : (amberCount < blueCount ? "amber" : "blue");
+    } else if (amberOpen) {
+      team = "amber";
+    } else {
+      team = "blue";
+    }
+
     assignments.set(player.id, team);
     if (team === "amber") {
       amberCount++;
@@ -201,7 +287,10 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
   
   const amberCode = generateSecretCode(rng);
   const blueCode = generateSecretCode(rng);
-  
+
+  const amberSubmitters = getDesignatedSubmitters(game.players, "amber", newRound, amberClueGiver);
+  const blueSubmitters = getDesignatedSubmitters(game.players, "blue", newRound, blueClueGiver);
+
   return {
     ...game,
     phase: "giving_clues",
@@ -213,15 +302,63 @@ export function startNewRound(game: GameState, rng?: () => number): GameState {
       amber: { ownTeam: null, opponent: null },
       blue: { ownTeam: null, opponent: null },
     },
+    decodeSubmitter: { amber: amberSubmitters.decode, blue: blueSubmitters.decode },
+    interceptSubmitter: { amber: amberSubmitters.intercept, blue: blueSubmitters.intercept },
+    currentSelections: { amber: {}, blue: {} },
+  };
+}
+
+// Whether the round that was just evaluated actually decided the game --
+// either a winner was determined, or the round limit was hit (which forces
+// a decision, win or tie, via evaluateRound's comparePenaltyBurden call).
+export function isGameDecided(game: GameState): boolean {
+  return game.winner !== null || game.round >= game.rules.maxRounds;
+}
+
+// Called when the host (or, for all-AI games, the server itself) continues
+// past round_results: moves on to the next round, or -- if this round
+// decided the game -- finalizes the phase to game_over.
+export function advanceFromRoundResults(game: GameState): GameState {
+  return isGameDecided(game) ? { ...game, phase: "game_over" } : startNewRound(game);
+}
+
+export function updateSelection(
+  game: GameState,
+  team: "amber" | "blue",
+  playerId: string,
+  selection: [number | null, number | null, number | null],
+): GameState {
+  return {
+    ...game,
+    currentSelections: {
+      ...game.currentSelections,
+      [team]: {
+        ...game.currentSelections[team],
+        [playerId]: selection,
+      },
+    },
   };
 }
 
 export function submitClues(game: GameState, team: "amber" | "blue", clues: string[]): GameState {
+  // Idempotency guard: a redundant call for a team that's already submitted
+  // (e.g. two overlapping AI-turn dispatches racing each other) must not
+  // silently swap out the clues teammates may already be decoding.
+  if (game.currentClues[team] !== null) {
+    return game;
+  }
+
+  // Normalize casing here so stored clues don't depend on who authored
+  // them. The clue input uppercases what a human types, while the AI
+  // response parser lowercases what a model returns -- both render through
+  // the same uppercasing CSS, so the difference is invisible in game but
+  // reaches the match_rounds rows, the CSV/JSON exports, and any
+  // case-sensitive analysis downstream.
   const updatedClues = {
     ...game.currentClues,
-    [team]: clues,
+    [team]: clues.map(clue => clue.trim().toLowerCase()),
   };
-  
+
   // Check if both teams have submitted clues
   const bothSubmitted = updatedClues.amber !== null && updatedClues.blue !== null;
   
@@ -233,6 +370,14 @@ export function submitClues(game: GameState, team: "amber" | "blue", clues: stri
 }
 
 export function submitOwnTeamGuess(game: GameState, team: "amber" | "blue", guess: [number, number, number]): GameState {
+  // Idempotency guard: a redundant call for a team that's already submitted
+  // (e.g. two overlapping AI-turn dispatches racing each other) must not
+  // re-run the phase transition, which would wipe out live interception
+  // picks teammates had already started making in the meantime.
+  if (game.currentGuesses[team].ownTeam !== null) {
+    return game;
+  }
+
   const updatedGuesses = {
     ...game.currentGuesses,
     [team]: {
@@ -243,15 +388,26 @@ export function submitOwnTeamGuess(game: GameState, team: "amber" | "blue", gues
   
   // Check if both teams have guessed
   const bothGuessed = updatedGuesses.amber.ownTeam !== null && updatedGuesses.blue.ownTeam !== null;
-  
+
   return {
     ...game,
     currentGuesses: updatedGuesses,
     phase: bothGuessed ? "opponent_intercepting" : game.phase,
+    // Moving from decoding to intercepting is a new guessing task; clear
+    // in-progress picks so decode-phase bubbles don't linger into it.
+    currentSelections: bothGuessed ? { amber: {}, blue: {} } : game.currentSelections,
   };
 }
 
 export function submitInterception(game: GameState, team: "amber" | "blue", guess: [number, number, number]): GameState {
+  // Idempotency guard: a redundant call for a team that's already submitted
+  // (e.g. two overlapping AI-turn dispatches racing each other) must not
+  // re-run evaluateRound -- that would double-count tokens and history for
+  // the same round, and could end the game a round earlier than it should.
+  if (game.currentGuesses[team].opponent !== null) {
+    return game;
+  }
+
   const updatedGuesses = {
     ...game.currentGuesses,
     [team]: {
@@ -347,7 +503,11 @@ export function evaluateRound(game: GameState): GameState {
 
   return {
     ...game,
-    phase: winner || maxRoundsReached ? "game_over" : "round_results",
+    // Always land on round_results first, even when this round decided
+    // the game, so the final round's outcome is shown before the win
+    // screen instead of being skipped straight past. advanceFromRoundResults
+    // is what actually moves on to game_over, once someone continues.
+    phase: "round_results",
     winner,
     teams: {
       amber: {

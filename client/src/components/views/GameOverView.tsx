@@ -1,8 +1,8 @@
 import { useState } from "react";
 import { useGame } from "@/lib/gameContext";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Trophy, Home, RotateCcw, Loader2 } from "lucide-react";
+import { Token } from "@/components/ScoreBoard";
+import { Trophy, Home, RotateCcw, Loader2, History } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useLocation } from "wouter";
 
@@ -52,98 +52,43 @@ export function GameOverView() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 w-full max-w-md">
-        <Card className={cn(
-          "border-2",
-          winner === "amber" ? "border-amber-500" : "border-amber-500/30"
-        )}>
-          <CardHeader className="pb-2 team-amber">
-            <CardTitle className="text-white text-sm text-center">Team Amber</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-4 space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">White Tokens</span>
-              <div className="flex gap-1">
-                {Array.from({ length: 2 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2",
-                      i < gameState.teams.amber.whiteTokens 
-                        ? "bg-white border-gray-300" 
-                        : "border-gray-300/30"
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Black Tokens</span>
-              <div className="flex gap-1">
-                {Array.from({ length: 2 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2",
-                      i < gameState.teams.amber.blackTokens 
-                        ? "bg-gray-900 border-gray-700" 
-                        : "border-gray-700/30"
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="text-center text-sm text-muted-foreground pt-2 border-t">
-              {gameState.teams.amber.history.length} rounds played
-            </div>
-          </CardContent>
-        </Card>
+      <div className="w-full max-w-md flex flex-col gap-2 p-3 rounded-lg bg-card border">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <div className="w-3 h-3 rounded-full bg-amber-500" />
+            <span className="text-sm font-semibold">Amber</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold">Blue</span>
+            <div className="w-3 h-3 rounded-full bg-blue-500" />
+          </div>
+        </div>
 
-        <Card className={cn(
-          "border-2",
-          winner === "blue" ? "border-blue-500" : "border-blue-500/30"
-        )}>
-          <CardHeader className="pb-2 team-blue">
-            <CardTitle className="text-white text-sm text-center">Team Blue</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-4 space-y-2">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">White Tokens</span>
-              <div className="flex gap-1">
-                {Array.from({ length: 2 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2",
-                      i < gameState.teams.blue.whiteTokens 
-                        ? "bg-white border-gray-300" 
-                        : "border-gray-300/30"
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Black Tokens</span>
-              <div className="flex gap-1">
-                {Array.from({ length: 2 }).map((_, i) => (
-                  <div
-                    key={i}
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2",
-                      i < gameState.teams.blue.blackTokens 
-                        ? "bg-gray-900 border-gray-700" 
-                        : "border-gray-700/30"
-                    )}
-                  />
-                ))}
-              </div>
-            </div>
-            <div className="text-center text-sm text-muted-foreground pt-2 border-t">
-              {gameState.teams.blue.history.length} rounds played
-            </div>
-          </CardContent>
-        </Card>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
+          <div className="flex justify-end">
+            <Token type="white" count={gameState.teams.amber.whiteTokens} reverseFill />
+          </div>
+          <span className="text-xs sm:text-sm text-muted-foreground text-center leading-tight">
+            Miscommunications
+          </span>
+          <div className="flex justify-start">
+            <Token type="white" count={gameState.teams.blue.whiteTokens} />
+          </div>
+
+          <div className="flex justify-end">
+            <Token type="black" count={gameState.teams.amber.blackTokens} reverseFill />
+          </div>
+          <span className="text-xs sm:text-sm text-muted-foreground text-center leading-tight">
+            Interceptions
+          </span>
+          <div className="flex justify-start">
+            <Token type="black" count={gameState.teams.blue.blackTokens} />
+          </div>
+        </div>
+
+        <div className="text-center text-xs text-muted-foreground pt-1 border-t">
+          {gameState.teams.amber.history.length} rounds played
+        </div>
       </div>
 
       <div className="flex flex-col gap-3 w-full max-w-md">
@@ -167,6 +112,17 @@ export function GameOverView() {
             Waiting for host to start a new game...
           </div>
         )}
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={() => setLocation(`/replay/${gameState.id}`)}
+          className="w-full"
+          data-testid="button-view-replay"
+        >
+          <History className="h-5 w-5 mr-2" />
+          Watch Replay
+        </Button>
+
         <Button
           variant="outline"
           size="lg"

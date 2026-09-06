@@ -118,6 +118,7 @@ export interface MatchupMetrics {
   totalGames: number;
   modelAWinRate: number;
   modelBWinRate: number;
+  matchIds: number[];
 }
 
 export interface ClueAnalysis {
@@ -370,7 +371,7 @@ export function computeParseQualityMetrics(aiLogs: AiCallLog[]): ParseQualityMet
 }
 
 export function computeMatchupMetrics(matches: Match[]): MatchupMetrics[] {
-  const matchups: Record<string, { modelA: string; modelB: string; aWins: number; bWins: number; total: number }> = {};
+  const matchups: Record<string, { modelA: string; modelB: string; aWins: number; bWins: number; total: number; matchIds: number[] }> = {};
 
   matches.forEach(match => {
     if (!match.winner) return;
@@ -387,11 +388,12 @@ export function computeMatchupMetrics(matches: Match[]): MatchupMetrics[] {
     const amberSortedFirst = amberRoster.compositionKey <= blueRoster.compositionKey;
     if (!matchups[key]) {
       matchups[key] = amberSortedFirst
-        ? { modelA, modelB, aWins: 0, bWins: 0, total: 0 }
-        : { modelA: modelB, modelB: modelA, aWins: 0, bWins: 0, total: 0 };
+        ? { modelA, modelB, aWins: 0, bWins: 0, total: 0, matchIds: [] }
+        : { modelA: modelB, modelB: modelA, aWins: 0, bWins: 0, total: 0, matchIds: [] };
     }
 
     matchups[key].total++;
+    matchups[key].matchIds.push(match.id);
     if (match.winner === "amber") {
       if (amberSortedFirst) matchups[key].aWins++;
       else matchups[key].bWins++;
@@ -409,6 +411,7 @@ export function computeMatchupMetrics(matches: Match[]): MatchupMetrics[] {
     totalGames: m.total,
     modelAWinRate: m.total > 0 ? m.aWins / m.total : 0,
     modelBWinRate: m.total > 0 ? m.bWins / m.total : 0,
+    matchIds: m.matchIds,
   }));
 }
 

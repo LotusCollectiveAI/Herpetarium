@@ -2,13 +2,13 @@ import type { Express } from "express";
 import type { Server } from "http";
 import { randomUUID } from "crypto";
 import { setupWebSocket, createGame } from "./websocket";
-import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
+import { createGameSchema, HeadlessMatchConfig, TournamentConfig, aiPlayerConfigSchema, AIPlayerConfig, MatchPlayerConfig, MatchRound, getStoredPlayerModelDisplayName, getStoredPlayerModelId, getStoredTeamRosters, normalizeHeadlessMatchConfig, gameRulesSchema } from "@shared/schema";
 import { MODEL_REGISTRY, getModelCost, getModelKey } from "@shared/modelRegistry";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
-import { createTournament, runTournament, isTournamentRunning, generateRoundRobinConfigs, getActiveTournamentHealthTracker, getTournamentModelKeys, interleaveByProvider } from "./tournament";
-import { createSeries, runSeries, isSeriesRunning, getPlayerConfigHash } from "./seriesRunner";
-import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun } from "./evolution";
+import { createTournament, runTournament, isTournamentRunning, stopTournament, generateRoundRobinConfigs, getActiveTournamentHealthTracker, getTournamentModelKeys, interleaveByProvider } from "./tournament";
+import { createSeries, runSeries, isSeriesRunning, stopSeries, getPlayerConfigHash } from "./seriesRunner";
+import { createEvolutionRun, runEvolution, isEvolutionRunning, stopEvolutionRun, getEvolutionLiveMatch } from "./evolution";
 import { z } from "zod";
 import { experimentConfigSchema } from "@shared/schema";
 import { runExperiment } from "./experimentRunner";
@@ -20,6 +20,33 @@ import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
 import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
 import { analyzeMatchTranscripts, analyzeTournamentTranscripts } from "./transcriptAnalyzer";
+
+// Rounds are only written to match_rounds once fully evaluated, so the
+// highest roundNumber seen plus the running token tally reconstructs
+// where an in-progress headless match currently stands without needing
+// any separate live-state tracking.
+function computeLiveMatchProgress(rounds: MatchRound[]): {
+  round: number;
+  amber: { white: number; black: number };
+  blue: { white: number; black: number };
+} | null {
+  if (rounds.length === 0) return null;
+
+  let round = 0;
+  const tokens = {
+    amber: { white: 0, black: 0 },
+    blue: { white: 0, black: 0 },
+  };
+
+  for (const r of rounds) {
+    round = Math.max(round, r.roundNumber);
+    const team = r.team as "amber" | "blue";
+    if (!r.ownCorrect) tokens[team].white += 1;
+    if (r.intercepted) tokens[team].black += 1;
+  }
+
+  return { round, amber: tokens.amber, blue: tokens.blue };
+}
 
 function resolvePlayerConfig(player: { aiProvider?: string; aiConfig?: Partial<AIPlayerConfig> }): AIPlayerConfig | null {
   if (!player.aiProvider) return null;
@@ -55,6 +82,20 @@ function inferTeamSize(players: Array<{ team?: string }>): number {
   const amberCount = players.filter((player) => player.team === "amber").length;
   const blueCount = players.filter((player) => player.team === "blue").length;
   return amberCount >= 3 && blueCount >= 3 ? 3 : 2;
+}
+
+// headlessRunner defaults an unset teamSize to 3 (deliberation mode), which hardcodes
+// exactly 2 non-clue-giver "guessers" per team. A roster that doesn't exactly match
+// teamSize either silently strands extra players out of deliberation forever (>teamSize)
+// or can't reach the minimum of 2 guessers at all (<teamSize).
+function validateTeamRosterSizes(players: Array<{ team?: string }>, teamSize?: number): string | null {
+  const amberCount = players.filter((player) => player.team === "amber").length;
+  const blueCount = players.filter((player) => player.team === "blue").length;
+  const effectiveTeamSize = teamSize || 3;
+  if (amberCount !== effectiveTeamSize || blueCount !== effectiveTeamSize) {
+    return `Each team must have exactly ${effectiveTeamSize} players (teamSize=${effectiveTeamSize}); got amber=${amberCount}, blue=${blueCount}`;
+  }
+  return null;
 }
 
 function computeEstimatedCost(
@@ -236,6 +277,13 @@ export async function registerRoutes(
 
   app.get("/api/matches", async (req, res) => {
     try {
+      const idsParam = req.query.ids as string | undefined;
+      if (idsParam) {
+        const ids = idsParam.split(",").map((s) => parseInt(s.trim(), 10)).filter((n) => !isNaN(n));
+        const matches = await storage.getMatchesByIds(ids);
+        return res.json({ matches, total: matches.length, page: 1, limit: matches.length, totalPages: 1, matchIdsWithTraces: [] });
+      }
+
       const page = Math.max(1, parseInt(req.query.page as string) || 1);
       const limit = Math.min(50, Math.max(1, parseInt(req.query.limit as string) || 20));
       const model = req.query.model as string | undefined;
@@ -281,6 +329,55 @@ export async function registerRoutes(
     }
   });
 
+  app.get("/api/matches/:gameId/events", async (req, res) => {
+    try {
+      const { gameId } = req.params;
+      const match = await storage.getMatchByGameId(gameId);
+      if (!match) {
+        return res.status(404).json({ error: "Match not found" });
+      }
+
+      // Read by gameId rather than by the resolved match id. Events carry a
+      // sequence that is monotonic per game, so this returns the game's
+      // whole stream in order however many match rows exist for it -- which
+      // matters for games recorded before confirm_teams was made
+      // re-entrant, where the duplicate row can be the one getMatchByGameId
+      // returns and reading by its id yields nothing.
+      const events = await storage.getMatchEventsByGameId(gameId);
+
+      // round_started carries both teams' keywords and both secret codes, so
+      // this endpoint hands out everything the game is built on hiding. That
+      // is fine for a finished game and not fine for one still being played:
+      // the game id is the room code, which every player already has, so
+      // without this any of them could read the opposition's words straight
+      // off their own replay URL. Completion is judged from the event stream
+      // rather than from matches.completedAt because a game can own more
+      // than one match row and only one of them gets completed.
+      const finished = events.some(
+        event => (event.payload as { eventType?: string }).eventType === "game_completed",
+      );
+      if (!finished) {
+        return res.status(409).json({
+          error: "Replay is only available once the game has finished",
+          code: "game_in_progress",
+        });
+      }
+
+      // With duplicates the first event can belong to the row that lost the
+      // race and received nothing else, so report the one most of the
+      // stream was written against.
+      const perMatch = new Map<number, number>();
+      for (const event of events) {
+        if (event.matchId != null) perMatch.set(event.matchId, (perMatch.get(event.matchId) ?? 0) + 1);
+      }
+      const matchId = [...perMatch.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? match.id;
+
+      res.json({ matchId, gameId, events });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to fetch match events" });
+    }
+  });
+
   app.get("/api/matches/:id/transcript-analysis", async (req, res) => {
     try {
       const id = parseInt(req.params.id);
@@ -309,10 +406,9 @@ export async function registerRoutes(
 
       const config = normalizeHeadlessMatchConfig(parsed.data as HeadlessMatchConfig);
 
-      const amberCount = config.players.filter(p => p.team === "amber").length;
-      const blueCount = config.players.filter(p => p.team === "blue").length;
-      if (amberCount < 2 || blueCount < 2) {
-        return res.status(400).json({ error: "Each team must have at least 2 players" });
+      const rosterError = validateTeamRosterSizes(config.players, config.teamSize);
+      if (rosterError) {
+        return res.status(400).json({ error: rosterError });
       }
 
       res.json({ status: "started", message: "Match is running. Check /api/matches for results." });
@@ -334,10 +430,9 @@ export async function registerRoutes(
 
       const config = normalizeHeadlessMatchConfig(parsed.data as HeadlessMatchConfig);
 
-      const amberCount = config.players.filter(p => p.team === "amber").length;
-      const blueCount = config.players.filter(p => p.team === "blue").length;
-      if (amberCount < 2 || blueCount < 2) {
-        return res.status(400).json({ error: "Each team must have at least 2 players" });
+      const rosterError = validateTeamRosterSizes(config.players, config.teamSize);
+      if (rosterError) {
+        return res.status(400).json({ error: rosterError });
       }
 
       const result = await runHeadlessMatch(config);
@@ -361,10 +456,9 @@ export async function registerRoutes(
       } satisfies TournamentConfig;
 
       for (const mc of tournamentConfig.matchConfigs) {
-        const amberCount = mc.players.filter(p => p.team === "amber").length;
-        const blueCount = mc.players.filter(p => p.team === "blue").length;
-        if (amberCount < 2 || blueCount < 2) {
-          return res.status(400).json({ error: "Each team in every matchup must have at least 2 players" });
+        const rosterError = validateTeamRosterSizes(mc.players, mc.teamSize);
+        if (rosterError) {
+          return res.status(400).json({ error: `Invalid matchup: ${rosterError}` });
         }
       }
 
@@ -565,10 +659,38 @@ export async function registerRoutes(
 
       const includeTainted = parseBooleanQuery(req.query.includeTainted);
       const tournamentMatchesData = await storage.getTournamentMatches(id);
+      // matchId is now also backfilled onto still-running tournament matches
+      // (see runSingleMatch's onMatchCreated callback) so the UI can show
+      // live progress -- so completed-match stats must filter on status,
+      // not merely on matchId being set.
       const completedMatchIds = tournamentMatchesData
+        .filter((tournamentMatch) => tournamentMatch.status === "completed")
         .map((tournamentMatch) => tournamentMatch.matchId)
         .filter((matchId): matchId is number => typeof matchId === "number");
       const uniqueCompletedMatchIds = Array.from(new Set(completedMatchIds));
+
+      const runningMatchIds = Array.from(new Set(
+        tournamentMatchesData
+          .filter((tournamentMatch) => tournamentMatch.status === "running")
+          .map((tournamentMatch) => tournamentMatch.matchId)
+          .filter((matchId): matchId is number => typeof matchId === "number")
+      ));
+      const liveRounds = runningMatchIds.length > 0
+        ? await storage.getMatchRoundsForMatches(runningMatchIds)
+        : [];
+      const liveRoundsByMatchId = new Map<number, MatchRound[]>();
+      for (const round of liveRounds) {
+        const list = liveRoundsByMatchId.get(round.matchId) ?? [];
+        list.push(round);
+        liveRoundsByMatchId.set(round.matchId, list);
+      }
+      const tournamentMatchesWithProgress = tournamentMatchesData.map((tournamentMatch) => {
+        if (tournamentMatch.status !== "running" || tournamentMatch.matchId == null) {
+          return tournamentMatch;
+        }
+        const liveProgress = computeLiveMatchProgress(liveRoundsByMatchId.get(tournamentMatch.matchId) ?? []);
+        return liveProgress ? { ...tournamentMatch, liveProgress } : tournamentMatch;
+      });
       const fetchedMatchDetails = uniqueCompletedMatchIds.length > 0
         ? await storage.getMatchesByIds(uniqueCompletedMatchIds)
         : [];
@@ -591,7 +713,7 @@ export async function registerRoutes(
 
       res.json({
         tournament,
-        matches: tournamentMatchesData,
+        matches: tournamentMatchesWithProgress,
         matchDetails,
         stats,
         btRatings,
@@ -601,6 +723,26 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch tournament" });
+    }
+  });
+
+  app.post("/api/tournaments/:id/stop", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid tournament ID" });
+      }
+      const tournament = await storage.getTournament(id);
+      if (!tournament) {
+        return res.status(404).json({ error: "Tournament not found" });
+      }
+      stopTournament(id);
+      if (tournament.status === "running") {
+        await storage.updateTournament(id, { status: "stopped" });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop tournament" });
     }
   });
 
@@ -897,10 +1039,9 @@ export async function registerRoutes(
       const config = parsed.data;
       const matchConfig = config.matchConfig as HeadlessMatchConfig;
 
-      const amberCount = matchConfig.players.filter(p => p.team === "amber").length;
-      const blueCount = matchConfig.players.filter(p => p.team === "blue").length;
-      if (amberCount < 2 || blueCount < 2) {
-        return res.status(400).json({ error: "Each team must have at least 2 players" });
+      const rosterError = validateTeamRosterSizes(matchConfig.players, matchConfig.teamSize);
+      if (rosterError) {
+        return res.status(400).json({ error: rosterError });
       }
 
       const estimatedCost = computeEstimatedCost(matchConfig.players, config.totalGames, true);
@@ -929,6 +1070,26 @@ export async function registerRoutes(
       res.json(allSeries);
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch series" });
+    }
+  });
+
+  app.post("/api/series/:id/stop", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      if (isNaN(id)) {
+        return res.status(400).json({ error: "Invalid series ID" });
+      }
+      const series = await storage.getSeries(id);
+      if (!series) {
+        return res.status(404).json({ error: "Series not found" });
+      }
+      stopSeries(id);
+      if (series.status === "running") {
+        await storage.updateSeries(id, { status: "stopped" });
+      }
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop series" });
     }
   });
 
@@ -969,12 +1130,10 @@ export async function registerRoutes(
 
       const matchIds = [...new Set(notes.filter(n => n.matchId).map(n => n.matchId as number))];
       const unsortedDetails = await storage.getMatchesByIds(matchIds);
-      const matchDetailsWithRounds = await Promise.all(
-        unsortedDetails.sort((a: any, b: any) => a.id - b.id).map(async (m) => {
-          const rounds = await storage.getMatchRounds(m.id);
-          return { ...m, rounds };
-        })
-      );
+      const allRounds = await storage.getMatchRoundsForMatches(matchIds);
+      const matchDetailsWithRounds = unsortedDetails
+        .sort((a: any, b: any) => a.id - b.id)
+        .map((m) => ({ ...m, rounds: allRounds.filter(r => r.matchId === m.id) }));
 
       res.json({
         series: s,
@@ -1239,11 +1398,19 @@ export async function registerRoutes(
         ? await storage.getStrategyGenomes(id, run.currentGeneration - 1)
         : await storage.getStrategyGenomes(id, 0);
 
+      const liveMatch = getEvolutionLiveMatch(id);
+      let liveProgress = null;
+      if (liveMatch) {
+        const liveMatchRounds = await storage.getMatchRoundsForMatches([liveMatch.matchId]);
+        liveProgress = { ...liveMatch, ...(computeLiveMatchProgress(liveMatchRounds) ?? {}) };
+      }
+
       res.json({
         ...run,
         generations: gens,
         currentPopulation: currentGenGenomes,
         isRunning: isEvolutionRunning(id),
+        liveMatch: liveProgress,
       });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch evolution run" });
@@ -1270,11 +1437,19 @@ export async function registerRoutes(
       const genome = await storage.getStrategyGenome(genomeId);
       if (!genome) return res.status(404).json({ error: "Genome not found" });
 
-      const parents = genome.parentIds && (genome.parentIds as number[]).length > 0
-        ? await Promise.all((genome.parentIds as number[]).map(pid => storage.getStrategyGenome(pid)))
-        : [];
+      const parentIds = (genome.parentIds as number[] | null) ?? [];
+      const byId = new Map(
+        (await storage.getStrategyGenomesByIds(parentIds)).map(g => [g.id, g]),
+      );
+      // Keep parentIds' own order (and any duplicate entries) rather than
+      // whatever order the batched IN (...) query happens to return, and
+      // drop ids with no surviving row.
+      const parents = parentIds.flatMap(pid => {
+        const parent = byId.get(pid);
+        return parent ? [parent] : [];
+      });
 
-      res.json({ ...genome, parents: parents.filter(Boolean) });
+      res.json({ ...genome, parents });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to fetch genome" });
     }
@@ -1319,8 +1494,12 @@ export async function registerRoutes(
     try {
       const id = parseInt(req.params.id);
       if (isNaN(id)) return res.status(400).json({ error: "Invalid run ID" });
+      const run = await storage.getEvolutionRun(id);
+      if (!run) return res.status(404).json({ error: "Evolution run not found" });
       stopEvolutionRun(id);
-      await storage.updateEvolutionRun(id, { status: "stopped" });
+      if (run.status === "running") {
+        await storage.updateEvolutionRun(id, { status: "stopped" });
+      }
       res.json({ success: true });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to stop evolution run" });
@@ -1382,6 +1561,26 @@ export async function registerRoutes(
       res.json({ arenaId });
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to start arena" });
+    }
+  });
+
+  app.post("/api/arena/:id/stop", async (req, res) => {
+    try {
+      const arenaId = req.params.id;
+      const runs = await storage.getCoachRunsByArenaId(arenaId);
+      if (runs.length === 0) {
+        return res.status(404).json({ error: "Arena not found" });
+      }
+      const { stopArena } = await import("./arena");
+      stopArena(arenaId);
+      await Promise.all(
+        runs
+          .filter((run) => run.status === "running")
+          .map((run) => storage.updateCoachRun(run.id, { status: "stopped" }))
+      );
+      res.json({ success: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message || "Failed to stop arena" });
     }
   });
 
@@ -1450,17 +1649,12 @@ export async function registerRoutes(
   app.get("/api/arena/:id/evaluations", async (req, res) => {
     try {
       const runs = await storage.getCoachRunsByArenaId(req.params.id);
-      const allEvaluations = await Promise.all(
-        runs.map(async (run) => {
-          const records = await storage.getSprintEvaluations(run.id);
-          return records.map((r) => ({
-            runId: r.runId,
-            sprintNumber: r.sprintNumber,
-            evaluation: r.evaluation,
-          }));
-        }),
-      );
-      res.json(allEvaluations.flat());
+      const records = await storage.getSprintEvaluationsForRuns(runs.map((run) => run.id));
+      res.json(records.map((r) => ({
+        runId: r.runId,
+        sprintNumber: r.sprintNumber,
+        evaluation: r.evaluation,
+      })));
     } catch (error: any) {
       res.status(500).json({ error: error.message || "Failed to get arena evaluations" });
     }

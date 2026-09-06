@@ -33,7 +33,7 @@ export function PlayerAvatar({ player, size = "md", showName = true, isCurrentPl
   };
 
   return (
-    <div className={cn("flex items-center gap-2", isCurrentPlayer && "ring-2 ring-primary rounded-full")}>
+    <div className={cn("flex items-center gap-2", isCurrentPlayer && "ring-2 ring-primary rounded-full pl-1 pr-2.5 py-1")}>
       <Avatar className={cn(sizeClasses[size], player.isAI && player.aiProvider && aiColors[player.aiProvider])}>
         <AvatarFallback className={cn(
           "font-semibold",
@@ -48,10 +48,15 @@ export function PlayerAvatar({ player, size = "md", showName = true, isCurrentPl
         </AvatarFallback>
       </Avatar>
       {showName && (
-        <span className={cn(
-          "font-medium truncate max-w-24",
-          isCurrentPlayer && "text-primary font-bold"
-        )}>
+        <span
+          className={cn(
+            "font-medium truncate max-w-32",
+            isCurrentPlayer && "text-primary font-bold"
+          )}
+          // Names are clipped at this width, and AI names carry the model
+          // they run, so give the full one on hover.
+          title={player.name}
+        >
           {player.name}
         </span>
       )}

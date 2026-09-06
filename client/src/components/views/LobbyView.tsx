@@ -6,7 +6,7 @@ import { AIPlayerButton } from "@/components/AIPlayerButton";
 import { Users, Play, X, Copy } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import type { AIPlayerConfig } from "@shared/schema";
+import { MIN_GAME_PLAYERS, MAX_GAME_PLAYERS, type AIPlayerConfig } from "@shared/schema";
 
 export function LobbyView() {
   const { gameState, isHost, sendMessage, playerId } = useGame();
@@ -41,7 +41,8 @@ export function LobbyView() {
     }
   };
 
-  const canStart = gameState.players.length >= 2;
+  const playersNeeded = Math.max(0, MIN_GAME_PLAYERS - gameState.players.length);
+  const canStart = playersNeeded === 0;
 
   return (
     <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto">
@@ -73,7 +74,7 @@ export function LobbyView() {
 
           <div className="space-y-2">
             <p className="text-sm font-medium">
-              Players ({gameState.players.length}/4)
+              Players ({gameState.players.length}/{MAX_GAME_PLAYERS})
             </p>
             <div className="space-y-2">
               {gameState.players.map((player) => (
@@ -116,7 +117,7 @@ export function LobbyView() {
         </CardContent>
       </Card>
 
-      {isHost && gameState.players.length < 4 && (
+      {isHost && gameState.players.length < MAX_GAME_PLAYERS && (
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-lg">Add AI Players</CardTitle>
@@ -143,7 +144,9 @@ export function LobbyView() {
           data-testid="button-start-game"
         >
           <Play className="h-5 w-5 mr-2" />
-          {canStart ? "Start Game" : `Need ${2 - gameState.players.length} more players`}
+          {canStart
+            ? "Start Game"
+            : `Need ${playersNeeded} more player${playersNeeded === 1 ? "" : "s"}`}
         </Button>
       )}
 

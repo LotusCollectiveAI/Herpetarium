@@ -3,7 +3,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { KeywordCard } from "@/components/KeywordCard";
-import { DeductionNotes } from "@/components/DeductionNotes";
 import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
 import { Target } from "lucide-react";
 
@@ -12,13 +11,23 @@ export function GuessingView() {
 
   if (!gameState || !myTeam) return null;
 
-  const opponentTeam = myTeam === "amber" ? "blue" : "amber";
   const myClues = gameState.currentClues[myTeam];
   const isClueGiver = gameState.currentClueGiver[myTeam] === playerId;
   const hasGuessed = gameState.currentGuesses[myTeam].ownTeam !== null;
 
+  const designatedSubmitterId = gameState.decodeSubmitter[myTeam];
+  const canSubmit = designatedSubmitterId === playerId;
+  const submitter = gameState.players.find(p => p.id === designatedSubmitterId);
+  const teammates = gameState.players
+    .filter(p => p.team === myTeam && p.id !== playerId)
+    .map(p => ({ id: p.id, name: p.name }));
+
   const handleSubmitGuess = (guess: [number, number, number]) => {
     sendMessage({ type: "submit_guess", guess });
+  };
+
+  const handleSelectionChange = (selection: [number | null, number | null, number | null]) => {
+    sendMessage({ type: "update_selection", selection });
   };
 
   return (
@@ -53,7 +62,7 @@ export function GuessingView() {
         </Card>
       )}
 
-      {myClues && (
+      {myClues && (hasGuessed || isClueGiver) && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Clues from Your Encryptor</CardTitle>
@@ -63,12 +72,6 @@ export function GuessingView() {
           </CardContent>
         </Card>
       )}
-
-      <DeductionNotes
-        gameId={gameState.id}
-        opponentTeam={opponentTeam}
-        defaultExpanded={false}
-      />
 
       {hasGuessed ? (
         <Card>
@@ -131,8 +134,14 @@ export function GuessingView() {
           <CardContent>
             <CodeGuess
               team={myTeam}
+              clues={myClues ?? undefined}
               onSubmit={handleSubmitGuess}
               label="Submit Guess"
+              canSubmit={canSubmit}
+              submitterName={submitter?.name}
+              teammates={teammates}
+              teammateSelections={gameState.currentSelections[myTeam]}
+              onSelectionChange={handleSelectionChange}
             />
           </CardContent>
         </Card>

@@ -47,7 +47,7 @@ export interface DeliberationOwnTemplateParams {
   history: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   clueGiverName: string;
   currentPlayerName: string;
-  otherPlayerName: string;
+  otherPlayerNames: string[];
   conversationSoFar: Array<{ playerName: string; content: string }>;
   exchangeNumber: number;
   roundNumber: number;
@@ -56,7 +56,10 @@ export interface DeliberationOwnTemplateParams {
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
   taskDirectives?: string;
-  isPlayerB?: boolean;
+  // Which of the deliberation's distinct analytical angles this player has been assigned
+  // (0-indexed by speaking order), so participants bring complementary perspectives
+  // instead of redundant ones. Own-guess deliberation only ever has 2 participants.
+  lensIndex?: number;
 }
 
 export interface DeliberationInterceptTemplateParams {
@@ -66,7 +69,7 @@ export interface DeliberationInterceptTemplateParams {
   opponentHistory: Array<{ clues: string[]; targetCode: [number, number, number] }>;
   opponentDeliberationTranscript: Array<{ playerName: string; content: string }>;
   currentPlayerName: string;
-  otherPlayerName: string;
+  otherPlayerNames: string[];
   conversationSoFar: Array<{ playerName: string; content: string }>;
   exchangeNumber: number;
   roundNumber: number;
@@ -75,7 +78,39 @@ export interface DeliberationInterceptTemplateParams {
   ablations?: AblationFlag[];
   systemPromptOverride?: string;
   taskDirectives?: string;
-  isPlayerB?: boolean;
+  // Interception includes all 3 team members (clue-giver included -- they have no special
+  // knowledge of the opponent's code), so this can be 0, 1, or 2.
+  lensIndex?: number;
+}
+
+function formatTeammateList(names: string[]): string {
+  if (names.length <= 1) return names[0] || "";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
+function formatTeammateNoun(names: string[]): string {
+  return names.length === 1 ? `teammate ${names[0]}` : `teammates ${formatTeammateList(names)}`;
+}
+
+function describeConsensusRequirement(otherPlayerNames: string[]): string {
+  if (otherPlayerNames.length === 1) {
+    return `Both you and ${otherPlayerNames[0]} must agree and signal READY for the discussion to end.`;
+  }
+  return `You and your ${formatTeammateNoun(otherPlayerNames)} must all agree and signal READY for the discussion to end.`;
+}
+
+function appendOthersLastArguments(
+  prompt: string,
+  conversationSoFar: Array<{ playerName: string; content: string }>,
+  otherPlayerNames: string[],
+): string {
+  for (const name of otherPlayerNames) {
+    const lastMsg = [...conversationSoFar].reverse().find(m => m.playerName === name);
+    if (lastMsg) {
+      prompt += `\n\nYour teammate ${name} just argued: "${lastMsg.content.slice(0, 200)}"`;
+    }
+  }
+  return prompt;
 }
 
 interface AblationTarget {
@@ -107,7 +142,7 @@ export function applyAblations<T extends AblationTarget>(
   return result;
 }
 
-function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
+export function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
   if (history.length === 0) return "";
   return history.map((round, i) =>
     `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]`
@@ -121,8 +156,8 @@ export function formatScratchNotes(notes?: string): string {
 
 // --- Deliberation prompt builders for 3v3 team chatter ---
 
-export function defaultDeliberationOwnFirstTurn(params: DeliberationOwnTemplateParams & { isPlayerB?: boolean }): string {
-  const { team, keywords, clues, history, clueGiverName, currentPlayerName, otherPlayerName, roundNumber, score, isPlayerB } = params;
+export function defaultDeliberationOwnFirstTurn(params: DeliberationOwnTemplateParams): string {
+  const { team, keywords, clues, history, clueGiverName, currentPlayerName, otherPlayerNames, roundNumber, score, lensIndex } = params;
   const opponentTeam = team === "amber" ? "blue" : "amber";
   const ownScore = score[team];
   const oppScore = score[opponentTeam];
@@ -157,25 +192,25 @@ THIS ROUND'S CLUES (from your clue-giver, ${clueGiverName}):
     prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
   }
 
-  prompt += `\n\nYOUR TASK: Work with your teammate ${otherPlayerName} to determine which keyword (1-4) each clue refers to -- i.e., decode the 3-number code your clue-giver is communicating.`;
+  prompt += `\n\nYOUR TASK: Work with your ${formatTeammateNoun(otherPlayerNames)} to determine which keyword (1-4) each clue refers to -- i.e., decode the 3-number code your clue-giver is communicating.`;
 
-  if (isPlayerB) {
+  if (lensIndex === 1) {
     prompt += `\n\nANALYTICAL APPROACH: Start by analyzing your clue-giver's history and patterns. How has ${clueGiverName} clued each keyword position before? Look for consistency or deliberate variation in their cluing style. If they used a synonym for keyword 2 last round, did they shift to a lateral association this round? Use the clue history to build a model of how ${clueGiverName} thinks, then apply that model to this round's clues.`;
-    prompt += `\n\nTHEORY OF MIND: Your teammate ${otherPlayerName} has already shared their initial analysis. They may have spotted connections you missed -- or they may have been drawn to surface-level associations that mask the real mapping. Consider where their reasoning is strong and where it might have gaps.`;
+    prompt += `\n\nTHEORY OF MIND: Your ${formatTeammateNoun(otherPlayerNames)} has already shared their initial analysis. They may have spotted connections you missed -- or they may have been drawn to surface-level associations that mask the real mapping. Consider where their reasoning is strong and where it might have gaps.`;
   } else {
     prompt += `\n\nANALYTICAL APPROACH: Start by analyzing the semantic relationships between each clue and the keywords. For each clue, consider multiple possible keyword mappings before committing to one. What are the strongest associations? Where is there genuine ambiguity? Which mappings can you rule out, and why?`;
     prompt += `\n\nTHEORY OF MIND: What was your clue-giver ${clueGiverName} thinking? Consider their cluing style from previous rounds. Did they tend toward direct synonyms, lateral associations, or category-level connections? How might they have chosen these particular clues to communicate the code while avoiding patterns the opponents have already seen?`;
   }
 
-  prompt += `\n\nCRITICAL -- INFORMATION SECURITY: The opposing team is listening to everything you say. Every word you speak gives them information. When discussing potential keyword-clue mappings, consider whether your reasoning reveals too much about your keywords. You may want to reason abstractly, use indirect references, or even deliberately misdirect. The tension between communicating clearly with ${otherPlayerName} and protecting your keywords from eavesdroppers is the central strategic challenge.`;
+  prompt += `\n\nCRITICAL -- INFORMATION SECURITY: The opposing team is listening to everything you say. Every word you speak gives them information. When discussing potential keyword-clue mappings, consider whether your reasoning reveals too much about your keywords. You may want to reason abstractly, use indirect references, or even deliberately misdirect. The tension between communicating clearly with your ${formatTeammateNoun(otherPlayerNames)} and protecting your keywords from eavesdroppers is the central strategic challenge.`;
 
-  prompt += `\n\nWhen you are confident in your answer, include READY: followed by your guess as three numbers (e.g., READY: 3,1,4). Both you and ${otherPlayerName} must agree and signal READY for the discussion to end.`;
+  prompt += `\n\nWhen you are confident in your answer, include READY: followed by your guess as three numbers (e.g., READY: 3,1,4). ${describeConsensusRequirement(otherPlayerNames)}`;
 
   return prompt;
 }
 
 export function defaultDeliberationOwnFollowUp(params: DeliberationOwnTemplateParams & { exchangeNumber: number }): string {
-  const { team, keywords, clues, history, clueGiverName, currentPlayerName, otherPlayerName, conversationSoFar, exchangeNumber, roundNumber, score } = params;
+  const { team, keywords, clues, history, clueGiverName, currentPlayerName, otherPlayerNames, conversationSoFar, exchangeNumber, roundNumber, score } = params;
   const opponentTeam = team === "amber" ? "blue" : "amber";
   const ownScore = score[team];
   const oppScore = score[opponentTeam];
@@ -209,18 +244,13 @@ THIS ROUND'S CLUES (from ${clueGiverName}):
     prompt += `\n  ${msg.playerName}: ${msg.content}`;
   }
 
-  // Summary of last message from other player
-  const lastOtherMsg = [...conversationSoFar].reverse().find(m => m.playerName === otherPlayerName);
-  if (lastOtherMsg) {
-    const summary = lastOtherMsg.content.slice(0, 200);
-    prompt += `\n\nYour teammate ${otherPlayerName} just argued: "${summary}"`;
-  }
+  prompt = appendOthersLastArguments(prompt, conversationSoFar, otherPlayerNames);
 
   if (params.taskDirectives) {
     prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
   }
 
-  prompt += `\n\nNow that you've heard ${otherPlayerName}'s perspective, do you see the mapping differently? What evidence supports or contradicts their interpretation? Consider:
+  prompt += `\n\nNow that you've heard your ${formatTeammateNoun(otherPlayerNames)}'s perspective, do you see the mapping differently? What evidence supports or contradicts their interpretation? Consider:
 - Are there keyword-clue connections they identified that you overlooked?
 - Are there alternative mappings they haven't considered?
 - Does the clue history support their reading or yours?
@@ -230,14 +260,14 @@ Remember: the opponents are listening. Be thoughtful about what you reveal.`;
   if (exchangeNumber >= 3) {
     prompt += `\n\nYou've been deliberating for several exchanges. If you're converging on an answer, signal READY: X,Y,Z. If genuine disagreement remains, explain what specific evidence would change your mind.`;
   } else {
-    prompt += `\n\nWhen you are confident in your answer, include READY: followed by your guess as three numbers (e.g., READY: 3,1,4). Both you and ${otherPlayerName} must agree and signal READY for the discussion to end.`;
+    prompt += `\n\nWhen you are confident in your answer, include READY: followed by your guess as three numbers (e.g., READY: 3,1,4). ${describeConsensusRequirement(otherPlayerNames)}`;
   }
 
   return prompt;
 }
 
-export function defaultDeliberationInterceptFirstTurn(params: DeliberationInterceptTemplateParams & { isPlayerB?: boolean }): string {
-  const { team, opponentTeam, clues, opponentHistory, opponentDeliberationTranscript, currentPlayerName, otherPlayerName, roundNumber, score, isPlayerB } = params;
+export function defaultDeliberationInterceptFirstTurn(params: DeliberationInterceptTemplateParams): string {
+  const { team, opponentTeam, clues, opponentHistory, opponentDeliberationTranscript, currentPlayerName, otherPlayerNames, roundNumber, score, lensIndex } = params;
   const ownScore = score[team];
   const oppScore = score[opponentTeam];
 
@@ -278,7 +308,9 @@ You do NOT know their keywords, but you can deduce patterns from their clue hist
 - Every slip, every moment of confidence, every topic they avoided is a signal.`;
   }
 
-  if (isPlayerB) {
+  if (lensIndex === 2) {
+    prompt += `\n\nYOUR ANALYTICAL FOCUS: You gave the clues for your own team this round, so you know firsthand the tradeoffs a clue-giver navigates -- clear enough for teammates to decode, vague enough to dodge interception. Use that insider perspective on the opposing clue-giver: what would you have done in their position? Which of their word choices look like deliberate misdirection versus a genuine best effort at clarity? Where did they seem to trade clarity for safety, or the reverse?`;
+  } else if (lensIndex === 1) {
     prompt += `\n\nYOUR ANALYTICAL FOCUS: Focus on what the opponents DIDN'T say -- what topics did they avoid? What connections did they seem to dance around? If they discussed clue 1 and clue 3 in depth but barely mentioned clue 2, why? Silence and hesitation are often more revealing than explicit statements. Also watch for moments where they seemed to self-censor or redirect -- that's where the information security tension is highest, and where truth leaks through.`;
   } else {
     prompt += `\n\nYOUR ANALYTICAL FOCUS: Focus on what the opponents SAID -- their explicit reasoning, keyword mentions, and confidence levels. Map their stated associations back to the clue history to build hypotheses about their keywords.`;
@@ -288,17 +320,17 @@ You do NOT know their keywords, but you can deduce patterns from their clue hist
     prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
   }
 
-  prompt += `\n\nYou and your teammate ${otherPlayerName} are trying to crack the opposing team's code. Discuss what you think each clue maps to.`;
+  prompt += `\n\nYou and your ${formatTeammateNoun(otherPlayerNames)} are trying to crack the opposing team's code. Discuss what you think each clue maps to.`;
 
   prompt += `\n\nIMPORTANT: The opposing team can hear your discussion too. Be strategic about what reasoning you reveal -- they may adjust their cluing in future rounds based on what they learn about your interception strategies.`;
 
-  prompt += `\n\nWhen you are confident, include READY: followed by your interception guess as three numbers (e.g., READY: 2,4,1). Both you and ${otherPlayerName} must agree for the discussion to end.`;
+  prompt += `\n\nWhen you are confident, include READY: followed by your interception guess as three numbers (e.g., READY: 2,4,1). ${describeConsensusRequirement(otherPlayerNames)}`;
 
   return prompt;
 }
 
 export function defaultDeliberationInterceptFollowUp(params: DeliberationInterceptTemplateParams & { exchangeNumber: number }): string {
-  const { team, opponentTeam, clues, opponentHistory, opponentDeliberationTranscript, currentPlayerName, otherPlayerName, conversationSoFar, exchangeNumber, roundNumber, score } = params;
+  const { team, opponentTeam, clues, opponentHistory, opponentDeliberationTranscript, currentPlayerName, otherPlayerNames, conversationSoFar, exchangeNumber, roundNumber, score } = params;
   const ownScore = score[team];
   const oppScore = score[opponentTeam];
 
@@ -333,12 +365,7 @@ THE OPPOSING TEAM (${opponentTeam}) GAVE THESE CLUES THIS ROUND:
     prompt += `\n  ${msg.playerName}: ${msg.content}`;
   }
 
-  // Summary of last message from other player
-  const lastOtherMsg = [...conversationSoFar].reverse().find(m => m.playerName === otherPlayerName);
-  if (lastOtherMsg) {
-    const summary = lastOtherMsg.content.slice(0, 200);
-    prompt += `\n\nYour teammate ${otherPlayerName} just argued: "${summary}"`;
-  }
+  prompt = appendOthersLastArguments(prompt, conversationSoFar, otherPlayerNames);
 
   if (params.taskDirectives) {
     prompt += `\n\nYour team's analytical approach:\n${params.taskDirectives}`;
@@ -351,7 +378,7 @@ Remember: the opponents are listening to your interception discussion too. Be st
   if (exchangeNumber >= 3) {
     prompt += `\n\nYou've been deliberating for several exchanges. If you're converging on an answer, signal READY: X,Y,Z. If genuine disagreement remains, explain what specific evidence would change your mind.`;
   } else {
-    prompt += `\n\nWhen you are confident, include READY: followed by your interception guess as three numbers (e.g., READY: 2,4,1). Both you and ${otherPlayerName} must agree for the discussion to end.`;
+    prompt += `\n\nWhen you are confident, include READY: followed by your interception guess as three numbers (e.g., READY: 2,4,1). ${describeConsensusRequirement(otherPlayerNames)}`;
   }
 
   return prompt;

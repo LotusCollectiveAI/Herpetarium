@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/lib/themeProvider";
 import { GameProvider } from "@/lib/gameContext";
 import Home from "@/pages/Home";
 import Game from "@/pages/Game";
+import Replay from "@/pages/Replay";
 import History from "@/pages/History";
 import Tournaments from "@/pages/Tournaments";
 import EvalDashboard from "@/pages/EvalDashboard";
@@ -14,6 +15,7 @@ import Series from "@/pages/Series";
 import Evolution from "@/pages/Evolution";
 import Arena from "@/pages/Arena";
 import CoachRuns from "@/pages/CoachRuns";
+import DevPreview from "@/pages/DevPreview";
 import NotFound from "@/pages/not-found";
 
 function Router() {
@@ -21,6 +23,7 @@ function Router() {
     <Switch>
       <Route path="/" component={Home} />
       <Route path="/game/:id" component={Game} />
+      <Route path="/replay/:gameId" component={Replay} />
       <Route path="/history" component={History} />
       <Route path="/tournaments" component={Tournaments} />
       <Route path="/eval" component={EvalDashboard} />
@@ -28,6 +31,9 @@ function Router() {
       <Route path="/evolution" component={Evolution} />
       <Route path="/arena" component={Arena} />
       <Route path="/coach/:id" component={CoachRuns} />
+      {import.meta.env.DEV && (
+        <Route path="/dev/preview" component={DevPreview} />
+      )}
       <Route component={NotFound} />
     </Switch>
   );

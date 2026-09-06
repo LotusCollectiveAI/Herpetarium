@@ -4,19 +4,32 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Check, X, Target, ArrowRight, Trophy, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useRoundReveal } from "@/lib/useRoundReveal";
+import { RoundRevealView } from "./RoundRevealView";
 
 export function RoundResultsView() {
-  const { gameState, myTeam, isHost, sendMessage } = useGame();
+  const { gameState, myTeam, isHost, sendMessage, isReplay } = useGame();
   const [showTokens, setShowTokens] = useState(false);
 
+  // The viewer's own code goes first: it is the one they have been guessing
+  // at all round, so it carries the suspense the opponent's does not.
+  const revealOrder: ("amber" | "blue")[] = myTeam === "blue" ? ["blue", "amber"] : ["amber", "blue"];
+
+  // Not in replay: there the viewer drives the pace with the scrubber, and
+  // a sequence playing itself out on arrival at a step fights that.
+  const reveal = useRoundReveal(revealOrder.length, !isReplay);
+
   useEffect(() => {
+    if (!reveal.done) return;
     const timer = setTimeout(() => setShowTokens(true), 600);
     return () => clearTimeout(timer);
-  }, []);
+  }, [reveal.done]);
 
   if (!gameState || !myTeam) return null;
 
-  const handleNextRound = () => {
+  const isGameDecided = gameState.winner !== null || gameState.round >= gameState.rules.maxRounds;
+
+  const handleContinue = () => {
     sendMessage({ type: "next_round" });
   };
 
@@ -25,19 +38,20 @@ export function RoundResultsView() {
   const latestAmber = amberHistory[amberHistory.length - 1];
   const latestBlue = blueHistory[blueHistory.length - 1];
 
+  // Decoding and being intercepted are scored separately, so a team can do
+  // both in one round. The two clauses are joined into a single sentence
+  // rather than left as two exclamations: "but" when the interception
+  // undercuts a successful decode, "and" when it compounds a failed one.
   const getTeamSummary = (team: "amber" | "blue", latest: typeof latestAmber | undefined) => {
-    if (!latest) return null;
     const teamName = team === "amber" ? "Amber" : "Blue";
-    const parts: string[] = [];
-    if (latest.ownTeamCorrect) {
-      parts.push(`Team ${teamName} decoded correctly!`);
-    } else {
-      parts.push(`Team ${teamName} failed to decode!`);
+    if (!latest) return null;
+
+    const decode = latest.ownTeamCorrect ? "decoded correctly" : "failed to decode";
+    if (!latest.intercepted) {
+      return `Team ${teamName} ${decode}!`;
     }
-    if (latest.intercepted) {
-      parts.push(`Their code was intercepted!`);
-    }
-    return parts.join(" ");
+    const conjunction = latest.ownTeamCorrect ? "but" : "and";
+    return `Team ${teamName} ${decode}, ${conjunction} their code was intercepted!`;
   };
 
   const renderTeamResult = (
@@ -54,12 +68,21 @@ export function RoundResultsView() {
         team === "amber" ? "border-amber-500/30" : "border-blue-500/30"
       )}>
         <CardHeader className={cn(
-          "pb-2",
+          "py-3",
           team === "amber" ? "team-amber" : "team-blue"
         )}>
-          <CardTitle className="text-white text-sm flex items-center gap-2">
-            {isGoodOutcome && <Trophy className="h-4 w-4" />}
-            {!latestRound.ownTeamCorrect && <AlertTriangle className="h-4 w-4" />}
+          {/* Centered to match the round title above and the summary line
+              directly below, both of which are centered -- a left-aligned
+              header between them read as misaligned. text-lg rather than
+              CardTitle's default text-2xl: it is the label on a card, not
+              the heading of the screen. */}
+          <CardTitle className="text-white text-lg flex items-center justify-center gap-2">
+            {/* Keyed off the same condition as the banner colour, so a round
+                that was decoded but intercepted is marked as the bad outcome
+                it is instead of showing no icon at all. */}
+            {isGoodOutcome
+              ? <Trophy className="h-5 w-5 shrink-0" />
+              : <AlertTriangle className="h-5 w-5 shrink-0" />}
             Team {team === "amber" ? "Amber" : "Blue"}
           </CardTitle>
         </CardHeader>
@@ -102,7 +125,7 @@ export function RoundResultsView() {
               "flex items-center justify-between p-2 rounded transition-all duration-300",
               latestRound.ownTeamCorrect ? "bg-emerald-500/10" : "bg-red-500/10"
             )}>
-              <span className="text-sm">Own Team Guess</span>
+              <span className="text-sm">Team {team === "amber" ? "Amber" : "Blue"} Guess</span>
               <div className="flex items-center gap-2">
                 {latestRound.ownTeamGuess?.map((num, i) => (
                   <span
@@ -124,7 +147,7 @@ export function RoundResultsView() {
               "flex items-center justify-between p-2 rounded transition-all duration-300",
               latestRound.intercepted ? "bg-red-500/10" : "bg-muted"
             )}>
-              <span className="text-sm">Opponent Interception</span>
+              <span className="text-sm">Interception Attempt</span>
               <div className="flex items-center gap-2">
                 {latestRound.opponentGuess?.map((num, i) => (
                   <span
@@ -179,6 +202,24 @@ export function RoundResultsView() {
     );
   };
 
+  // Uncover one team's code at a time before showing the scored round. The
+  // history rows are already final -- this only paces how they are read.
+  if (!reveal.done && reveal.teamIndex !== null) {
+    const revealTeam = revealOrder[reveal.teamIndex];
+    const revealHistory = revealTeam === "amber" ? latestAmber : latestBlue;
+    if (revealHistory) {
+      return (
+        <RoundRevealView
+          round={gameState.round}
+          team={revealTeam}
+          history={revealHistory}
+          revealed={reveal.revealed}
+          onSkip={reveal.skip}
+        />
+      );
+    }
+  }
+
   return (
     <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto">
       <div className="text-center">
@@ -190,21 +231,36 @@ export function RoundResultsView() {
         {renderTeamResult("blue", latestBlue)}
       </div>
 
+      {isGameDecided && (
+        <div
+          className={cn(
+            "flex items-center justify-center gap-2 rounded-lg py-5 px-4 text-2xl font-bold text-white shadow-lg",
+            gameState.winner === "amber" ? "team-amber" : gameState.winner === "blue" ? "team-blue" : "bg-muted text-foreground"
+          )}
+          data-testid="text-game-decided"
+        >
+          {gameState.winner && <Trophy className="h-7 w-7 shrink-0" />}
+          {gameState.winner
+            ? `Team ${gameState.winner === "amber" ? "Amber" : "Blue"} Wins the Game!`
+            : "The Game Has Ended in a Tie!"}
+        </div>
+      )}
+
       {isHost && (
         <Button
           size="lg"
-          onClick={handleNextRound}
+          onClick={handleContinue}
           className="w-full"
           data-testid="button-next-round"
         >
-          <ArrowRight className="h-5 w-5 mr-2" />
-          Next Round
+          {isGameDecided ? <Trophy className="h-5 w-5 mr-2" /> : <ArrowRight className="h-5 w-5 mr-2" />}
+          {isGameDecided ? "See Final Results" : "Next Round"}
         </Button>
       )}
 
       {!isHost && (
         <div className="text-center text-sm text-muted-foreground">
-          Waiting for host to start the next round...
+          {isGameDecided ? "Waiting for host to continue..." : "Waiting for host to start the next round..."}
         </div>
       )}
     </div>

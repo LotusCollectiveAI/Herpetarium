@@ -4,6 +4,10 @@ import { useToast } from "@/hooks/use-toast";
 
 interface GameContextType {
   gameState: GameState | null;
+  // True when the state on screen is a recording rather than a game in
+  // progress. Replay renders the same views as the live game, so anything
+  // that takes input from the viewer has to opt out of it explicitly.
+  isReplay: boolean;
   playerId: string | null;
   playerName: string | null;
   myTeam: "amber" | "blue" | null;
@@ -21,7 +25,7 @@ interface GameContextType {
   disconnect: () => void;
 }
 
-const GameContext = createContext<GameContextType | null>(null);
+export const GameContext = createContext<GameContextType | null>(null);
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 const BASE_RECONNECT_DELAY = 1000;
@@ -63,6 +67,13 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     gameIdRef.current = gameId;
 
     ws.onopen = () => {
+      // A newer connection may have replaced this socket while it was opening.
+      // Do not let the obsolete socket join a game and start a reconnect loop.
+      if (wsRef.current !== ws || gameIdRef.current !== gameId) {
+        ws.close();
+        return;
+      }
+
       setIsConnected(true);
       setPlayerName(name);
       reconnectAttemptRef.current = 0;
@@ -76,6 +87,11 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     };
 
     ws.onmessage = (event) => {
+      // Ignore state arriving from a game/socket that is no longer active.
+      if (wsRef.current !== ws || gameIdRef.current !== gameId) {
+        return;
+      }
+
       try {
         const message = JSON.parse(event.data) as ServerMessage;
         
@@ -83,20 +99,12 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
           case "game_state": {
             const newState = message.state;
             const currentGameId = gameIdRef.current || gameId;
-            setGameState(prev => {
-              if (prev && prev.phase !== newState.phase) {
-                const phaseToasts: Partial<Record<GamePhase, string>> = {
-                  own_team_guessing: "Clues submitted! Time to decode.",
-                  opponent_intercepting: "All guesses in — interception phase!",
-                  round_results: "Results are in!",
-                };
-                const toastMsg = phaseToasts[newState.phase];
-                if (toastMsg) {
-                  toast({ title: toastMsg });
-                }
-              }
-              return newState;
-            });
+
+            // Phase changes announce themselves through PhaseAnnouncement,
+            // the full-screen card. This used to raise a toast for three of
+            // them as well, which said the same thing a second time in a
+            // second place.
+            setGameState(newState);
             if (!isReconnect) {
               const storedId = sessionStorage.getItem(`player_${currentGameId}`);
               const player = newState.players.find(p => p.id === storedId || p.name === name);
@@ -173,16 +181,26 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
     };
 
     ws.onclose = () => {
+      // Closing a socket that has already been replaced must not mark the new
+      // connection offline or schedule another competing reconnect.
+      if (wsRef.current !== ws) {
+        return;
+      }
+
+      wsRef.current = null;
       setIsConnected(false);
       
-      if (!intentionalCloseRef.current && gameIdRef.current) {
+      if (!intentionalCloseRef.current && gameIdRef.current === gameId) {
         const attempt = reconnectAttemptRef.current;
         if (attempt < MAX_RECONNECT_ATTEMPTS) {
           const delay = BASE_RECONNECT_DELAY * Math.pow(2, attempt);
           reconnectAttemptRef.current = attempt + 1;
           console.log(`WebSocket closed unexpectedly. Reconnecting in ${delay}ms (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
           reconnectTimerRef.current = setTimeout(() => {
-            connectWs(gameIdRef.current!, name, true);
+            reconnectTimerRef.current = null;
+            if (!intentionalCloseRef.current && gameIdRef.current === gameId && !wsRef.current) {
+              connectWs(gameId, name, true);
+            }
           }, delay);
         } else {
           console.error("Max reconnection attempts reached");
@@ -196,8 +214,24 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   }, [toast]);
 
   const connect = useCallback((gameId: string, name: string) => {
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+
+    // Invalidate the previous socket before closing it. Its asynchronous
+    // onclose handler will then recognize that it is stale and do nothing.
+    const previousWs = wsRef.current;
+    wsRef.current = null;
+    previousWs?.close();
+
     intentionalCloseRef.current = false;
     reconnectAttemptRef.current = 0;
+    setGameState(null);
+    setPlayerId(null);
+    setIsConnected(false);
+    setMyKeywords(null);
+    setMyCode(null);
     connectWs(gameId, name, false);
   }, [connectWs]);
 
@@ -207,8 +241,9 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(reconnectTimerRef.current);
       reconnectTimerRef.current = null;
     }
-    wsRef.current?.close();
+    const ws = wsRef.current;
     wsRef.current = null;
+    ws?.close();
     gameIdRef.current = null;
     setGameState(null);
     setPlayerId(null);
@@ -230,6 +265,7 @@ export function GameProvider({ children }: { children: React.ReactNode }) {
   return (
     <GameContext.Provider value={{
       gameState,
+      isReplay: false,
       playerId,
       playerName,
       myTeam,

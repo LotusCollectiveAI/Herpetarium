@@ -8,14 +8,7 @@
  */
 
 import type { PromptStrategy, ClueTemplateParams, GuessTemplateParams, InterceptionTemplateParams } from "./promptStrategies";
-import { applyAblations, formatScratchNotes } from "./promptStrategies";
-
-function formatHistory(history: Array<{ clues: string[]; targetCode: [number, number, number] }>): string {
-  if (history.length === 0) return "";
-  return history.map((round, i) =>
-    `Round ${i + 1}: Clues [${round.clues.join(", ")}] → Code [${round.targetCode.join(", ")}]`
-  ).join("\n");
-}
+import { applyAblations, formatScratchNotes, formatHistory } from "./promptStrategies";
 
 export const kLevelStrategy: PromptStrategy = {
   name: "k-level",

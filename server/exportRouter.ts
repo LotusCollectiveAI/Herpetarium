@@ -130,9 +130,7 @@ export function registerExportRoutes(app: Express): void {
       const rounds = await storage.getMatchRoundsForMatches(matchIds);
 
       // Fetch all team chatter for these matches (for 3v3 deliberation columns)
-      const allChatter = matchIds.length > 0
-        ? await Promise.all(matchIds.map(id => storage.getTeamChatter(id))).then(arrays => arrays.flat())
-        : [];
+      const allChatter = await storage.getTeamChatterForMatches(matchIds);
 
       // Index chatter by matchId-roundNumber-team-phase
       const chatterIndex = new Map<string, any>();
@@ -232,6 +230,44 @@ export function registerExportRoutes(app: Express): void {
       res.end();
     } catch (err: any) {
       res.status(500).json({ error: err.message || "Export failed" });
+    }
+  });
+
+  // --- Match replay export (versioned, machine-readable) ---
+  app.get("/api/export/v2/matches/:gameId/replay", async (req: Request, res: Response) => {
+    try {
+      const gameId = req.params.gameId as string;
+      const match = await storage.getMatchByGameId(gameId);
+      if (!match) {
+        return res.status(404).json({ error: "Match not found" });
+      }
+
+      // Same reasoning as GET /api/matches/:gameId/events: the bundle
+      // carries both teams' keywords (on the match row itself) and the
+      // per-round codes, so it cannot be served for a game still in play,
+      // whose id every player already knows. Completion comes from the
+      // event stream because a game can own more than one match row.
+      const events = await storage.getMatchEventsByGameId(gameId);
+      const finished = events.some(
+        event => (event.payload as { eventType?: string }).eventType === "game_completed",
+      );
+      if (!finished) {
+        return res.status(409).json({
+          error: "Replay export is only available once the game has finished",
+          code: "game_in_progress",
+        });
+      }
+
+      const [rounds, aiLogs] = await Promise.all([
+        storage.getMatchRounds(match.id),
+        storage.getAiCallLogs(match.id),
+      ]);
+
+      res.setHeader("Content-Type", "application/json");
+      res.setHeader("Content-Disposition", `attachment; filename="replay-${gameId}.json"`);
+      res.json({ schemaVersion: "1.0", match, rounds, aiLogs, events });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || "Failed to export replay" });
     }
   });
 

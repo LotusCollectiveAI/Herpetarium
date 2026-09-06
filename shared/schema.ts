@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, boolean, timestamp, jsonb, serial, real, index, uniqueIndex } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { getDefaultConfigForProvider, getModelEntry, getModelKey } from "./modelRegistry";
 export { MODEL_OPTIONS, getDefaultConfigForProvider as getDefaultConfig } from "./modelRegistry";
@@ -267,16 +267,24 @@ export const playerSchema = z.object({
 
 export type Player = z.infer<typeof playerSchema>;
 
-export type GamePhase =
-  | "lobby"
-  | "team_setup"
-  | "giving_clues"
-  | "own_team_deliberation"
-  | "own_team_guessing"
-  | "opponent_deliberation"
-  | "opponent_intercepting"
-  | "round_results"
-  | "game_over";
+export const MIN_GAME_PLAYERS = 4;
+export const MIN_TEAM_PLAYERS = 2;
+export const MAX_GAME_PLAYERS = 8;
+export const MAX_TEAM_PLAYERS = 4;
+
+export const GAME_PHASES = [
+  "lobby",
+  "team_setup",
+  "giving_clues",
+  "own_team_deliberation",
+  "own_team_guessing",
+  "opponent_deliberation",
+  "opponent_intercepting",
+  "round_results",
+  "game_over",
+] as const;
+
+export type GamePhase = (typeof GAME_PHASES)[number];
 
 export const clueSchema = z.object({
   playerId: z.string(),
@@ -353,7 +361,7 @@ export const LONGFORM_ARENA_RULES: GameRules = {
 
 export const gameStateSchema = z.object({
   id: z.string(),
-  phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]),
+  phase: z.enum(GAME_PHASES),
   round: z.number(),
   rules: gameRulesSchema,
   players: z.array(playerSchema),
@@ -380,6 +388,31 @@ export const gameStateSchema = z.object({
       opponent: z.tuple([z.number(), z.number(), z.number()]).nullable(),
     }),
   }),
+  // The one teammate allowed to actually submit their team's decode guess
+  // (submit_guess) and, separately, their interception guess
+  // (submit_interception) this round. These can differ: the clue-giver is
+  // excluded from decoding their own code but not from intercepting, so a
+  // team whose only human is the clue-giver still gets a human submitting
+  // the interception even though an AI had to submit the decode. Everyone
+  // on the team can still click numbers to show teammates what they'd
+  // pick regardless of who's the designated submitter — see
+  // currentSelections.
+  decodeSubmitter: z.object({
+    amber: z.string().nullable(),
+    blue: z.string().nullable(),
+  }),
+  interceptSubmitter: z.object({
+    amber: z.string().nullable(),
+    blue: z.string().nullable(),
+  }),
+  // Live, in-progress picks per player, keyed by player id, so teammates
+  // can see each other's guesses forming in real time before the
+  // designated submitter locks one in. Reset whenever the team moves on
+  // to a new guessing task (new round, or decode -> intercept).
+  currentSelections: z.object({
+    amber: z.record(z.string(), z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()])),
+    blue: z.record(z.string(), z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()])),
+  }),
   teams: z.object({
     amber: teamStateSchema,
     blue: teamStateSchema,
@@ -398,11 +431,20 @@ export const wsMessageSchema = z.discriminatedUnion("type", [
   }),
   z.object({ type: z.literal("remove_player"), playerId: z.string() }),
   z.object({ type: z.literal("join_team"), team: z.enum(["amber", "blue"]) }),
+  // Host-only, and only for AI players: join_team can only ever move its
+  // own sender, so before this there was no way to place a bot -- they were
+  // swept into whichever team needed filling at confirm time.
+  z.object({
+    type: z.literal("assign_ai_team"),
+    playerId: z.string(),
+    team: z.enum(["amber", "blue"]).nullable(),
+  }),
   z.object({ type: z.literal("start_game") }),
   z.object({ type: z.literal("confirm_teams") }),
   z.object({ type: z.literal("submit_clues"), clues: z.array(z.string()) }),
   z.object({ type: z.literal("submit_guess"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
   z.object({ type: z.literal("submit_interception"), guess: z.tuple([z.number(), z.number(), z.number()]) }),
+  z.object({ type: z.literal("update_selection"), selection: z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()]) }),
   z.object({ type: z.literal("next_round") }),
   z.object({ type: z.literal("request_state") }),
   z.object({ type: z.literal("new_game_same_players") }),
@@ -422,7 +464,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("ai_done"), aiName: z.string() }),
   z.object({ type: z.literal("ai_fallback"), aiName: z.string(), reason: z.string() }),
   z.object({ type: z.literal("new_game_created"), gameId: z.string() }),
-  z.object({ type: z.literal("phase_changed"), phase: z.enum(["lobby", "team_setup", "giving_clues", "own_team_deliberation", "own_team_guessing", "opponent_deliberation", "opponent_intercepting", "round_results", "game_over"]), round: z.number() }),
+  z.object({ type: z.literal("phase_changed"), phase: z.enum(GAME_PHASES), round: z.number() }),
 ]);
 
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
@@ -476,7 +518,13 @@ export const matches = pgTable("matches", {
   focalTeam: varchar("focal_team", { length: 10 }).$type<"amber" | "blue" | null>(),
   gameRules: jsonb("game_rules").$type<GameRules | null>(),
   matchmakingBucket: varchar("matchmaking_bucket", { length: 24 }),
-});
+}, (table) => ({
+  // As with team_chatter above: migrations 0002 and 0005 add these, but
+  // neither is in the drizzle journal, so they never reached a database
+  // built by push. Declaring them here is what actually creates them.
+  qualityStatusIdx: index("idx_matches_quality_status").on(table.qualityStatus),
+  teamSizeIdx: index("idx_matches_team_size").on(table.teamSize),
+}));
 
 export const insertMatchSchema = createInsertSchema(matches).omit({ id: true, createdAt: true });
 export type InsertMatch = z.infer<typeof insertMatchSchema>;
@@ -513,7 +561,15 @@ export const teamChatter = pgTable("team_chatter", {
   consensusReached: boolean("consensus_reached").notNull().default(false),
   finalAnswer: jsonb("final_answer"), // [number, number, number] | null
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Declared here because migrations/0001_team_chatter.sql, which adds
+  // these, is not in migrations/meta (the journal only tracks 0000) and so
+  // never ran against a database provisioned by drizzle-kit push -- these
+  // were missing entirely until they were declared here. The names match
+  // the SQL exactly, so applying either route is idempotent.
+  matchIdIdx: index("idx_team_chatter_match_id").on(table.matchId),
+  gameRoundIdx: index("idx_team_chatter_game_round").on(table.gameId, table.roundNumber),
+}));
 
 export const insertTeamChatterSchema = createInsertSchema(teamChatter).omit({ id: true, createdAt: true });
 export type InsertTeamChatter = z.infer<typeof insertTeamChatterSchema>;
@@ -590,11 +646,125 @@ export const aiCallLogs = pgTable("ai_call_logs", {
   estimatedCostUsd: varchar("estimated_cost_usd", { length: 20 }),
   reasoningTrace: text("reasoning_trace"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  // Every read of this table filters on match_id (eq or IN) -- cost
+  // totals, per-match log listings, the reasoning-trace scan, and the
+  // export endpoints. This is also the largest table in the schema, one
+  // row per AI call per round per match, so without this index each of
+  // those was a full sequential scan.
+  matchIdIdx: index("idx_ai_call_logs_match_id").on(table.matchId),
+}));
 
 export const insertAiCallLogSchema = createInsertSchema(aiCallLogs).omit({ id: true, createdAt: true });
 export type InsertAiCallLog = z.infer<typeof insertAiCallLogSchema>;
 export type AiCallLog = typeof aiCallLogs.$inferSelect;
+
+// Match event log — an ordered, typed record of everything that happens
+// during a match, purpose-built for replay and export. This is additive:
+// matches/matchRounds/aiCallLogs above keep being written exactly as
+// before for the existing History/EvalDashboard/export tooling. `sequence`
+// (not createdAt) is the source of truth for ordering, since it's assigned
+// by a monotonic per-game counter rather than relying on timestamp
+// resolution/clock skew.
+
+export const matchEvents = pgTable("match_events", {
+  id: serial("id").primaryKey(),
+  matchId: integer("match_id"),
+  gameId: varchar("game_id", { length: 100 }).notNull(),
+  sequence: integer("sequence").notNull(),
+  round: integer("round"),
+  team: varchar("team", { length: 10 }),
+  playerId: varchar("player_id", { length: 100 }),
+  eventType: varchar("event_type", { length: 40 }).notNull(),
+  payload: jsonb("payload").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertMatchEventSchema = createInsertSchema(matchEvents).omit({ id: true, createdAt: true });
+export type InsertMatchEvent = z.infer<typeof insertMatchEventSchema>;
+export type MatchEvent = typeof matchEvents.$inferSelect;
+
+const matchEventTeamCodeSchema = z.tuple([z.number(), z.number(), z.number()]);
+
+export const matchEventPayloadSchema = z.discriminatedUnion("eventType", [
+  z.object({
+    eventType: z.literal("game_created"),
+    rules: gameRulesSchema,
+    players: z.array(playerSchema),
+    teamSize: z.number(),
+  }),
+  z.object({
+    eventType: z.literal("round_started"),
+    round: z.number(),
+    clueGiver: z.object({ amber: z.string().nullable(), blue: z.string().nullable() }),
+    code: z.object({ amber: matchEventTeamCodeSchema, blue: matchEventTeamCodeSchema }),
+    keywords: z.object({ amber: z.array(z.string()), blue: z.array(z.string()) }),
+  }),
+  z.object({
+    eventType: z.literal("clue_submitted"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    clues: z.array(z.string()),
+  }),
+  z.object({
+    eventType: z.literal("selection_updated"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    phase: z.enum(["decode", "intercept"]),
+    selection: z.tuple([z.number().nullable(), z.number().nullable(), z.number().nullable()]),
+  }),
+  z.object({
+    eventType: z.literal("guess_submitted"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    guess: matchEventTeamCodeSchema,
+    correct: z.boolean(),
+  }),
+  z.object({
+    eventType: z.literal("interception_submitted"),
+    team: z.enum(["amber", "blue"]),
+    playerId: z.string(),
+    guess: matchEventTeamCodeSchema,
+    success: z.boolean(),
+  }),
+  z.object({
+    eventType: z.literal("ai_call"),
+    team: z.enum(["amber", "blue"]).nullable(),
+    playerId: z.string().nullable(),
+    provider: z.string(),
+    model: z.string(),
+    actionType: z.string(),
+    latencyMs: z.number().nullable(),
+    timedOut: z.boolean(),
+    usedFallback: z.boolean(),
+    error: z.string().nullable(),
+    parseQuality: z.string().nullable(),
+    promptTokens: z.number().nullable(),
+    completionTokens: z.number().nullable(),
+    totalTokens: z.number().nullable(),
+    estimatedCostUsd: z.string().nullable(),
+    reasoningTrace: z.string().nullable(),
+  }),
+  z.object({
+    eventType: z.literal("round_completed"),
+    round: z.number(),
+    teams: z.object({
+      amber: z.object({ ownTeamCorrect: z.boolean(), intercepted: z.boolean(), whiteTokensAwarded: z.number(), blackTokensAwarded: z.number() }),
+      blue: z.object({ ownTeamCorrect: z.boolean(), intercepted: z.boolean(), whiteTokensAwarded: z.number(), blackTokensAwarded: z.number() }),
+    }),
+  }),
+  z.object({
+    eventType: z.literal("game_completed"),
+    winner: z.enum(["amber", "blue"]).nullable(),
+    finalTokens: z.object({
+      amber: z.object({ whiteTokens: z.number(), blackTokens: z.number() }),
+      blue: z.object({ whiteTokens: z.number(), blackTokens: z.number() }),
+    }),
+  }),
+]);
+
+export type MatchEventPayload = z.infer<typeof matchEventPayloadSchema>;
+export type MatchEventType = MatchEventPayload["eventType"];
 
 // Tournament tables
 

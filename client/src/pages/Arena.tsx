@@ -60,15 +60,12 @@ export default function Arena() {
 
   // Compute standings from runs
   const standings = arenaRuns
-    .map((run: any) => {
-      const totalGames = (run.currentSprint || 0);
-      return {
-        runId: run.id,
-        genome: run.currentGenome,
-        sprint: run.currentSprint,
-        status: run.status,
-      };
-    })
+    .map((run: any) => ({
+      runId: run.id,
+      genome: run.currentGenome,
+      sprint: run.currentSprint,
+      status: run.status,
+    }))
     .sort((a: any, b: any) => (b.sprint || 0) - (a.sprint || 0));
 
   // Side balance across all evaluations
@@ -80,13 +77,6 @@ export default function Arena() {
       blueWinRate: record.evaluation.sideBalance.blueWinRate,
       sideGap: record.evaluation.sideBalance.sideGap,
     }));
-
-  // Module mutation distribution
-  const moduleCounts: Record<string, number> = {};
-  for (const record of evaluations || []) {
-    // Count from evidence lines which modules are being patched
-    // We'll count from the evaluations themselves
-  }
 
   return (
     <div className="min-h-screen bg-background p-4 max-w-7xl mx-auto">

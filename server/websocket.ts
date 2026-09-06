@@ -1,6 +1,6 @@
 import { WebSocketServer, WebSocket } from "ws";
 import { Server } from "http";
-import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, AIPlayerConfig, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs } from "@shared/schema";
+import { GameState, Player, WSMessage, ServerMessage, wsMessageSchema, getDefaultConfig, MODEL_OPTIONS, MatchQualitySummary, buildMatchPlayerConfigs, MIN_GAME_PLAYERS, MIN_TEAM_PLAYERS, MAX_TEAM_PLAYERS } from "@shared/schema";
 import {
   createNewGame,
   addPlayer,
@@ -8,17 +8,23 @@ import {
   assignTeam,
   startGame,
   startNewRound,
+  advanceFromRoundResults,
+  isGameDecided,
   autoAssignRemainingPlayers,
   submitClues,
   submitOwnTeamGuess,
   submitInterception,
+  updateSelection,
   generatePlayerId,
   getAIProviderName,
   shuffleArray,
+  getConfigForPlayer,
 } from "./game";
-import { generateClues, generateGuess, generateInterception, AICallResult } from "./ai";
+import { generateClues, generateGuess, generateInterception, AICallResult, withAICallTimeout } from "./ai";
 import { storage } from "./storage";
 import { log } from "./index";
+import { emitMatchEvent, clearMatchEventSequence } from "./matchEvents";
+import { redactGameStateForTeam } from "./redactGameState";
 
 interface ClientConnection {
   ws: WebSocket;
@@ -45,33 +51,6 @@ function getPlayerTimeout(player: Player): number {
     return player.aiConfig.timeoutMs; // Respect the configured value, no cap
   }
   return DEFAULT_AI_TIMEOUT_MS;
-}
-
-function getPlayerConfig(player: Player): AIPlayerConfig {
-  if (player.aiConfig) return player.aiConfig;
-  if (player.aiProvider) return getDefaultConfig(player.aiProvider);
-  return getDefaultConfig("chatgpt");
-}
-
-function withTimeout<T>(
-  promise: Promise<AICallResult<T>>,
-  timeoutMs: number,
-  fallback: T,
-  model: string
-): Promise<{ result: AICallResult<T>; timedOut: boolean }> {
-  const wrappedPromise = promise.then(r => ({ result: r, timedOut: false }));
-
-  const timeoutPromise = new Promise<{ result: AICallResult<T>; timedOut: boolean }>(resolve =>
-    setTimeout(() => resolve({
-      result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: timeoutMs, error: "timeout", parseQuality: "error" as const },
-      timedOut: true,
-    }), timeoutMs)
-  );
-
-  return Promise.race([wrappedPromise, timeoutPromise]).catch(() => ({
-    result: { result: fallback, prompt: "", rawResponse: "", model, latencyMs: 0, error: "unknown error", parseQuality: "error" as const },
-    timedOut: false,
-  }));
 }
 
 function getStem(word: string): string {
@@ -135,37 +114,66 @@ const lastPhase = new Map<string, string>();
 function sendGameState(gameId: string) {
   const game = games.get(gameId);
   if (!game) return;
-  
+
   const prevPhase = lastPhase.get(gameId);
   if (prevPhase && prevPhase !== game.phase) {
     broadcast(gameId, { type: "phase_changed", phase: game.phase, round: game.round });
   }
   lastPhase.set(gameId, game.phase);
-  
-  broadcast(gameId, { type: "game_state", state: game });
-  
+
   const sockets = gameClients.get(gameId);
   if (!sockets) return;
-  
+
+  // At most 3 distinct views exist (amber, blue, no-team-yet), so serialize
+  // each once and reuse it across every socket on that team instead of
+  // re-stringifying per recipient.
+  const serializedByTeam = new Map<"amber" | "blue" | null, string>();
+  const getSerializedState = (team: "amber" | "blue" | null): string => {
+    let data = serializedByTeam.get(team);
+    if (data === undefined) {
+      const message: ServerMessage = { type: "game_state", state: redactGameStateForTeam(game, team) };
+      data = JSON.stringify(message);
+      serializedByTeam.set(team, data);
+    }
+    return data;
+  };
+
   sockets.forEach(ws => {
     const client = clients.get(ws);
     if (!client) return;
-    
+
     const player = game.players.find(p => p.id === client.playerId);
+    const viewerTeam = player?.team ?? null;
+
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(getSerializedState(viewerTeam));
+    }
+
     if (!player?.team) return;
-    
+
     const keywords = game.teams[player.team].keywords;
     if (keywords.length > 0) {
       sendTo(ws, { type: "keywords", keywords });
     }
-    
+
     if (game.currentClueGiver[player.team] === client.playerId && game.currentCode[player.team]) {
       sendTo(ws, { type: "your_code", code: game.currentCode[player.team]! });
     }
   });
 }
 
-async function logAiCall(gameId: string, roundNumber: number, provider: string, actionType: string, callResult: AICallResult<any>, timedOut: boolean) {
+async function logAiCall(
+  gameId: string,
+  roundNumber: number,
+  provider: string,
+  actionType: string,
+  callResult: AICallResult<any>,
+  timedOut: boolean,
+  team: "amber" | "blue" | null = null,
+  playerId: string | null = null,
+) {
+  const usedFallback = timedOut || !!callResult.error;
+
   try {
     const matchId = gameMatchIds.get(gameId);
     await storage.createAiCallLog({
@@ -182,6 +190,7 @@ async function logAiCall(gameId: string, roundNumber: number, provider: string, 
       timedOut,
       error: callResult.error || null,
       parseQuality: callResult.parseQuality || null,
+      usedFallback,
       promptTokens: callResult.promptTokens || null,
       completionTokens: callResult.completionTokens || null,
       totalTokens: callResult.totalTokens || null,
@@ -191,6 +200,25 @@ async function logAiCall(gameId: string, roundNumber: number, provider: string, 
   } catch (err) {
     log(`Failed to log AI call: ${err}`, "websocket");
   }
+
+  await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+    eventType: "ai_call",
+    team,
+    playerId,
+    provider,
+    model: callResult.model,
+    actionType,
+    latencyMs: callResult.latencyMs ?? null,
+    timedOut,
+    usedFallback,
+    error: callResult.error ?? null,
+    parseQuality: callResult.parseQuality ?? null,
+    promptTokens: callResult.promptTokens ?? null,
+    completionTokens: callResult.completionTokens ?? null,
+    totalTokens: callResult.totalTokens ?? null,
+    estimatedCostUsd: callResult.estimatedCostUsd ?? null,
+    reasoningTrace: callResult.reasoningTrace ?? null,
+  }, { round: roundNumber, team, playerId });
 }
 
 async function persistRoundResults(gameId: string, game: GameState) {
@@ -278,23 +306,98 @@ async function createMatchRecord(gameId: string, game: GameState) {
   }
 }
 
+async function emitRoundEvaluationEvents(gameId: string, game: GameState) {
+  const matchId = gameMatchIds.get(gameId) ?? null;
+  const amberLatest = game.teams.amber.history[game.teams.amber.history.length - 1];
+  const blueLatest = game.teams.blue.history[game.teams.blue.history.length - 1];
+
+  if (amberLatest && blueLatest) {
+    await emitMatchEvent(gameId, matchId, {
+      eventType: "round_completed",
+      round: game.round,
+      teams: {
+        amber: {
+          ownTeamCorrect: amberLatest.ownTeamCorrect,
+          intercepted: amberLatest.intercepted,
+          whiteTokensAwarded: amberLatest.ownTeamCorrect ? 0 : 1,
+          blackTokensAwarded: amberLatest.intercepted ? 1 : 0,
+        },
+        blue: {
+          ownTeamCorrect: blueLatest.ownTeamCorrect,
+          intercepted: blueLatest.intercepted,
+          whiteTokensAwarded: blueLatest.ownTeamCorrect ? 0 : 1,
+          blackTokensAwarded: blueLatest.intercepted ? 1 : 0,
+        },
+      },
+    }, { round: game.round });
+  }
+
+  if (isGameDecided(game)) {
+    await emitMatchEvent(gameId, matchId, {
+      eventType: "game_completed",
+      winner: game.winner,
+      finalTokens: {
+        amber: { whiteTokens: game.teams.amber.whiteTokens, blackTokens: game.teams.amber.blackTokens },
+        blue: { whiteTokens: game.teams.blue.whiteTokens, blackTokens: game.teams.blue.blackTokens },
+      },
+    }, { round: game.round });
+  }
+}
+
+async function emitRoundStartedEvent(gameId: string, game: GameState) {
+  const matchId = gameMatchIds.get(gameId) ?? null;
+  await emitMatchEvent(gameId, matchId, {
+    eventType: "round_started",
+    round: game.round,
+    clueGiver: game.currentClueGiver,
+    code: {
+      amber: game.currentCode.amber!,
+      blue: game.currentCode.blue!,
+    },
+    keywords: {
+      amber: game.teams.amber.keywords,
+      blue: game.teams.blue.keywords,
+    },
+  }, { round: game.round });
+}
+
+// processAITurn is scheduled via setTimeout from many independent call sites
+// (WS message handlers, internal transitions). More than one of those can
+// land while a game is still in the same phase, and each phase handler below
+// loops over teams with real (slow) AI calls in between checking and acting
+// on shared state -- without this guard, two overlapping invocations can
+// both generate and submit an AI turn for the same team, wasting a real,
+// billed AI call. (submitClues/submitOwnTeamGuess/submitInterception also
+// guard against the redundant submission itself, independently of this.)
+const aiTurnInProgress = new Set<string>();
+
+// Games whose confirm_teams handler is mid-flight. See the handler for why
+// the phase check alone leaves a window open.
+const confirmingTeams = new Set<string>();
+
 async function processAITurn(gameId: string) {
-  const game = games.get(gameId);
-  if (!game) return;
-  
-  switch (game.phase) {
-    case "team_setup":
-      await handleTeamSetupPhase(gameId);
-      break;
-    case "giving_clues":
-      await processAIClues(gameId);
-      break;
-    case "own_team_guessing":
-      await processAIGuesses(gameId);
-      break;
-    case "opponent_intercepting":
-      await processAIInterceptions(gameId);
-      break;
+  if (aiTurnInProgress.has(gameId)) return;
+  aiTurnInProgress.add(gameId);
+  try {
+    const game = games.get(gameId);
+    if (!game) return;
+
+    switch (game.phase) {
+      case "team_setup":
+        await handleTeamSetupPhase(gameId);
+        break;
+      case "giving_clues":
+        await processAIClues(gameId);
+        break;
+      case "own_team_guessing":
+        await processAIGuesses(gameId);
+        break;
+      case "opponent_intercepting":
+        await processAIInterceptions(gameId);
+        break;
+    }
+  } finally {
+    aiTurnInProgress.delete(gameId);
   }
 }
 
@@ -314,7 +417,7 @@ async function processAIClues(gameId: string) {
     if (!clueGiver?.isAI || !clueGiver.aiProvider) continue;
     
     const aiName = getAIProviderName(clueGiver.aiProvider);
-    const config = getPlayerConfig(clueGiver);
+    const config = getConfigForPlayer(clueGiver);
     const timeoutMs = getPlayerTimeout(clueGiver);
     
     broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
@@ -328,14 +431,14 @@ async function processAIClues(gameId: string) {
     
     const fallbackClues = code.map(n => keywords[n - 1].slice(0, 3));
     
-    const { result: callResult, timedOut } = await withTimeout(
-      generateClues(config, { keywords, targetCode: code, history }),
+    const { result: callResult, timedOut } = await withAICallTimeout(
       timeoutMs,
+      generateClues(config, { keywords, targetCode: code, history }),
       fallbackClues,
       config.model
     );
     
-    await logAiCall(gameId, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut);
+    await logAiCall(gameId, game.round, clueGiver.aiProvider, "generate_clues", callResult, timedOut, team, clueGiver.id);
     
     if (timedOut) {
       log(`AI clue generation timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
@@ -352,7 +455,14 @@ async function processAIClues(gameId: string) {
     game = games.get(gameId)!;
     game = submitClues(game, team, callResult.result);
     games.set(gameId, game);
-    
+
+    await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+      eventType: "clue_submitted",
+      team,
+      playerId: clueGiver.id,
+      clues: callResult.result,
+    }, { round: game.round, team, playerId: clueGiver.id });
+
     broadcast(gameId, { type: "ai_done", aiName });
   }
   
@@ -364,144 +474,229 @@ async function processAIClues(gameId: string) {
   }
 }
 
+async function runAIGuessCall(
+  gameId: string,
+  game: GameState,
+  team: "amber" | "blue",
+  aiPlayer: Player,
+  fallbackGuess: [number, number, number],
+): Promise<[number, number, number]> {
+  const aiName = getAIProviderName(aiPlayer.aiProvider!);
+  const config = getConfigForPlayer(aiPlayer);
+  const timeoutMs = getPlayerTimeout(aiPlayer);
+
+  broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
+
+  const clues = game.currentClues[team]!;
+  const keywords = game.teams[team].keywords;
+  const history = game.teams[team].history.map(h => ({
+    clues: h.clues,
+    targetCode: h.targetCode,
+  }));
+
+  const { result: callResult, timedOut } = await withAICallTimeout(
+    timeoutMs,
+    generateGuess(config, { keywords, clues, history }),
+    fallbackGuess,
+    config.model
+  );
+
+  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_guess", callResult, timedOut, aiPlayer.team, aiPlayer.id);
+
+  if (timedOut) {
+    log(`AI guess timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
+  } else if (callResult.error) {
+    log(`AI guess failed for ${aiName} (${config.model})`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+  }
+
+  if (callResult.reasoningTrace) {
+    log(`[Reasoning Trace] ${aiName} (${config.model}) guess:\n${callResult.reasoningTrace}`, "websocket");
+  }
+
+  broadcast(gameId, { type: "ai_done", aiName });
+
+  return callResult.result;
+}
+
 async function processAIGuesses(gameId: string) {
   let game = games.get(gameId);
   if (!game || game.phase !== "own_team_guessing") return;
-  
+
   const fallbackGuess: [number, number, number] = [1, 2, 3];
-  
+
   for (const team of ["amber", "blue"] as const) {
     if (game.currentGuesses[team].ownTeam) continue;
-    
+
     const teamPlayers = game.players.filter(p => p.team === team);
-    const nonClueGivers = teamPlayers.filter(p => p.id !== game!.currentClueGiver[team]);
-    const aiGuesser = nonClueGivers.find(p => p.isAI);
-    
-    if (!aiGuesser) {
-      const humanGuessers = nonClueGivers.filter(p => !p.isAI);
-      if (humanGuessers.length === 0 && teamPlayers.length === 1) {
-        continue;
-      }
-      continue;
-    }
-    
-    const aiName = getAIProviderName(aiGuesser.aiProvider!);
-    const config = getPlayerConfig(aiGuesser);
-    const timeoutMs = getPlayerTimeout(aiGuesser);
-    
-    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
-    
-    const clues = game.currentClues[team]!;
-    const keywords = game.teams[team].keywords;
-    const history = game.teams[team].history.map(h => ({
-      clues: h.clues,
-      targetCode: h.targetCode,
-    }));
-    
-    const { result: callResult, timedOut } = await withTimeout(
-      generateGuess(config, { keywords, clues, history }),
-      timeoutMs,
-      fallbackGuess,
-      config.model
+    const clueGiverId = game!.currentClueGiver[team];
+    const decodeSubmitterId = game!.decodeSubmitter[team];
+
+    // AI teammates who aren't the designated submitter still weigh in with
+    // a suggested pick — shown to the team as a live selection, same as a
+    // human clicking numbers — so a human submitter isn't guessing blind
+    // to what their AI teammates would have picked. The clue-giver is
+    // excluded since they already know the code and never decode it.
+    const opinionGivers = teamPlayers.filter(p =>
+      p.isAI && p.id !== clueGiverId && p.id !== decodeSubmitterId && !game!.currentSelections[team][p.id]
     );
-    
-    await logAiCall(gameId, game.round, aiGuesser.aiProvider!, "generate_guess", callResult, timedOut);
-    
-    if (timedOut) {
-      log(`AI guess timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
-    } else if (callResult.error) {
-      log(`AI guess failed for ${aiName} (${config.model})`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+
+    for (const aiPlayer of opinionGivers) {
+      const guess = await runAIGuessCall(gameId, game, team, aiPlayer, fallbackGuess);
+      game = games.get(gameId)!;
+      game = updateSelection(game, team, aiPlayer.id, guess);
+      games.set(gameId, game);
+      sendGameState(gameId);
+
+      await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+        eventType: "selection_updated",
+        team,
+        playerId: aiPlayer.id,
+        phase: "decode",
+        selection: guess,
+      }, { round: game.round, team, playerId: aiPlayer.id });
     }
-    
-    if (callResult.reasoningTrace) {
-      log(`[Reasoning Trace] ${aiName} (${config.model}) guess:\n${callResult.reasoningTrace}`, "websocket");
-    }
-    
+
+    const aiGuesser = teamPlayers.find(p => p.id === decodeSubmitterId && p.isAI);
+    if (!aiGuesser) continue;
+
+    const guess = await runAIGuessCall(gameId, game, team, aiGuesser, fallbackGuess);
+    const ownCode = game.currentCode[team]!;
     game = games.get(gameId)!;
-    game = submitOwnTeamGuess(game, team, callResult.result);
+    game = submitOwnTeamGuess(game, team, guess);
     games.set(gameId, game);
-    
-    broadcast(gameId, { type: "ai_done", aiName });
+
+    await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+      eventType: "guess_submitted",
+      team,
+      playerId: aiGuesser.id,
+      guess,
+      correct: guess.every((n, i) => n === ownCode[i]),
+    }, { round: game.round, team, playerId: aiGuesser.id });
   }
-  
+
   sendGameState(gameId);
-  
+
   game = games.get(gameId)!;
   if (game.phase === "opponent_intercepting") {
     setTimeout(() => processAITurn(gameId), 500);
   }
 }
 
+async function runAIInterceptionCall(
+  gameId: string,
+  game: GameState,
+  opponentTeam: "amber" | "blue",
+  aiPlayer: Player,
+  fallbackGuess: [number, number, number],
+): Promise<[number, number, number]> {
+  const aiName = getAIProviderName(aiPlayer.aiProvider!);
+  const config = getConfigForPlayer(aiPlayer);
+  const timeoutMs = getPlayerTimeout(aiPlayer);
+
+  broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
+
+  const clues = game.currentClues[opponentTeam]!;
+  const history = game.teams[opponentTeam].history.map(h => ({
+    clues: h.clues,
+    targetCode: h.targetCode,
+  }));
+
+  const { result: callResult, timedOut } = await withAICallTimeout(
+    timeoutMs,
+    generateInterception(config, { clues, history }),
+    fallbackGuess,
+    config.model
+  );
+
+  await logAiCall(gameId, game.round, aiPlayer.aiProvider!, "generate_interception", callResult, timedOut, aiPlayer.team, aiPlayer.id);
+
+  if (timedOut) {
+    log(`AI interception timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
+  } else if (callResult.error) {
+    log(`AI interception failed for ${aiName} (${config.model})`, "websocket");
+    broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+  }
+
+  if (callResult.reasoningTrace) {
+    log(`[Reasoning Trace] ${aiName} (${config.model}) interception:\n${callResult.reasoningTrace}`, "websocket");
+  }
+
+  broadcast(gameId, { type: "ai_done", aiName });
+
+  return callResult.result;
+}
+
 async function processAIInterceptions(gameId: string) {
   let game = games.get(gameId);
   if (!game || game.phase !== "opponent_intercepting") return;
-  
+
   const fallbackGuess: [number, number, number] = [1, 2, 3];
-  
+
   for (const team of ["amber", "blue"] as const) {
     if (game.currentGuesses[team].opponent) continue;
-    
+
     const opponentTeam = team === "amber" ? "blue" : "amber";
-    
     const teamPlayers = game.players.filter(p => p.team === team);
-    const aiInterceptor = teamPlayers.find(p => p.isAI);
-    
-    if (!aiInterceptor) continue;
-    
-    const aiName = getAIProviderName(aiInterceptor.aiProvider!);
-    const config = getPlayerConfig(aiInterceptor);
-    const timeoutMs = getPlayerTimeout(aiInterceptor);
-    
-    broadcast(gameId, { type: "ai_thinking", aiName, startTime: Date.now() });
-    
-    const clues = game.currentClues[opponentTeam]!;
-    const history = game.teams[opponentTeam].history.map(h => ({
-      clues: h.clues,
-      targetCode: h.targetCode,
-    }));
-    
-    const { result: callResult, timedOut } = await withTimeout(
-      generateInterception(config, { clues, history }),
-      timeoutMs,
-      fallbackGuess,
-      config.model
+    const interceptSubmitterId = game!.interceptSubmitter[team];
+
+    // AI teammates who aren't the designated submitter still weigh in
+    // with a suggested pick, same as during decoding. Unlike decoding,
+    // the clue-giver isn't excluded here — they know as little about the
+    // opponent's code as anyone else.
+    const opinionGivers = teamPlayers.filter(p =>
+      p.isAI && p.id !== interceptSubmitterId && !game!.currentSelections[team][p.id]
     );
-    
-    await logAiCall(gameId, game.round, aiInterceptor.aiProvider!, "generate_interception", callResult, timedOut);
-    
-    if (timedOut) {
-      log(`AI interception timed out for ${aiName} (${config.model}, ${timeoutMs}ms)`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI took too long, using fallback guess" });
-    } else if (callResult.error) {
-      log(`AI interception failed for ${aiName} (${config.model})`, "websocket");
-      broadcast(gameId, { type: "ai_fallback", aiName, reason: "AI encountered an error, using fallback guess" });
+
+    for (const aiPlayer of opinionGivers) {
+      const guess = await runAIInterceptionCall(gameId, game, opponentTeam, aiPlayer, fallbackGuess);
+      game = games.get(gameId)!;
+      game = updateSelection(game, team, aiPlayer.id, guess);
+      games.set(gameId, game);
+      sendGameState(gameId);
+
+      await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+        eventType: "selection_updated",
+        team,
+        playerId: aiPlayer.id,
+        phase: "intercept",
+        selection: guess,
+      }, { round: game.round, team, playerId: aiPlayer.id });
     }
-    
-    if (callResult.reasoningTrace) {
-      log(`[Reasoning Trace] ${aiName} (${config.model}) interception:\n${callResult.reasoningTrace}`, "websocket");
-    }
-    
+
+    const aiInterceptor = teamPlayers.find(p => p.id === interceptSubmitterId && p.isAI);
+    if (!aiInterceptor) continue;
+
+    const guess = await runAIInterceptionCall(gameId, game, opponentTeam, aiInterceptor, fallbackGuess);
+    const preSubmitCode = game.currentCode[opponentTeam]!;
     game = games.get(gameId)!;
-    game = submitInterception(game, team, callResult.result);
+    game = submitInterception(game, team, guess);
     games.set(gameId, game);
-    
-    broadcast(gameId, { type: "ai_done", aiName });
+
+    await emitMatchEvent(gameId, gameMatchIds.get(gameId) ?? null, {
+      eventType: "interception_submitted",
+      team,
+      playerId: aiInterceptor.id,
+      guess,
+      success: guess.every((n, i) => n === preSubmitCode[i]),
+    }, { round: game.round, team, playerId: aiInterceptor.id });
   }
-  
+
   sendGameState(gameId);
-  
+
   game = games.get(gameId)!;
-  if (game.phase === "round_results" || game.phase === "game_over") {
+  if (game.phase === "round_results") {
     await persistRoundResults(gameId, game);
-    if (game.phase === "game_over") {
+    if (isGameDecided(game)) {
       await persistGameCompletion(gameId, game);
-    } else if (game.phase === "round_results") {
-      const allAI = game.players.every(p => p.isAI);
-      if (allAI) {
-        setTimeout(() => autoAdvanceRound(gameId), 1000);
-      }
+    }
+    await emitRoundEvaluationEvents(gameId, game);
+
+    const allAI = game.players.every(p => p.isAI);
+    if (allAI) {
+      setTimeout(() => autoAdvanceRound(gameId), 1000);
     }
   }
 }
@@ -510,11 +705,17 @@ async function autoAdvanceRound(gameId: string) {
   const game = games.get(gameId);
   if (!game || game.phase !== "round_results") return;
 
-  const updated = startNewRound(game);
+  const updated = advanceFromRoundResults(game);
   games.set(gameId, updated);
   sendGameState(gameId);
-  log(`Auto-advancing all-AI game ${gameId} to round ${updated.round}`, "websocket");
 
+  if (updated.phase === "game_over") {
+    log(`Auto-advancing all-AI game ${gameId} to game over`, "websocket");
+    return;
+  }
+
+  log(`Auto-advancing all-AI game ${gameId} to round ${updated.round}`, "websocket");
+  await emitRoundStartedEvent(gameId, updated);
   setTimeout(() => processAITurn(gameId), 500);
 }
 
@@ -616,8 +817,22 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       }
       
       const modelLabel = config.model || message.provider;
-      const displayName = `${getAIProviderName(config.provider)} (${modelLabel})`;
-      
+      const providerName = getAIProviderName(config.provider);
+      // Two AI on the same provider and model would otherwise be given the
+      // same name, and every place a player is identified to a human --
+      // the roster, the teammate pick bubbles, the team-setup cards --
+      // shows the name, not the id. In a 3-per-team game that means
+      // teammates offering conflicting advice are indistinguishable, so
+      // number the repeats. The number goes before the model rather than
+      // after it because these names are shown truncated in narrow
+      // columns, and a trailing "#2" is the first thing to be clipped.
+      const sameConfigCount = game.players.filter(
+        p => p.isAI && p.aiProvider === config.provider && p.aiConfig?.model === config.model,
+      ).length;
+      const displayName = sameConfigCount === 0
+        ? `${providerName} (${modelLabel})`
+        : `${providerName} #${sameConfigCount + 1} (${modelLabel})`;
+
       const aiPlayer: Player = {
         id: generatePlayerId(),
         name: displayName,
@@ -656,16 +871,64 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
     
     case "join_team": {
       if (!client) return;
-      
+
       const game = games.get(client.gameId);
       if (!game) return;
-      
+
+      const targetTeamSize = game.players.filter(p => p.team === message.team && p.id !== client.playerId).length;
+      if (targetTeamSize >= MAX_TEAM_PLAYERS) {
+        sendTo(ws, { type: "error", message: `Team ${message.team === "amber" ? "Amber" : "Blue"} is full (max ${MAX_TEAM_PLAYERS} players)` });
+        return;
+      }
+
       const updated = assignTeam(game, client.playerId, message.team);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
       break;
     }
-    
+
+    case "assign_ai_team": {
+      if (!client) return;
+
+      const game = games.get(client.gameId);
+      if (!game || game.hostId !== client.playerId) {
+        sendTo(ws, { type: "error", message: "Only host can assign AI players to teams" });
+        return;
+      }
+
+      if (game.phase !== "lobby" && game.phase !== "team_setup") {
+        sendTo(ws, { type: "error", message: "Teams are already set for this game" });
+        return;
+      }
+
+      const target = game.players.find(p => p.id === message.playerId);
+      if (!target) {
+        sendTo(ws, { type: "error", message: "Player not found" });
+        return;
+      }
+
+      // Humans choose for themselves via join_team; the host moving them
+      // around underneath them would be a different feature.
+      if (!target.isAI) {
+        sendTo(ws, { type: "error", message: "Only AI players can be assigned by the host" });
+        return;
+      }
+
+      if (message.team !== null) {
+        const targetTeamSize = game.players.filter(p => p.team === message.team && p.id !== target.id).length;
+        if (targetTeamSize >= MAX_TEAM_PLAYERS) {
+          sendTo(ws, { type: "error", message: `Team ${message.team === "amber" ? "Amber" : "Blue"} is full (max ${MAX_TEAM_PLAYERS} players)` });
+          return;
+        }
+      }
+
+      const updated = assignTeam(game, target.id, message.team);
+      games.set(client.gameId, updated);
+      sendGameState(client.gameId);
+      log(`Host assigned ${target.name} to ${message.team ?? "unassigned"} in game ${client.gameId}`, "websocket");
+      break;
+    }
+
     case "start_game": {
       if (!client) return;
       
@@ -675,8 +938,8 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         return;
       }
       
-      if (game.players.length < 2) {
-        sendTo(ws, { type: "error", message: "Need at least 2 players" });
+      if (game.players.length < MIN_GAME_PLAYERS) {
+        sendTo(ws, { type: "error", message: `Need at least ${MIN_GAME_PLAYERS} players` });
         return;
       }
       
@@ -703,25 +966,52 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
         return;
       }
       
-      game = autoAssignRemainingPlayers(game);
-      games.set(client.gameId, game);
+      const assignedGame = autoAssignRemainingPlayers(game);
       
-      const amberPlayers = game.players.filter(p => p.team === "amber");
-      const bluePlayers = game.players.filter(p => p.team === "blue");
+      const amberPlayers = assignedGame.players.filter(p => p.team === "amber");
+      const bluePlayers = assignedGame.players.filter(p => p.team === "blue");
       
-      if (amberPlayers.length < 1 || bluePlayers.length < 1) {
-        sendTo(ws, { type: "error", message: "Both teams need at least 1 player" });
+      if (amberPlayers.length < MIN_TEAM_PLAYERS || bluePlayers.length < MIN_TEAM_PLAYERS) {
+        sendTo(ws, { type: "error", message: `Each team needs at least ${MIN_TEAM_PLAYERS} players` });
         return;
       }
-      
-      await createMatchRecord(client.gameId, game);
-      
-      let updated = startNewRound(game);
-      games.set(client.gameId, updated);
-      sendGameState(client.gameId);
-      log(`Teams confirmed, Round 1 started for game ${client.gameId}`, "websocket");
-      
-      setTimeout(() => processAITurn(client.gameId), 500);
+
+      // The phase check above is not enough on its own: creating the match
+      // row is a database round-trip, and the phase only leaves team_setup
+      // after it. A second confirm_teams arriving in that window -- a
+      // double-clicked button is enough -- passes the same check and
+      // creates a second match row for the one game. Both rows then compete
+      // to be the game's record, and getMatchByGameId picks by createdAt,
+      // which for two near-simultaneous inserts can resolve to the empty
+      // one and leave the replay showing no rounds.
+      if (confirmingTeams.has(client.gameId)) return;
+      confirmingTeams.add(client.gameId);
+
+      try {
+        game = assignedGame;
+        games.set(client.gameId, game);
+
+        await createMatchRecord(client.gameId, game);
+
+        const createdMatchId = gameMatchIds.get(client.gameId) ?? null;
+        await emitMatchEvent(client.gameId, createdMatchId, {
+          eventType: "game_created",
+          rules: game.rules,
+          players: game.players,
+          teamSize: Math.max(amberPlayers.length, bluePlayers.length),
+        });
+
+        let updated = startNewRound(game);
+        games.set(client.gameId, updated);
+        sendGameState(client.gameId);
+        log(`Teams confirmed, Round 1 started for game ${client.gameId}`, "websocket");
+
+        await emitRoundStartedEvent(client.gameId, updated);
+
+        setTimeout(() => processAITurn(client.gameId), 500);
+      } finally {
+        confirmingTeams.delete(client.gameId);
+      }
       break;
     }
     
@@ -749,11 +1039,18 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       const updated = submitClues(game, player.team, message.clues);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
+
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "clue_submitted",
+        team: player.team,
+        playerId: player.id,
+        clues: message.clues,
+      }, { round: game.round, team: player.team, playerId: player.id });
+
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
-    
+
     case "submit_guess": {
       if (!client) return;
       
@@ -762,15 +1059,29 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       
       const player = game.players.find(p => p.id === client.playerId);
       if (!player?.team) return;
-      
+
+      if (game.decodeSubmitter[player.team] !== client.playerId) {
+        sendTo(ws, { type: "error", message: "You are not the designated submitter for your team this round" });
+        return;
+      }
+
       const updated = submitOwnTeamGuess(game, player.team, message.guess);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
+
+      const ownCode = game.currentCode[player.team]!;
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "guess_submitted",
+        team: player.team,
+        playerId: player.id,
+        guess: message.guess,
+        correct: message.guess.every((n, i) => n === ownCode[i]),
+      }, { round: game.round, team: player.team, playerId: player.id });
+
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
-    
+
     case "submit_interception": {
       if (!client) return;
       
@@ -779,36 +1090,79 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       
       const player = game.players.find(p => p.id === client.playerId);
       if (!player?.team) return;
-      
+
+      if (game.interceptSubmitter[player.team] !== client.playerId) {
+        sendTo(ws, { type: "error", message: "You are not the designated submitter for your team this round" });
+        return;
+      }
+
       const updated = submitInterception(game, player.team, message.guess);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
-      if (updated.phase === "round_results" || updated.phase === "game_over") {
+
+      const opponentTeam = player.team === "amber" ? "blue" : "amber";
+      const opponentCode = game.currentCode[opponentTeam]!;
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "interception_submitted",
+        team: player.team,
+        playerId: player.id,
+        guess: message.guess,
+        success: message.guess.every((n, i) => n === opponentCode[i]),
+      }, { round: game.round, team: player.team, playerId: player.id });
+
+      if (updated.phase === "round_results") {
         persistRoundResults(client.gameId, updated);
-        if (updated.phase === "game_over") {
+        if (isGameDecided(updated)) {
           persistGameCompletion(client.gameId, updated);
         }
+        await emitRoundEvaluationEvents(client.gameId, updated);
       }
-      
+
       setTimeout(() => processAITurn(client.gameId), 100);
       break;
     }
-    
+
+    case "update_selection": {
+      if (!client) return;
+
+      const game = games.get(client.gameId);
+      if (!game || (game.phase !== "own_team_guessing" && game.phase !== "opponent_intercepting")) return;
+
+      const player = game.players.find(p => p.id === client.playerId);
+      if (!player?.team) return;
+
+      const updated = updateSelection(game, player.team, player.id, message.selection);
+      games.set(client.gameId, updated);
+      sendGameState(client.gameId);
+
+      await emitMatchEvent(client.gameId, gameMatchIds.get(client.gameId) ?? null, {
+        eventType: "selection_updated",
+        team: player.team,
+        playerId: player.id,
+        phase: game.phase === "own_team_guessing" ? "decode" : "intercept",
+        selection: message.selection,
+      }, { round: game.round, team: player.team, playerId: player.id });
+      break;
+    }
+
     case "next_round": {
       if (!client) return;
-      
+
       const game = games.get(client.gameId);
       if (!game || game.hostId !== client.playerId) {
         sendTo(ws, { type: "error", message: "Only host can advance rounds" });
         return;
       }
-      
-      const updated = startNewRound(game);
+      if (game.phase !== "round_results") return;
+
+      const updated = advanceFromRoundResults(game);
       games.set(client.gameId, updated);
       sendGameState(client.gameId);
-      
-      setTimeout(() => processAITurn(client.gameId), 500);
+
+      if (updated.phase !== "game_over") {
+        await emitRoundStartedEvent(client.gameId, updated);
+        setTimeout(() => processAITurn(client.gameId), 500);
+      }
       break;
     }
     
@@ -876,6 +1230,7 @@ async function handleMessage(ws: WebSocket, message: WSMessage) {
       
       games.delete(client.gameId);
       gameMatchIds.delete(client.gameId);
+      clearMatchEventSequence(client.gameId);
       cleanupPersistedRounds(client.gameId);
       
       broadcast(newGameId, { type: "new_game_created", gameId: newGameId });
@@ -901,6 +1256,7 @@ function handleDisconnect(ws: WebSocket) {
         if (!gameClients.has(gameId) || gameClients.get(gameId)!.size === 0) {
           games.delete(gameId);
           gameMatchIds.delete(gameId);
+          clearMatchEventSequence(gameId);
           cleanupPersistedRounds(gameId);
           log(`Game ${gameId} cleaned up`, "websocket");
         }
@@ -914,8 +1270,22 @@ function handleDisconnect(ws: WebSocket) {
 }
 
 export function setupWebSocket(server: Server) {
-  const wss = new WebSocketServer({ server, path: "/ws" });
-  
+  // Attaching via { server, path } makes `ws` register its own "upgrade"
+  // listener on the shared HTTP server, and that listener destroys the
+  // socket for any request whose path doesn't match — including requests
+  // meant for other upgrade handlers on the same server (e.g. Vite's HMR
+  // WebSocket in dev). Using noServer + a path check here lets non-matching
+  // upgrades fall through untouched.
+  const wss = new WebSocketServer({ noServer: true });
+
+  server.on("upgrade", (req, socket, head) => {
+    const pathname = req.url?.split("?")[0];
+    if (pathname !== "/ws") return;
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  });
+
   wss.on("connection", (ws) => {
     log("WebSocket client connected", "websocket");
     

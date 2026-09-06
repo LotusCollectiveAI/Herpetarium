@@ -4,6 +4,7 @@ import { runHeadlessMatch } from "./headlessRunner";
 import { storage } from "./storage";
 import { log } from "./index";
 import { ModelHealthTracker } from "./modelHealth";
+import { createCostTracker } from "./costTracker";
 
 // ── Round-robin config generator ──────────────────────────────────────
 
@@ -201,6 +202,14 @@ export function isTournamentRunning(id: number): boolean {
   return activeTournaments.get(id) === true;
 }
 
+// The scheduler's launchNext() already checks activeTournaments before
+// launching each new match (see "was stopped" below) -- flipping it false
+// is all a caller needs to do to make it stop gracefully after any
+// already-running matches finish, same as stopEvolutionRun.
+export function stopTournament(id: number): void {
+  activeTournaments.set(id, false);
+}
+
 export async function createTournament(config: TournamentConfig, estimatedCostUsd?: string | null) {
   const gamesPerMatchup = config.gamesPerMatchup || 1;
   const allMatchConfigs: HeadlessMatchConfig[] = [];
@@ -269,6 +278,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     const delayBetweenMatches = tournamentConfig?.delayBetweenMatchesMs || 0;
 
     const TERMINAL_STATUSES = new Set(["completed", "failed", "skipped"]);
+    const costTracker = createCostTracker();
 
     const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -293,9 +303,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
 
     async function syncActualCost() {
       const snapshot = await getTournamentSnapshot();
-      const currentCost = snapshot.completedMatchIds.length > 0
-        ? await storage.getCumulativeCost(snapshot.completedMatchIds)
-        : 0;
+      const currentCost = await costTracker.update(snapshot.completedMatchIds);
       await storage.updateTournament(tournamentId, { actualCostUsd: currentCost.toFixed(6) });
       return { ...snapshot, currentCost };
     }
@@ -332,7 +340,11 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
 
       try {
         const matchConfig = tm.config as HeadlessMatchConfig;
-        const result = await runHeadlessMatch(matchConfig, undefined, undefined, healthTracker);
+        const result = await runHeadlessMatch(matchConfig, undefined, undefined, healthTracker, (matchId) => {
+          storage.updateTournamentMatch(tm.id, { matchId }).catch((err) => {
+            log(`[tournament] Failed to record live matchId for tournament match ${tm.id}: ${err}`, "tournament");
+          });
+        });
 
         await storage.updateTournamentMatch(tm.id, {
           status: "completed",
@@ -341,6 +353,8 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
             winner: result.winner,
             totalRounds: result.totalRounds,
             matchId: result.matchId,
+            amber: { white: result.teams.amber.whiteTokens, black: result.teams.amber.blackTokens },
+            blue: { white: result.teams.blue.whiteTokens, black: result.teams.blue.blackTokens },
           } as any,
           completedAt: new Date(),
         });
@@ -450,6 +464,15 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
           launchable.push(tm);
         }
 
+        // The scan above walks the queue back-to-front so splice(idx, 1)
+        // above is safe (removing while iterating forward would skip the
+        // element right after any removed one). That leaves launchable in
+        // reverse order, which flows through as the tie-break / no-other-
+        // signal fallback below (candidates[0], and pickNextCandidate's
+        // first-seen-wins tie-break) -- undoing it here keeps matches
+        // launching in queue order by default.
+        launchable.reverse();
+
         if (launchable.length === 0) {
           if (earliestPausedUntil !== null) {
             return { kind: "wait", waitMs: Math.max(250, earliestPausedUntil - Date.now()) };
@@ -530,9 +553,7 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
     }
 
     const finalSnapshot = await getTournamentSnapshot();
-    const finalCost = finalSnapshot.completedMatchIds.length > 0
-      ? await storage.getCumulativeCost(finalSnapshot.completedMatchIds)
-      : 0;
+    const finalCost = await costTracker.update(finalSnapshot.completedMatchIds);
     const budgetExceeded = budgetCap !== null && finalCost >= budgetCap;
     const finalStatus = budgetExceeded
       ? "budget_exceeded"
@@ -540,8 +561,14 @@ export async function runTournament(tournamentId: number, healthTracker: ModelHe
         ? "completed_with_errors"
         : "completed";
 
+    // The stop endpoint sets status to "stopped" directly (mirroring
+    // stopEvolutionRun's endpoint) -- don't clobber that back to
+    // "completed" just because the in-flight matches wound down cleanly.
+    const currentTournament = await storage.getTournament(tournamentId);
+    const wasStoppedByUser = currentTournament?.status === "stopped";
+
     await storage.updateTournament(tournamentId, {
-      status: finalStatus,
+      status: wasStoppedByUser ? "stopped" : finalStatus,
       completedMatches: finalSnapshot.terminalCount,
       actualCostUsd: finalCost.toFixed(6),
       completedAt: new Date(),
