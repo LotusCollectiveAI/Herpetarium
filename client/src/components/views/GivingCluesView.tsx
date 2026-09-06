@@ -1,10 +1,9 @@
 import { useGame } from "@/lib/gameContext";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { ClueInput } from "@/components/ClueInput";
 import { KeywordCard } from "@/components/KeywordCard";
 import { PlayerAvatar } from "@/components/PlayerAvatar";
 import { AIThinkingIndicator } from "@/components/AIThinkingIndicator";
-import { MessageSquare } from "lucide-react";
 
 export function GivingCluesView() {
   const { gameState, playerId, myTeam, myKeywords, myCode, sendMessage, aiThinking, aiThinkingStartTime } = useGame();
@@ -31,10 +30,9 @@ export function GivingCluesView() {
 
       {myKeywords && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Your Team's Keywords</CardTitle>
-          </CardHeader>
-          <CardContent>
+          {/* Matches the decode screen's keyword panel -- see the note there
+              on why there is no heading and why the padding is halved. */}
+          <CardContent className="p-3 pt-4">
             <div className="grid grid-cols-2 gap-2">
               {myKeywords.map((keyword, index) => (
                 <KeywordCard
@@ -53,16 +51,12 @@ export function GivingCluesView() {
 
       {isClueGiver && myCode && myKeywords ? (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5" />
-              Create Your Clues
-            </CardTitle>
-            <CardDescription>
-              Give one-word clues that will help your team guess the code
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+          {/* No heading or description here: the banner above already says
+              which phase this is, and the panel restated it twice over --
+              once as a card description and again inside ClueInput. The
+              three numbered code slots are self-explanatory, and the space
+              they were taking is scarce on a phone. */}
+          <CardContent className="pt-4">
             <ClueInput
               code={myCode}
               keywords={myKeywords}

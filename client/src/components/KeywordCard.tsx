@@ -17,8 +17,13 @@ export function KeywordCard({
   team,
   size = "md" 
 }: KeywordCardProps) {
+  // Each tile holds one line of text, so the height is really just breathing
+  // room around it. sm is the in-play size, shown on the same screen as the
+  // clues and the action panel -- it stays tight enough that all three fit
+  // on a phone, while leaving the number badge (which overhangs the top
+  // edge) clear of the word.
   const sizeClasses = {
-    sm: "h-16 text-sm",
+    sm: "h-14 text-sm",
     md: "h-20 text-base",
     lg: "h-24 text-lg",
   };

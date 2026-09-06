@@ -1,5 +1,5 @@
 import { useGame } from "@/lib/gameContext";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { Crosshair, Shield } from "lucide-react";
@@ -72,16 +72,10 @@ export function InterceptingView() {
     </Card>
   ) : (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="flex items-center gap-2">
-          <Crosshair className="h-5 w-5" />
-          Intercept the Code
-        </CardTitle>
-        <CardDescription>
-          Guess the opponent's secret code
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
+      {/* Stripped of its heading and description: "Round N - Interception"
+          in the banner above already said this, and the panel repeated it
+          twice more. What is left is the interface itself. */}
+      <CardContent className="pt-4">
         <CodeGuess
           team={myTeam}
           clues={opponentClues ?? undefined}

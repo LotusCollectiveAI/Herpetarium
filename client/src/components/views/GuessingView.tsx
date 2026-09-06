@@ -1,5 +1,5 @@
 import { useGame } from "@/lib/gameContext";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ClueDisplay } from "@/components/ClueDisplay";
 import { CodeGuess } from "@/components/CodeGuess";
 import { KeywordCard } from "@/components/KeywordCard";
@@ -43,10 +43,13 @@ export function GuessingView() {
 
       {myKeywords && (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Your Keywords</CardTitle>
-          </CardHeader>
-          <CardContent>
+          {/* No heading: four numbered word tiles on your own screen don't
+              need to be labelled as your keywords. Card's default p-6 is
+              also generous for a reference panel sharing a phone screen with
+              the clues and the guess input, so it is halved -- except at the
+              top, which keeps enough room for the number badges to overhang
+              their tiles without being clipped. */}
+          <CardContent className="p-3 pt-4">
             <div className="grid grid-cols-2 gap-2">
               {myKeywords.map((keyword, index) => (
                 <KeywordCard
@@ -122,16 +125,10 @@ export function GuessingView() {
         </Card>
       ) : (
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="flex items-center gap-2">
-              <Target className="h-5 w-5" />
-              Make Your Guess
-            </CardTitle>
-            <CardDescription>
-              Which keywords do these clues refer to?
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+          {/* Bare, matching the clue and intercept panels: the banner above
+              already says this is the decode phase, and the keywords and
+              clues are both on screen directly above the input. */}
+          <CardContent className="pt-4">
             <CodeGuess
               team={myTeam}
               clues={myClues ?? undefined}

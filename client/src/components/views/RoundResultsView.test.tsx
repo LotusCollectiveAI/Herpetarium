@@ -155,7 +155,7 @@ describe("code reveal sequence", () => {
     expect(tilesFaceUp()).toBe(2);
   });
 
-  it("starts with the viewer's own team, then moves to the opponent", () => {
+  it("reveals amber first, then blue", () => {
     renderOutcome(true, false);
     expect(revealTitle()).toBe("Round 1 — Team Amber's code");
 
@@ -168,14 +168,17 @@ describe("code reveal sequence", () => {
     expect(tilesFaceUp()).toBe(0);
   });
 
-  it("reveals the viewer's own team first when they are on blue", () => {
+  it("uses that same order for a player on blue", () => {
+    // The order used to follow the viewer's own team, so two players sitting
+    // together were watching different codes at the same moment. Everyone
+    // now sees one shared reveal in one order.
     const gameState = stateWith(roundHistory(true, false), roundHistory(true, false));
     render(
       <GameContext.Provider value={{ ...contextFor(gameState), myTeam: "blue" as const }}>
         <RoundResultsView />
       </GameContext.Provider>,
     );
-    expect(revealTitle()).toBe("Round 1 — Team Blue's code");
+    expect(revealTitle()).toBe("Round 1 — Team Amber's code");
   });
 
   it("marks the guesses only after the tile has finished turning", () => {

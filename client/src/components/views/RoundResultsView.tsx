@@ -11,9 +11,12 @@ export function RoundResultsView() {
   const { gameState, myTeam, isHost, sendMessage, isReplay } = useGame();
   const [showTokens, setShowTokens] = useState(false);
 
-  // The viewer's own code goes first: it is the one they have been guessing
-  // at all round, so it carries the suspense the opponent's does not.
-  const revealOrder: ("amber" | "blue")[] = myTeam === "blue" ? ["blue", "amber"] : ["amber", "blue"];
+  // Always amber then blue, the same for everyone. Ordering it by viewer --
+  // your own code first, which carries more suspense on its own -- meant two
+  // people sat next to each other were watching different codes at the same
+  // moment, and a table talking through one reveal is worth more than each
+  // player getting a private one.
+  const revealOrder = ["amber", "blue"] as const;
 
   // Not in replay: there the viewer drives the pace with the scrubber, and
   // a sequence playing itself out on arrival at a step fights that.
