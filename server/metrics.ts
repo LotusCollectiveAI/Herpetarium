@@ -193,14 +193,6 @@ function getTeamModels(match: Match, team: string): string[] {
   ));
 }
 
-function getTeamProviders(match: Match, team: string): string[] {
-  const configs = getPlayerConfigs(match);
-  return Array.from(new Set(
-    configs
-      .filter((player) => player.team === team && player.isAI)
-      .map((player) => player.aiConfig?.provider || player.aiProvider || "unknown"),
-  ));
-}
 
 function getTeamRoster(match: Match, team: "amber" | "blue") {
   return getStoredTeamRosters(getPlayerConfigs(match) as MatchPlayerConfig[])[team];

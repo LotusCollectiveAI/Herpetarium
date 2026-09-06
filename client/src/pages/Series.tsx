@@ -600,7 +600,6 @@ function CognitiveDepthChart({ seriesId }: { seriesId: number }) {
   if (isLoading) return <Skeleton className="h-32 w-full" />;
   if (!data || data.timelines.length === 0) return null;
 
-  const maxGames = Math.max(...data.timelines.map(t => t.games.length), 1);
 
   return (
     <Card>

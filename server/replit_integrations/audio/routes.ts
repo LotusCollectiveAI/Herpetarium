@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from "express";
 import { chatStorage } from "../chat/storage";
-import { openai, speechToText, voiceChatWithTextModel, convertWebmToWav } from "./client";
+import { openai, speechToText, voiceChatWithTextModel } from "./client";
 
 // Note: Set express.json({ limit: "50mb" }) for audio payloads.
 // Note: Use convertWebmToWav() to convert browser WebM to WAV before API calls.

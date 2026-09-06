@@ -100,7 +100,6 @@ function deriveRosterMetadataFromResolvedConfigs(
   team: "amber" | "blue",
   resolvedConfigs: AIPlayerConfig[],
 ): TeamRosterMetadata {
-  const models = resolvedConfigs.map((config) => config.model);
   const compositionEntries = resolvedConfigs.map((config) => ({
     model: config.model,
     modelKey: getModelKey(config.provider, config.model),

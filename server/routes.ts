@@ -18,7 +18,7 @@ import { getProviderThrottleState } from "./ai";
 import { getDefaultConfig, type AIProvider } from "@shared/schema";
 import { validateModels } from "./modelValidation";
 import { computeMatchTomMetrics, buildTomTimeline } from "./tomAnalyzer";
-import { bradleyTerryRatings, btWinProbability } from "./bradleyTerry";
+import { bradleyTerryRatings } from "./bradleyTerry";
 import { analyzeMatchTranscripts, analyzeTournamentTranscripts } from "./transcriptAnalyzer";
 
 // Rounds are only written to match_rounds once fully evaluated, so the

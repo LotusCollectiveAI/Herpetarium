@@ -1,4 +1,4 @@
-import { SeriesConfig, HeadlessMatchConfig, AIPlayerConfig, getDefaultConfig } from "@shared/schema";
+import { SeriesConfig, AIPlayerConfig, getDefaultConfig } from "@shared/schema";
 import type { AIProvider } from "@shared/schema";
 
 import { runHeadlessMatch } from "./headlessRunner";

@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Cell, ErrorBar
+  ErrorBar
 } from "recharts";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
@@ -198,7 +198,6 @@ interface MatchAnalysisResponse {
   crossModelAnalysis: CrossModelClueAnalysis[];
 }
 
-const CHART_COLORS = ["#f59e0b", "#3b82f6", "#10b981", "#8b5cf6", "#ef4444", "#ec4899"];
 
 function pct(val: number): string {
   return `${(val * 100).toFixed(1)}%`;

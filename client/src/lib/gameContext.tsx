@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef } from "react";
-import type { GameState, GamePhase, Player, ServerMessage, WSMessage } from "@shared/schema";
+import type { GameState, GamePhase, ServerMessage, WSMessage } from "@shared/schema";
 import { useToast } from "@/hooks/use-toast";
 
 interface GameContextType {

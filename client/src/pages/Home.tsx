@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/hooks/use-toast";
-import { Play, Users, Bot, Lock, Zap, History, Trophy, BarChart3, Brain, Dna } from "lucide-react";
+import { Play, Users, Bot, Lock, History, Trophy, BarChart3, Brain, Dna } from "lucide-react";
 import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import { apiRequest } from "@/lib/queryClient";
 

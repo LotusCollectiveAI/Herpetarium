@@ -1,5 +1,5 @@
 import { cn } from "@/lib/utils";
-import { Check, X, Target } from "lucide-react";
+import { Check, Target } from "lucide-react";
 import type { RoundHistory as RoundHistoryType } from "@shared/schema";
 
 interface RoundHistoryProps {

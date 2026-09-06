@@ -64,8 +64,7 @@ import {
   teamChatter,
 } from "@shared/schema";
 import { db } from "./db";
-import { eq, desc, and, or, like, sql, inArray } from "drizzle-orm";
-import { randomUUID } from "crypto";
+import { eq, desc, and, sql, inArray } from "drizzle-orm";
 
 export interface IStorage {
   getUser(id: string): Promise<User | undefined>;

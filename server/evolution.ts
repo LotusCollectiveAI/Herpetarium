@@ -1,4 +1,4 @@
-import type { GenomeModules, StrategyGenome, EvolutionConfig, PhaseTransition, AIPlayerConfig, PopulationSnapshot } from "@shared/schema";
+import type { GenomeModules, StrategyGenome, EvolutionConfig, PhaseTransition, AIPlayerConfig } from "@shared/schema";
 import { storage } from "./storage";
 import { runHeadlessMatch } from "./headlessRunner";
 import { callAI } from "./ai";

@@ -1,6 +1,6 @@
 import { cn } from "@/lib/utils";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { Bot, User } from "lucide-react";
+import { Bot } from "lucide-react";
 import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import type { Player, AIProvider } from "@shared/schema";
 

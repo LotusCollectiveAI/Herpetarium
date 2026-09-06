@@ -1,4 +1,3 @@
-import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./ThemeToggle";
 import { ScoreBoard } from "./ScoreBoard";
 import { AIThinkingIndicator } from "./AIThinkingIndicator";

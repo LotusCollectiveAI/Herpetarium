@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
-import { Bot, ChevronDown, ChevronUp, Settings2, Globe } from "lucide-react";
+import { ChevronUp, Settings2, Globe } from "lucide-react";
 import { SiOpenai, SiAnthropic, SiGoogle } from "react-icons/si";
 import { type AIProvider, type AIPlayerConfig, MODEL_OPTIONS, PROMPT_STRATEGY_OPTIONS, getDefaultConfig } from "@shared/schema";
 
