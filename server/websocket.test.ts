@@ -261,6 +261,86 @@ describe("sendGameState fan-out", () => {
   });
 });
 
+describe("opponent keywords over the wire", () => {
+  it("stays hidden every round, and is only sent once the game is over", async () => {
+    // The end-of-game reveal is a change to what the server broadcasts, so
+    // this drives a whole game over real sockets and checks what actually
+    // arrived at every phase, rather than trusting the redaction unit test
+    // to describe what the socket layer does with it.
+    const { gameId, clients } = await startedGame();
+    const { host, amber2, blue1, blue2 } = clients;
+    const everyone = [host, amber2, blue1, blue2];
+
+    const state = () => host.latestState()!;
+    const clientByName: Record<string, Client> = {
+      AmberHost: host, AmberTwo: amber2, BlueOne: blue1, BlueTwo: blue2,
+    };
+    // Roles rotate each round, so resolve against the current state rather
+    // than the one captured when the game started.
+    const actor = (playerId: string | null): Client =>
+      clientByName[state().players.find(p => p.id === playerId)!.name];
+
+    const assertHidden = (where: string) => {
+      for (const client of [host, amber2]) {
+        expect(client.latestState()!.teams.blue.keywords, `amber view at ${where}`).toEqual([]);
+      }
+      for (const client of [blue1, blue2]) {
+        expect(client.latestState()!.teams.amber.keywords, `blue view at ${where}`).toEqual([]);
+      }
+    };
+
+    let phasesChecked = 0;
+    for (let round = 1; round <= 20 && state().phase !== "game_over"; round++) {
+      assertHidden(`round ${round} clues`);
+      actor(state().currentClueGiver.amber).send({ type: "submit_clues", clues: ["one", "two", "three"] });
+      actor(state().currentClueGiver.blue).send({ type: "submit_clues", clues: ["four", "five", "six"] });
+      await waitFor(() => state().phase === "own_team_guessing", `round ${round} decode`);
+
+      assertHidden(`round ${round} decode`);
+      // Wrong on purpose, so the game reaches a decision quickly.
+      actor(state().decodeSubmitter.amber).send({ type: "submit_guess", guess: [1, 1, 1] });
+      actor(state().decodeSubmitter.blue).send({ type: "submit_guess", guess: [1, 1, 1] });
+      await waitFor(() => state().phase === "opponent_intercepting", `round ${round} intercept`);
+
+      assertHidden(`round ${round} intercept`);
+      actor(state().interceptSubmitter.amber).send({ type: "submit_interception", guess: [4, 4, 4] });
+      actor(state().interceptSubmitter.blue).send({ type: "submit_interception", guess: [4, 4, 4] });
+      await waitFor(
+        () => state().phase === "round_results" || state().phase === "game_over",
+        `round ${round} results`,
+      );
+      phasesChecked += 3;
+
+      if (state().phase === "round_results") {
+        // Scored, but another round is still to come -- the reveal must not
+        // open here.
+        assertHidden(`round ${round} results`);
+        phasesChecked += 1;
+        host.send({ type: "next_round" });
+        await waitFor(
+          () => state().phase === "giving_clues" || state().phase === "game_over",
+          `round ${round} advance`,
+        );
+      }
+    }
+
+    expect(state().phase).toBe("game_over");
+    expect(phasesChecked).toBeGreaterThan(3);
+
+    // Only now does every connection get both teams' words.
+    for (const client of everyone) {
+      const view = client.latestState()!;
+      expect(view.teams.amber.keywords).toHaveLength(4);
+      expect(view.teams.blue.keywords).toHaveLength(4);
+    }
+    expect(host.latestState()!.teams.blue.keywords)
+      .toEqual(blue1.latestState()!.teams.blue.keywords);
+
+    everyone.forEach(c => c.close());
+    expect(gameId).toBeTruthy();
+  }, 30000);
+});
+
 describe("confirm_teams", () => {
   it("creates one match row even if it is confirmed twice", async () => {
     // A double-clicked button was enough: creating the match row is a
