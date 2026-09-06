@@ -345,6 +345,24 @@ export async function registerRoutes(
       // returns and reading by its id yields nothing.
       const events = await storage.getMatchEventsByGameId(gameId);
 
+      // round_started carries both teams' keywords and both secret codes, so
+      // this endpoint hands out everything the game is built on hiding. That
+      // is fine for a finished game and not fine for one still being played:
+      // the game id is the room code, which every player already has, so
+      // without this any of them could read the opposition's words straight
+      // off their own replay URL. Completion is judged from the event stream
+      // rather than from matches.completedAt because a game can own more
+      // than one match row and only one of them gets completed.
+      const finished = events.some(
+        event => (event.payload as { eventType?: string }).eventType === "game_completed",
+      );
+      if (!finished) {
+        return res.status(409).json({
+          error: "Replay is only available once the game has finished",
+          code: "game_in_progress",
+        });
+      }
+
       // With duplicates the first event can belong to the row that lost the
       // race and received nothing else, so report the one most of the
       // stream was written against.

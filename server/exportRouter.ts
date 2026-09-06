@@ -242,10 +242,25 @@ export function registerExportRoutes(app: Express): void {
         return res.status(404).json({ error: "Match not found" });
       }
 
-      const [rounds, aiLogs, events] = await Promise.all([
+      // Same reasoning as GET /api/matches/:gameId/events: the bundle
+      // carries both teams' keywords (on the match row itself) and the
+      // per-round codes, so it cannot be served for a game still in play,
+      // whose id every player already knows. Completion comes from the
+      // event stream because a game can own more than one match row.
+      const events = await storage.getMatchEventsByGameId(gameId);
+      const finished = events.some(
+        event => (event.payload as { eventType?: string }).eventType === "game_completed",
+      );
+      if (!finished) {
+        return res.status(409).json({
+          error: "Replay export is only available once the game has finished",
+          code: "game_in_progress",
+        });
+      }
+
+      const [rounds, aiLogs] = await Promise.all([
         storage.getMatchRounds(match.id),
         storage.getAiCallLogs(match.id),
-        storage.getMatchEvents(match.id),
       ]);
 
       res.setHeader("Content-Type", "application/json");

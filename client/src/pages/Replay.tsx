@@ -205,9 +205,17 @@ export default function Replay() {
   }
 
   if (error || !data) {
+    // The server withholds replays of games still in play, since the event
+    // stream carries both teams' keywords and codes. Say so plainly rather
+    // than reporting it as a failure to load.
+    const stillPlaying = String((error as Error | null)?.message ?? "").includes("game_in_progress");
     return (
       <div className="min-h-screen flex flex-col items-center justify-center gap-4 bg-background">
-        <p className="text-muted-foreground">Couldn't load replay for game {gameId}.</p>
+        <p className="text-muted-foreground">
+          {stillPlaying
+            ? `Game ${gameId} is still in progress. The replay opens once it finishes.`
+            : `Couldn't load replay for game ${gameId}.`}
+        </p>
         <Button variant="outline" onClick={() => setLocation("/history")}>
           <ArrowLeft className="h-4 w-4 mr-2" />Back to History
         </Button>

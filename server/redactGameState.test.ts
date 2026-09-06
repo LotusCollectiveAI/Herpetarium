@@ -108,6 +108,37 @@ describe("redactGameStateForTeam", () => {
     expect(forAmber.teams.amber.history).toEqual(midRound().teams.amber.history);
   });
 
+  it("reveals both teams' keywords once the game is over", () => {
+    // Players otherwise finish a game never learning what they spent it
+    // guessing at. Nothing follows game_over, so there is no round left for
+    // the reveal to give anything away in.
+    const finished: GameState = { ...midRound(), phase: "game_over", winner: "amber" };
+
+    for (const viewer of ["amber", "blue", null] as const) {
+      const view = redactGameStateForTeam(finished, viewer);
+      expect(view.teams.amber.keywords).toEqual(["lily", "farm", "ivory", "drawing"]);
+      expect(view.teams.blue.keywords).toEqual(["nimbus", "teacup", "medal", "star"]);
+    }
+  });
+
+  it("still withholds keywords at round_results, where a round is yet to come", () => {
+    // The reveal is deliberately tied to game_over, not to "a round just
+    // ended" -- opening it a phase early would hand the keywords over with
+    // the game still live.
+    const between: GameState = { ...midRound(), phase: "round_results" };
+    expect(redactGameStateForTeam(between, "amber").teams.blue.keywords).toEqual([]);
+    expect(redactGameStateForTeam(between, "blue").teams.amber.keywords).toEqual([]);
+  });
+
+  it("reveals only the keywords at game over, not the codes or live guesses", () => {
+    const finished: GameState = { ...midRound(), phase: "game_over", winner: "amber" };
+    const forAmber = redactGameStateForTeam(finished, "amber");
+
+    expect(forAmber.currentCode).toEqual({ amber: null, blue: null });
+    expect(forAmber.currentGuesses.blue).toEqual({ ownTeam: HIDDEN_GUESS, opponent: HIDDEN_GUESS });
+    expect(forAmber.currentSelections.blue).toEqual({});
+  });
+
   it("leaves clues, tokens and roles alone", () => {
     const original = midRound();
     const forAmber = redactGameStateForTeam(original, "amber");

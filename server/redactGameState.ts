@@ -29,12 +29,20 @@ function maskGuess(value: [number, number, number] | null): [number, number, num
 // deduction across rounds works), so only the *current* round's secrets are
 // redacted here.
 export function redactGameStateForTeam(game: GameState, viewerTeam: "amber" | "blue" | null): GameState {
+  // Once the game is over there is no remaining round for the opponent's
+  // keywords to give anything away in, and not showing them means players
+  // finish a game never learning what they had been guessing at all round.
+  // game_over is terminal -- nothing transitions back out of it -- so this
+  // cannot re-open mid-game. Note it deliberately does not cover
+  // round_results, where the next round is still to come.
+  const revealKeywords = game.phase === "game_over";
+
   return {
     ...game,
     currentCode: { amber: null, blue: null },
     teams: {
-      amber: viewerTeam === "amber" ? game.teams.amber : { ...game.teams.amber, keywords: [] },
-      blue: viewerTeam === "blue" ? game.teams.blue : { ...game.teams.blue, keywords: [] },
+      amber: viewerTeam === "amber" || revealKeywords ? game.teams.amber : { ...game.teams.amber, keywords: [] },
+      blue: viewerTeam === "blue" || revealKeywords ? game.teams.blue : { ...game.teams.blue, keywords: [] },
     },
     currentGuesses: {
       amber: viewerTeam === "amber" ? game.currentGuesses.amber : {

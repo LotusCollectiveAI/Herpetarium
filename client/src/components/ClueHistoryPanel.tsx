@@ -93,6 +93,15 @@ export function ClueHistoryPanel() {
 
   const myKeywords = gameState.teams[myTeam].keywords;
 
+  // The server withholds the opponent's keywords for the whole game and
+  // sends them once it is over, so having the word at all is the signal
+  // that it is safe to show. Keying off that rather than off the phase
+  // keeps the server the only thing deciding what stays secret -- during
+  // play the array is empty and these stay "Keyword 1".
+  const opponentKeywords = gameState.teams[opponentTeam].keywords;
+  const opponentSlotLabel = (i: number) =>
+    opponentKeywords[i] ? `${i + 1}. ${opponentKeywords[i]}` : `Keyword ${i + 1}`;
+
   const handleNoteChange = (index: number, value: string) => {
     if (!gameId) return;
     setNotes(prev => {
@@ -132,8 +141,11 @@ export function ClueHistoryPanel() {
 
           <div key={`opp-${i}`} className="px-3 pb-3 border-l space-y-1.5">
             <div className="flex h-6 items-center gap-2">
-              <span className={cn("text-xs font-medium shrink-0", teamLabelClass(opponentTeam))}>
-                Keyword {i + 1}
+              <span
+                className={cn("text-xs font-medium shrink-0", teamLabelClass(opponentTeam))}
+                data-testid={`opponent-slot-${i + 1}`}
+              >
+                {opponentSlotLabel(i)}
               </span>
               {isReplay ? (
                 // The scratchpad is for working out a code that is still
