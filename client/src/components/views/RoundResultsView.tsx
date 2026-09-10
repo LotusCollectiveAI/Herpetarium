@@ -4,11 +4,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Check, X, Target, ArrowRight, Trophy, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { useRoundReveal } from "@/lib/useRoundReveal";
+import { REVEAL_ORDER, useRoundRevealState } from "@/lib/roundRevealContext";
 import { RoundRevealView } from "./RoundRevealView";
 
 export function RoundResultsView() {
-  const { gameState, myTeam, isHost, sendMessage, isReplay } = useGame();
+  const { gameState, myTeam, isHost, sendMessage } = useGame();
   const [showTokens, setShowTokens] = useState(false);
 
   // Always amber then blue, the same for everyone. Ordering it by viewer --
@@ -16,11 +16,12 @@ export function RoundResultsView() {
   // people sat next to each other were watching different codes at the same
   // moment, and a table talking through one reveal is worth more than each
   // player getting a private one.
-  const revealOrder = ["amber", "blue"] as const;
+  const revealOrder = REVEAL_ORDER;
 
-  // Not in replay: there the viewer drives the pace with the scrubber, and
-  // a sequence playing itself out on arrival at a step fights that.
-  const reveal = useRoundReveal(revealOrder.length, !isReplay);
+  // Read rather than run: the same sequence gates the score at the top of
+  // the page, which is a sibling of this view. Whether it plays at all
+  // (never in replay) is decided by the provider.
+  const reveal = useRoundRevealState();
 
   useEffect(() => {
     if (!reveal.done) return;

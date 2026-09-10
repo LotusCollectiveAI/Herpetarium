@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 import { GameContext } from "@/lib/gameContext";
 import { RoundResultsView } from "./RoundResultsView";
+import { RoundRevealProvider } from "@/lib/roundRevealContext";
 import { CLASSIC_GAME_RULES } from "@shared/schema";
 import { REVEAL_TIMINGS, TILE_SETTLE_MS } from "@/lib/useRoundReveal";
 import type { GameState, RoundHistory, WSMessage } from "@shared/schema";
@@ -81,7 +82,9 @@ function renderOutcome(ownTeamCorrect: boolean, intercepted: boolean, isReplay =
   const gameState = stateWith(roundHistory(ownTeamCorrect, intercepted), roundHistory(true, false));
   return render(
     <GameContext.Provider value={contextFor(gameState, isReplay)}>
-      <RoundResultsView />
+      <RoundRevealProvider>
+        <RoundResultsView />
+      </RoundRevealProvider>
     </GameContext.Provider>,
   );
 }
@@ -175,7 +178,9 @@ describe("code reveal sequence", () => {
     const gameState = stateWith(roundHistory(true, false), roundHistory(true, false));
     render(
       <GameContext.Provider value={{ ...contextFor(gameState), myTeam: "blue" as const }}>
-        <RoundResultsView />
+        <RoundRevealProvider>
+          <RoundResultsView />
+        </RoundRevealProvider>
       </GameContext.Provider>,
     );
     expect(revealTitle()).toBe("Round 1 — Team Amber's code");

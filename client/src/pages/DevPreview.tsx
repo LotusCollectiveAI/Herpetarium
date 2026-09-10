@@ -57,6 +57,28 @@ const ROUND_1_AMBER_HISTORY: RoundHistory = {
   intercepted: false,
 };
 
+const ROUND_2_AMBER_HISTORY: RoundHistory = {
+  round: 2,
+  clueGiverId: "amber-1",
+  clues: ["SUMMIT", "GALAXY", "SHIELD"],
+  targetCode: [3, 1, 2],
+  ownTeamGuess: [3, 4, 2],
+  opponentGuess: [1, 1, 1],
+  ownTeamCorrect: false,
+  intercepted: false,
+};
+
+const ROUND_2_BLUE_HISTORY: RoundHistory = {
+  round: 2,
+  clueGiverId: "blue-1",
+  clues: ["BEAK", "MUSEUM", "REED"],
+  targetCode: [4, 1, 3],
+  ownTeamGuess: [4, 1, 3],
+  opponentGuess: [4, 1, 3],
+  ownTeamCorrect: true,
+  intercepted: true,
+};
+
 const ROUND_1_BLUE_HISTORY: RoundHistory = {
   round: 1,
   clueGiverId: "blue-1",
@@ -94,6 +116,9 @@ export default function DevPreview() {
   const myTeam = viewer.team as "amber" | "blue";
   const isClueGiver = CURRENT_CLUE_GIVER[myTeam] === viewer.id;
   const cluesRevealed = phase !== "lobby" && phase !== "team_setup" && phase !== "giving_clues";
+  // Round 2 has only been scored by the time the results screen shows, so
+  // its history entry appears there and at game over, not before.
+  const roundScored = phase === "round_results" || phase === "game_over";
 
   const gameState: GameState = useMemo(() => ({
     id: "preview",
@@ -124,11 +149,21 @@ export default function DevPreview() {
       ? { amber: { "amber-3": [2, null, 4] }, blue: { "blue-3": [null, 3, 1] } }
       : { amber: {}, blue: {} }) as GameState["currentSelections"],
     teams: {
-      amber: { keywords: AMBER_KEYWORDS, whiteTokens: 1, blackTokens: 0, history: [ROUND_1_AMBER_HISTORY] },
-      blue: { keywords: BLUE_KEYWORDS, whiteTokens: 0, blackTokens: 1, history: [ROUND_1_BLUE_HISTORY] },
+      amber: {
+        keywords: AMBER_KEYWORDS,
+        whiteTokens: roundScored ? 1 : 0,
+        blackTokens: 0,
+        history: roundScored ? [ROUND_1_AMBER_HISTORY, ROUND_2_AMBER_HISTORY] : [ROUND_1_AMBER_HISTORY],
+      },
+      blue: {
+        keywords: BLUE_KEYWORDS,
+        whiteTokens: 0,
+        blackTokens: roundScored ? 1 : 0,
+        history: roundScored ? [ROUND_1_BLUE_HISTORY, ROUND_2_BLUE_HISTORY] : [ROUND_1_BLUE_HISTORY],
+      },
     },
     winner: phase === "game_over" || simulateGameDecided ? "amber" : null,
-  }), [phase, myTeam, ownGuessSubmitted, interceptSubmitted, cluesRevealed, simulateTeammatePicks, simulateGameDecided]);
+  }), [phase, myTeam, ownGuessSubmitted, interceptSubmitted, cluesRevealed, roundScored, simulateTeammatePicks, simulateGameDecided]);
 
   const contextValue = useMemo(() => ({
     gameState,

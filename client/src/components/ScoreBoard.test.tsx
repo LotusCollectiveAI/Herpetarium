@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { describe, it, expect } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { TeamRosters } from "./ScoreBoard";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { act, render, screen } from "@testing-library/react";
+import { ScoreBoard, TeamRosters } from "./ScoreBoard";
+import { GameContext } from "@/lib/gameContext";
+import { RoundRevealProvider } from "@/lib/roundRevealContext";
 import {
   addPlayer,
   createNewGame,
@@ -10,9 +12,10 @@ import {
   submitClues,
   submitOwnTeamGuess,
   updateSelection,
+  submitInterception,
   createSeededRng,
 } from "../../../server/game";
-import type { GameState, Player } from "@shared/schema";
+import type { GameState, Player, WSMessage } from "@shared/schema";
 
 // The fixture is built by running the real reducers rather than by writing a
 // GameState literal: a literal is a second source of truth for the shape and
@@ -186,5 +189,107 @@ describe("TeamRosters roster rendering", () => {
     const card = screen.getByTestId("team-player-p6");
     expect(card).toHaveTextContent("Claude (sonnet)");
     expect(card).not.toHaveTextContent("You");
+  });
+});
+
+// --- the score at the top during the reveal -----------------------------
+//
+// The server adds a round's tokens the moment it scores the round, which is
+// before anyone has watched the reveal. Read straight, the board at the top
+// of the page announced the outcome over the top of the still-hidden tiles.
+
+function scoredRound(ownTeamCorrect: boolean, intercepted: boolean): GameState {
+  // Played rather than written, so the tokens are whatever evaluateRound
+  // actually awards for this outcome.
+  let game = threeVersusThree();
+  game = submitClues(game, "amber", ["one", "two", "three"]);
+  game = submitClues(game, "blue", ["four", "five", "six"]);
+  const amberCode = game.currentCode.amber!;
+  const blueCode = game.currentCode.blue!;
+  const wrong = (code: [number, number, number]): [number, number, number] =>
+    [((code[0] % 4) + 1) as number, code[1], code[2]] as [number, number, number];
+
+  game = submitOwnTeamGuess(game, "amber", ownTeamCorrect ? amberCode : wrong(amberCode));
+  game = submitOwnTeamGuess(game, "blue", blueCode);
+  // Blue's interception is what can cost amber a black token. The second
+  // submitInterception scores the round itself once both are in, so calling
+  // evaluateRound after it would award every token twice.
+  game = submitInterception(game, "blue", intercepted ? amberCode : wrong(amberCode));
+  return submitInterception(game, "amber", wrong(blueCode));
+}
+
+function renderScore(game: GameState) {
+  const value = {
+    gameState: game,
+    isReplay: false,
+    playerId: "p1",
+    playerName: "Player 1",
+    myTeam: "amber" as "amber" | "blue",
+    isHost: true,
+    isConnected: true,
+    aiThinking: null,
+    aiThinkingStartTime: null,
+    aiFallback: null,
+    clueError: null,
+    myKeywords: game.teams.amber.keywords,
+    myCode: null,
+    phaseAnnouncement: null,
+    sendMessage: (_m: WSMessage) => {},
+    connect: () => {},
+    disconnect: () => {},
+  };
+  return render(
+    <GameContext.Provider value={value}>
+      <RoundRevealProvider>
+        <ScoreBoard gameState={game} playerId="p1" />
+      </RoundRevealProvider>
+    </GameContext.Provider>,
+  );
+}
+
+const shown = (id: string) => Number(screen.getByTestId(id).getAttribute("data-count"));
+
+// Each reveal step is scheduled from an effect, so a timer only exists once
+// React has re-rendered from the step before it.
+function playRevealToEnd() {
+  for (let i = 0; i < 20; i++) act(() => { vi.runOnlyPendingTimers(); });
+}
+
+describe("score during the round reveal", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("holds the round's tokens back until the reveal has finished", () => {
+    const game = scoredRound(false, true);
+    // The round itself cost amber both kinds, so there is something to hide.
+    expect(game.teams.amber.whiteTokens).toBe(1);
+    expect(game.teams.amber.blackTokens).toBe(1);
+
+    renderScore(game);
+    expect(shown("score-white-amber"), "white before the reveal ends").toBe(0);
+    expect(shown("score-black-amber"), "black before the reveal ends").toBe(0);
+
+    playRevealToEnd();
+    expect(shown("score-white-amber")).toBe(1);
+    expect(shown("score-black-amber")).toBe(1);
+  });
+
+  it("leaves a clean round's score alone, since nothing was added", () => {
+    const game = scoredRound(true, false);
+    expect(game.teams.amber.whiteTokens).toBe(0);
+    expect(game.teams.amber.blackTokens).toBe(0);
+
+    renderScore(game);
+    expect(shown("score-white-amber")).toBe(0);
+    playRevealToEnd();
+    expect(shown("score-white-amber")).toBe(0);
+  });
+
+  it("shows the score immediately outside the scored-round screen", () => {
+    // Mid-round there is nothing being revealed, so nothing to withhold.
+    const game = threeVersusThree();
+    renderScore(game);
+    expect(shown("score-white-amber")).toBe(0);
+    expect(shown("score-white-blue")).toBe(0);
   });
 });

@@ -1,6 +1,7 @@
 import { cn } from "@/lib/utils";
 import { Bot, Check, Radio } from "lucide-react";
-import type { GameState, Player } from "@shared/schema";
+import type { GameState, Player, RoundHistory } from "@shared/schema";
+import { useRoundRevealState } from "@/lib/roundRevealContext";
 
 interface ScoreBoardProps {
   gameState: GameState;
@@ -18,9 +19,9 @@ interface PlayerActivity {
 // Tokens normally fill left-to-right (index 0 first). Pass reverseFill for
 // a team whose tokens are right-aligned toward the center, so the bubble
 // nearest the middle (the highest index, drawn last) lights up first.
-export function Token({ type, count, reverseFill = false }: { type: "white" | "black"; count: number; reverseFill?: boolean }) {
+export function Token({ type, count, reverseFill = false, testId }: { type: "white" | "black"; count: number; reverseFill?: boolean; testId?: string }) {
   return (
-    <div className="flex items-center gap-1">
+    <div className="flex items-center gap-1" data-testid={testId} data-count={count}>
       {Array.from({ length: 2 }).map((_, i) => {
         const filled = reverseFill ? i >= 2 - count : i < count;
         return (
@@ -171,8 +172,39 @@ function TeamRoster({ gameState, team, playerId }: { gameState: GameState; team:
   );
 }
 
+// The server adds a round's tokens the moment it scores the round, which
+// is before anyone has watched the reveal. Read straight, the score at the
+// top therefore announced the outcome over the top of the tiles. While the
+// reveal is still running these subtract the round being revealed, so the
+// board shows what it showed going in and catches up when the tiles land.
+//
+// Derived rather than remembered: the previous total is whatever the
+// current one is minus what this round added, and evaluateRound adds one
+// white for a failed decode and one black for being intercepted.
+function tokensBeforeRound(
+  team: GameState["teams"]["amber"],
+  round: number,
+  withhold: boolean,
+): { white: number; black: number } {
+  const latest: RoundHistory | undefined = team.history[team.history.length - 1];
+  // Guard on the round number so a stale entry can never be subtracted --
+  // history is only this round's once the round has actually been scored.
+  if (!withhold || !latest || latest.round !== round) {
+    return { white: team.whiteTokens, black: team.blackTokens };
+  }
+  return {
+    white: team.whiteTokens - (latest.ownTeamCorrect ? 0 : 1),
+    black: team.blackTokens - (latest.intercepted ? 1 : 0),
+  };
+}
+
 export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
   const { amber: amberState, blue: blueState } = gameState.teams;
+
+  const reveal = useRoundRevealState();
+  const withhold = !reveal.done && gameState.phase === "round_results";
+  const amberTokens = tokensBeforeRound(amberState, gameState.round, withhold);
+  const blueTokens = tokensBeforeRound(blueState, gameState.round, withhold);
 
   return (
     <div className="flex flex-col gap-2 p-3 rounded-lg bg-card border">
@@ -197,23 +229,23 @@ export function ScoreBoard({ gameState, playerId }: ScoreBoardProps) {
 
       <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-2 gap-y-1">
         <div className="flex justify-end">
-          <Token type="white" count={amberState.whiteTokens} reverseFill />
+          <Token type="white" count={amberTokens.white} reverseFill testId="score-white-amber" />
         </div>
         <span className="text-xs sm:text-sm text-muted-foreground text-center leading-tight">
           Miscommunications
         </span>
         <div className="flex justify-start">
-          <Token type="white" count={blueState.whiteTokens} />
+          <Token type="white" count={blueTokens.white} testId="score-white-blue" />
         </div>
 
         <div className="flex justify-end">
-          <Token type="black" count={amberState.blackTokens} reverseFill />
+          <Token type="black" count={amberTokens.black} reverseFill testId="score-black-amber" />
         </div>
         <span className="text-xs sm:text-sm text-muted-foreground text-center leading-tight">
           Interceptions
         </span>
         <div className="flex justify-start">
-          <Token type="black" count={blueState.blackTokens} />
+          <Token type="black" count={blueTokens.black} testId="score-black-blue" />
         </div>
       </div>
     </div>
