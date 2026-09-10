@@ -58,6 +58,18 @@ function getStem(word: string): string {
   return w.replace(/(ing|ed|er|est|ly|tion|sion|ness|ment|able|ible|ful|less|ous|ive|al|ial|ical)$/, "") || w;
 }
 
+// The single-word rule is this platform's own simplification, not a rule of
+// Decrypto -- the printed rulebook lets a clue be anything from one word to a
+// full sentence. It originates in the AI response format: parseCluesResponse
+// in ai.ts reads a clue list by splitting on commas and then stripping every
+// non-letter with /[^a-z]/g, so "hot rock" reaches the game as "hotrock" and
+// a phrase containing a comma cannot survive the split at all. Models were
+// therefore told to answer in single words from the first commit, and this
+// validator was added later to hold humans to the same shape so mixed games
+// stay symmetric.
+//
+// Relaxing it is a real change rather than a loosened check: the response
+// format has to be able to carry a phrase first.
 function validateClues(clues: string[], keywords: string[]): string | null {
   if (!clues || clues.length !== 3) return "Must provide exactly 3 clues";
   for (let i = 0; i < clues.length; i++) {

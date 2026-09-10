@@ -5,9 +5,74 @@ import type { AiCallLog } from "@shared/schema";
 // Sentences chosen to match one specific pattern group each, so a level
 // assertion says something about the group rather than about the sentence.
 const NONE = "The weather is pleasant and the room is quiet today.";
+const L0 = "I am not sure what these clues mean so I will just guess randomly.";
 const L1 = "I should vary my clues a little more this round.";
 const L2 = "They might notice the pattern building up over rounds.";
 const L3 = "They think that I know their strategy already.";
+
+describe("reactive reasoning", () => {
+  it("does not read an admission of guessing as self-awareness", () => {
+    // "I will just guess randomly" trips the first-person-intent pattern
+    // that level 1 uses, so the most reactive text there is was being
+    // reported a level above what it is.
+    const result = analyzeScratchNoteTom(L0);
+    expect(result.level).toBe(0);
+    expect(result.label).toBe("Reactive");
+    expect(result.score).toBe(0);
+  });
+
+  it("quotes what made it call the text reactive", () => {
+    // Level 2 and 3 always showed their working; level 0 never did, so a
+    // reactive verdict could not be checked.
+    const result = analyzeScratchNoteTom(L0);
+    expect(result.evidence.length).toBeGreaterThan(0);
+    expect(result.evidence[0]).toContain("guess");
+  });
+
+  it("still lets reasoning about the opponent outrank a hedge", () => {
+    // Hedging is not the same as not reasoning: "not sure, but they might
+    // expect X" is a claim about the opponent and stays level 2.
+    const result = analyzeScratchNoteTom(`I am not sure. ${L2}`);
+    expect(result.level).toBe(2);
+  });
+
+  it("leaves genuine self-aware text at level 1", () => {
+    expect(analyzeScratchNoteTom(L1).level).toBe(1);
+  });
+});
+
+describe("distinguishing no signal from a reactive verdict", () => {
+  it("counts nothing when there is nothing to read", () => {
+    // An empty reasoning trace is common -- some providers expose none --
+    // and used to be indistinguishable from a measured level 0, dragging
+    // any aggregate down with a finding that was never made.
+    const result = analyzeScratchNoteTom("");
+    expect(result.sentencesAnalyzed).toBe(0);
+    expect(result.evidence).toEqual([]);
+  });
+
+  it("counts the sentences it did read, even when nothing matched", () => {
+    const result = analyzeScratchNoteTom(NONE);
+    expect(result.sentencesAnalyzed).toBe(1);
+    expect(result.level).toBe(0);
+    // Read but unrecognised: no quote to offer, unlike a positive level 0.
+    expect(result.evidence).toEqual([]);
+  });
+
+  it("separates the three ways a level 0 can arise", () => {
+    const nothingToRead = analyzeScratchNoteTom("");
+    const readNothingMatched = analyzeScratchNoteTom(NONE);
+    const positivelyReactive = analyzeScratchNoteTom(L0);
+
+    for (const r of [nothingToRead, readNothingMatched, positivelyReactive]) {
+      expect(r.level).toBe(0);
+    }
+    expect(nothingToRead.sentencesAnalyzed).toBe(0);
+    expect(readNothingMatched.sentencesAnalyzed).toBeGreaterThan(0);
+    expect(readNothingMatched.evidence).toEqual([]);
+    expect(positivelyReactive.evidence.length).toBeGreaterThan(0);
+  });
+});
 
 describe("analyzeScratchNoteTom levels", () => {
   it("reports level 0 and no score for text with no theory-of-mind markers", () => {

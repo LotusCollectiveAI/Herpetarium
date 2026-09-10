@@ -2,6 +2,7 @@ import { useGame } from "@/lib/gameContext";
 import { GameHeader } from "@/components/GameHeader";
 import { TeamRosters } from "@/components/ScoreBoard";
 import { ClueHistoryPanel } from "@/components/ClueHistoryPanel";
+import { RoundRevealProvider } from "@/lib/roundRevealContext";
 import { GameHistoryPanel } from "@/components/GameHistoryPanel";
 import { PhaseAnnouncement } from "@/components/PhaseAnnouncement";
 import { LobbyView } from "@/components/views/LobbyView";
@@ -57,6 +58,9 @@ export function GameShell({ gameId }: { gameId: string }) {
   const inPlay = gameState.phase !== "lobby" && gameState.phase !== "team_setup";
 
   return (
+    // The provider has to sit above both the header and the phase view:
+    // the reveal below decides when the score at the top may move.
+    <RoundRevealProvider>
     <div className="min-h-screen bg-background flex flex-col">
       <GameHeader gameId={gameId} />
 
@@ -104,5 +108,6 @@ export function GameShell({ gameId }: { gameId: string }) {
         </>
       )}
     </div>
+    </RoundRevealProvider>
   );
 }

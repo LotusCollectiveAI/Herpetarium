@@ -12,7 +12,9 @@
 
 ### What This Is
 
-Decrypto Arena is an AI behavioral research platform built around the board game Decrypto. In Decrypto, two teams each have four secret keywords. Each round, one player gives three one-word clues corresponding to a secret code (a permutation of keyword positions). Teammates must decode the clues, while opponents try to intercept the code by detecting patterns across rounds. The game demands theory of mind, deception, cooperation under constraints, and adaptive strategy -- making it an unusually rich testbed for studying AI cognition.
+Decrypto Arena is an AI behavioral research platform built around the board game Decrypto. In Decrypto, two teams each have four secret keywords. Each round, one player gives three clues corresponding to a secret code (a permutation of keyword positions). Teammates must decode the clues, while opponents try to intercept the code by detecting patterns across rounds. The game demands theory of mind, deception, cooperation under constraints, and adaptive strategy -- making it an unusually rich testbed for studying AI cognition.
+
+**Where this platform departs from the printed game:** clues here must be a single word. Decrypto's own rulebook is explicit that "you can choose the form your clues take, whether that's a single word or complete sentence" -- the restriction is ours, and it comes from the AI response format rather than from the game. `parseCluesResponse` reads a clue list by splitting on commas and stripping non-letters, so a phrase cannot survive the trip. Worth knowing when comparing results against human play or against other Decrypto implementations, since it makes the information budget per clue tighter than the game intends.
 
 ### The Research Mission
 

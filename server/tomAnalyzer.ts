@@ -7,6 +7,14 @@ export interface TomAnalysis {
   label: string;
   evidence: string[];
   score: number;
+  /**
+   * How many sentences the verdict was drawn from. Zero means nothing was
+   * measured, which is not the same claim as level 0 -- both otherwise look
+   * identical, and an empty reasoning trace is common enough (models that
+   * return no trace, providers that do not expose one) that reading it as
+   * "reactive" skews an aggregate downward.
+   */
+  sentencesAnalyzed: number;
 }
 
 export interface GameTomProfile {
@@ -34,6 +42,20 @@ const TOM_LEVEL_LABELS: Record<TomLevel, string> = {
   3: "Meta-Strategic",
 };
 
+// Explicit markers of reactive, non-strategic reasoning. These exist to stop
+// a level-1 promotion, not to raise anything: "I will just guess randomly"
+// trips the first-person-intent pattern below and used to be reported as
+// Self-Aware, a level above what it is. They deliberately do not suppress
+// level 2 or 3 -- reasoning about the opponent is still that, even hedged
+// ("not sure, but they might expect X").
+const LEVEL_0_PATTERNS = [
+  /\brandom(ly)?\b/i,
+  /\bguess(ing|ed)?\b/i,
+  /\bno idea\b/i,
+  /\bnot sure\b/i,
+  /\bcoin ?flip\b/i,
+  /\barbitrar(y|ily)\b/i,
+];
 
 const LEVEL_1_PATTERNS = [
   /\bmy (team|keyword|clue|strategy)\b/i,
@@ -108,20 +130,34 @@ function analyzeText(text: string): TomAnalysis {
   for (const sentence of sentences) {
     const matchesLevel3 = LEVEL_3_PATTERNS.some(pattern => pattern.test(sentence));
     const matchesLevel2 = LEVEL_2_PATTERNS.some(pattern => pattern.test(sentence));
-    const matchesLevel1 = LEVEL_1_PATTERNS.some(pattern => pattern.test(sentence));
+    const matchesLevel0 = LEVEL_0_PATTERNS.some(pattern => pattern.test(sentence));
+    // A sentence that says outright it is guessing is not self-aware, however
+    // it phrases the intent, so an explicit level-0 marker withdraws the
+    // level-1 reading. Levels 2 and 3 are judged on their own terms above.
+    const matchesLevel1 = !matchesLevel0
+      && LEVEL_1_PATTERNS.some(pattern => pattern.test(sentence));
+
+    const excerpt = sentence.trim().slice(0, 120);
+    const remember = () => {
+      if (!evidence.includes(excerpt)) evidence.push(excerpt);
+    };
 
     if (matchesLevel3) {
-      evidence.push(sentence.trim().slice(0, 120));
+      remember();
       maxLevel = Math.max(maxLevel, 3) as TomLevel;
     }
     if (matchesLevel2) {
-      if (!evidence.some(e => e === sentence.trim().slice(0, 120))) {
-        evidence.push(sentence.trim().slice(0, 120));
-      }
+      remember();
       maxLevel = Math.max(maxLevel, 2) as TomLevel;
     }
     if (matchesLevel1) {
       maxLevel = Math.max(maxLevel, 1) as TomLevel;
+    }
+    // Quoted so a level-0 verdict can be read back and checked, the way a
+    // level-2 one always could. Without this, "reactive" was the one
+    // classification that never showed its working.
+    if (matchesLevel0 && !matchesLevel2 && !matchesLevel3) {
+      remember();
     }
 
     score += matchesLevel3 ? 3 : matchesLevel2 ? 2 : matchesLevel1 ? 1 : 0;
@@ -134,6 +170,10 @@ function analyzeText(text: string): TomAnalysis {
     label: TOM_LEVEL_LABELS[maxLevel],
     evidence: evidence.slice(0, 5),
     score: +normalizedScore.toFixed(2),
+    // Lets a caller tell "analysed, and it was reactive" from "there was
+    // nothing to analyse", which both arrive as level 0 otherwise -- an
+    // empty reasoning trace used to read as a finding about the model.
+    sentencesAnalyzed: sentences.length,
   };
 }
 
@@ -178,8 +218,10 @@ export function buildTomTimeline(
   for (const note of scratchNotes) {
     const noteTom = analyzeScratchNoteTom(note.notesText);
 
-    let clueTom: TomAnalysis = { level: 0, label: TOM_LEVEL_LABELS[0], evidence: [], score: 0 };
-    let interceptTom: TomAnalysis = { level: 0, label: TOM_LEVEL_LABELS[0], evidence: [], score: 0 };
+    // sentencesAnalyzed 0 marks these as "no calls of this kind in the match"
+    // rather than as a reactive verdict about the player.
+    let clueTom: TomAnalysis = { level: 0, label: TOM_LEVEL_LABELS[0], evidence: [], score: 0, sentencesAnalyzed: 0 };
+    let interceptTom: TomAnalysis = { level: 0, label: TOM_LEVEL_LABELS[0], evidence: [], score: 0, sentencesAnalyzed: 0 };
 
     if (note.matchId && logsByMatch.has(note.matchId)) {
       const matchLogs = logsByMatch.get(note.matchId)!;
@@ -197,6 +239,7 @@ export function buildTomTimeline(
           label: TOM_LEVEL_LABELS[Math.max(...analyses.map(a => a.level)) as TomLevel],
           evidence: analyses.flatMap(a => a.evidence).slice(0, 3),
           score: +(analyses.reduce((s, a) => s + a.score, 0) / analyses.length).toFixed(2),
+          sentencesAnalyzed: analyses.reduce((s, a) => s + a.sentencesAnalyzed, 0),
         };
       }
 
@@ -207,6 +250,7 @@ export function buildTomTimeline(
           label: TOM_LEVEL_LABELS[Math.max(...analyses.map(a => a.level)) as TomLevel],
           evidence: analyses.flatMap(a => a.evidence).slice(0, 3),
           score: +(analyses.reduce((s, a) => s + a.score, 0) / analyses.length).toFixed(2),
+          sentencesAnalyzed: analyses.reduce((s, a) => s + a.sentencesAnalyzed, 0),
         };
       }
     }
@@ -224,6 +268,7 @@ export function buildTomTimeline(
         label: TOM_LEVEL_LABELS[overallLevel],
         evidence: [...noteTom.evidence, ...clueTom.evidence, ...interceptTom.evidence].slice(0, 5),
         score: overallScore,
+        sentencesAnalyzed: noteTom.sentencesAnalyzed + clueTom.sentencesAnalyzed + interceptTom.sentencesAnalyzed,
       },
     });
   }
@@ -272,6 +317,7 @@ export function computeMatchTomMetrics(logs: AiCallLog[]): Record<string, TomAna
       label: TOM_LEVEL_LABELS[maxLevel],
       evidence: analyses.flatMap(a => a.evidence).slice(0, 5),
       score: +avgScore.toFixed(2),
+      sentencesAnalyzed: analyses.reduce((s, a) => s + a.sentencesAnalyzed, 0),
     };
   }
 
